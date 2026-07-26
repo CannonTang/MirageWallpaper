@@ -40,6 +40,39 @@ constexpr uint32_t singile_indices_u32          = 4 * 3;
 constexpr uint32_t singile_bone_frame           = 4 * 9;
 constexpr uint32_t mdls_offset_trans_entry_size = (3 + 16) * 4;
 
+// Conservative lower bound on the on-disk size of one variable-length record
+// (animation, mask). Every such record opens with several u32 fields plus at
+// least one NUL-terminated string, so 16 bytes safely under-estimates it.
+constexpr uint64_t min_variable_record_bytes = 16;
+
+// Rejects an element count that cannot possibly be backed by the bytes left
+// in the stream. Untrusted models declare these counts, and MemBinaryStream
+// zero-fills reads past EOF, so nothing downstream ever notices a bogus count
+// — except the multi-GiB resize() it asks for first.
+bool CountFitsInStream(const fs::IBinaryStream& f, uint64_t count, uint64_t element_size) {
+    if (element_size == 0) return count == 0;
+    const idx   pos  = f.Tell();
+    const isize size = f.Size();
+    if (pos < 0 || size < pos) return false;
+    const uint64_t remaining = static_cast<uint64_t>(size - pos);
+    return count <= remaining / element_size;
+}
+
+// The 8-byte block tag is raw file data. std::stoi throws std::invalid_argument
+// on non-numeric bytes and nothing up the call stack catches it, which aborts
+// the process; from_chars reports the failure instead.
+bool ParseTagVersion(std::string_view tag, i32& out) {
+    if (tag.size() < 8) return false;
+    const auto  digits   = tag.substr(4, 4);
+    const char* first    = digits.data();
+    const char* last     = digits.data() + digits.size();
+    i32         value    = 0;
+    const auto [ptr, ec] = std::from_chars(first, last, value);
+    if (ec != std::errc {} || ptr != last) return false;
+    out = value;
+    return true;
+}
+
 // Compute per-vertex byte stride from a layout flag bitset. Position is
 // always emitted (12 bytes), other attributes are gated by their bits.
 // UV2 implies a regular UV slot in addition to the UV2 slot.
@@ -150,7 +183,7 @@ bool is_mdls_v2_indexed_trailer(fs::MemBinaryStream& f, idx start, uint32_t end_
     return peek_uint8_at(f, has_index_off, has_index) && has_index == 1;
 }
 
-void ParseMasks(fs::MemBinaryStream& f, WPMdl::Mesh& mesh);
+bool ParseMasks(fs::MemBinaryStream& f, WPMdl::Mesh& mesh);
 
 bool UsesUint32Indices(const WPMdlHeader& header, uint32_t vertex_num) {
     return header.mdlv >= 23 && vertex_num > std::numeric_limits<uint16_t>::max();
@@ -189,6 +222,13 @@ bool ParseMesh(fs::MemBinaryStream& f, const WPMdlHeader& header, WPMdl::Mesh& m
     }
 
     uint32_t vertex_num = vertex_size / stride;
+    if (! CountFitsInStream(f, vertex_num, stride)) {
+        rstd_error("mdl vertex count {} (stride {}) exceeds remaining bytes in {}",
+                   vertex_num,
+                   stride,
+                   std::string(path));
+        return false;
+    }
     mesh.positions.resize(vertex_num);
     if (mesh_flag & MDL_FLAG_NORMAL) mesh.normals.resize(vertex_num);
     if (mesh_flag & MDL_FLAG_TANGENT) mesh.tangents.resize(vertex_num);
@@ -234,6 +274,13 @@ bool ParseMesh(fs::MemBinaryStream& f, const WPMdlHeader& header, WPMdl::Mesh& m
         return false;
     }
     uint32_t indices_num = indices_size / index_stride;
+    if (! CountFitsInStream(f, indices_num, index_stride)) {
+        rstd_error("mdl triangle count {} (stride {}) exceeds remaining bytes in {}",
+                   indices_num,
+                   index_stride,
+                   std::string(path));
+        return false;
+    }
     mesh.indices.resize(indices_num);
     for (auto& id : mesh.indices) {
         for (auto& v : id) v = use_u32_indices ? f.ReadUint32() : f.ReadUint16();
@@ -288,7 +335,7 @@ bool ParseMesh(fs::MemBinaryStream& f, const WPMdlHeader& header, WPMdl::Mesh& m
             }
         }
         if (header.mdlv > 21) {
-            ParseMasks(f, mesh);
+            if (! ParseMasks(f, mesh)) return false;
         }
     }
     return true;
@@ -484,7 +531,13 @@ bool ParseMDLS(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view path) {
     return true;
 }
 
-void ParseMDAT(fs::MemBinaryStream& f, WPMdl& mdl) {
+bool ParseMDAT(fs::MemBinaryStream& f, WPMdl& mdl) {
+    // MDLS is what creates the puppet, and it is an independently optional
+    // block: a file that opens straight with MDAT would null-deref below.
+    if (! mdl.puppet) {
+        rstd_error("mdl MDAT block without a preceding MDLS");
+        return false;
+    }
     uint32_t end_offset      = f.ReadUint32();
     uint32_t num_attachments = f.ReadUint16();
     auto&    attachments     = mdl.puppet->attachments;
@@ -502,6 +555,7 @@ void ParseMDAT(fs::MemBinaryStream& f, WPMdl& mdl) {
     if (end_offset > 0 && static_cast<uint32_t>(f.Tell()) != end_offset) {
         f.SeekSet(end_offset);
     }
+    return true;
 }
 
 // hexpat AnimBoneCurves: u8 has_curves; if(has_curves) BoneFrameCurve[bone_count].
@@ -519,6 +573,10 @@ bool ParseAnimBoneCurves(fs::MemBinaryStream& f, std::vector<WPPuppet::BoneFrame
         uint32_t byte_size = f.ReadUint32();
         if (byte_size % 4 != 0) {
             rstd_error("BoneFrameCurve byte_size {} not %% 4", byte_size);
+            return false;
+        }
+        if (! CountFitsInStream(f, byte_size / 4, 4)) {
+            rstd_error("BoneFrameCurve byte_size {} exceeds remaining bytes", byte_size);
             return false;
         }
         curve.values.resize(byte_size / 4);
@@ -556,6 +614,14 @@ bool ParseAnimation(fs::MemBinaryStream& f, WPPuppet::Animation& anim, int mdla_
     f.ReadInt32(); // anim_zero
 
     uint32_t b_num = f.ReadUint32();
+    // Each bone track occupies at least an i32 `unk` plus a u32 byte_size, and
+    // the same count is reused for the blend / scalar curve arrays below.
+    if (! CountFitsInStream(f, b_num, 8)) {
+        rstd_error("animation bone track count {} exceeds remaining bytes in {}",
+                   b_num,
+                   std::string(path));
+        return false;
+    }
     anim.bone_tracks.resize(b_num);
     for (uint32_t ti = 0; ti < b_num; ++ti) {
         auto& track        = anim.bone_tracks[ti];
@@ -567,6 +633,12 @@ bool ParseAnimation(fs::MemBinaryStream& f, WPPuppet::Animation& anim, int mdla_
             return false;
         }
         uint32_t num = byte_size / singile_bone_frame;
+        if (! CountFitsInStream(f, num, singile_bone_frame)) {
+            rstd_error("bone frame count {} exceeds remaining bytes in {}",
+                       num,
+                       std::string(path));
+            return false;
+        }
         track.frames.resize(num);
         for (auto& frame : track.frames) {
             for (auto& v : frame.position) v = f.ReadFloat();
@@ -681,13 +753,28 @@ bool ParseAnimation(fs::MemBinaryStream& f, WPPuppet::Animation& anim, int mdla_
 }
 
 bool ParseMDLA(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag, std::string_view path) {
-    mdl.mdla = std::stoi(std::string(tag.substr(4, 4)));
+    if (! ParseTagVersion(tag, mdl.mdla)) {
+        rstd_error("mdl MDLA tag is not a version number in {}", std::string(path));
+        return false;
+    }
     if (mdl.mdla == 0) return true;
+    // MDLS is optional and dispatched independently of this block, so a file
+    // may reach here with no puppet at all.
+    if (! mdl.puppet) {
+        rstd_error("mdl MDLA block without a preceding MDLS in {}", std::string(path));
+        return false;
+    }
 
     uint32_t end_offset = f.ReadUint32();
 
     uint32_t anim_num = f.ReadUint32();
     auto&    anims    = mdl.puppet->anims;
+    if (! CountFitsInStream(f, anim_num, min_variable_record_bytes)) {
+        rstd_error("mdl animation count {} exceeds remaining bytes in {}",
+                   anim_num,
+                   std::string(path));
+        return false;
+    }
     anims.resize(anim_num);
     bool ok = true;
     for (auto& anim : anims) {
@@ -715,8 +802,12 @@ bool ParseMDLA(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag, std::st
     return ok;
 }
 
-void ParseMasks(fs::MemBinaryStream& f, WPMdl::Mesh& mesh) {
+bool ParseMasks(fs::MemBinaryStream& f, WPMdl::Mesh& mesh) {
     uint32_t mask_count = f.ReadUint32();
+    if (! CountFitsInStream(f, mask_count, min_variable_record_bytes)) {
+        rstd_error("mdl mask count {} exceeds remaining bytes", mask_count);
+        return false;
+    }
     mesh.masks.resize(mask_count);
     for (auto& m : mesh.masks) {
         m.leading_a     = f.ReadUint32();
@@ -726,18 +817,41 @@ void ParseMasks(fs::MemBinaryStream& f, WPMdl::Mesh& mesh) {
         uint32_t zero_pad = f.ReadUint32();
         if (zero_pad != 0) rstd_info("MaskBlock zero_pad expected 0, got {}", zero_pad);
         uint32_t a_count = f.ReadUint32();
+        if (! CountFitsInStream(f, a_count, 4)) {
+            rstd_error("mdl mask part id count {} exceeds remaining bytes", a_count);
+            return false;
+        }
         m.part_ids_a.resize(a_count);
         for (auto& v : m.part_ids_a) v = f.ReadUint32();
         uint32_t b_count = f.ReadUint32();
+        if (! CountFitsInStream(f, b_count, 4)) {
+            rstd_error("mdl mask part id count {} exceeds remaining bytes", b_count);
+            return false;
+        }
         m.part_ids_b.resize(b_count);
         for (auto& v : m.part_ids_b) v = f.ReadUint32();
     }
+    return true;
 }
 
 bool ParseMDMP(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag, std::string_view path) {
-    mdl.mdmp            = std::stoi(std::string(tag.substr(4, 4)));
+    if (! ParseTagVersion(tag, mdl.mdmp)) {
+        rstd_error("mdl MDMP tag is not a version number in {}", std::string(path));
+        return false;
+    }
     uint32_t end_offset = f.ReadUint32();
+    // MemBinaryStream clamps its cursor at EOF and then hands out zeros
+    // forever, so an end_offset past the end of the file turns the loop below
+    // into a non-terminating emplace_back().
+    if (static_cast<uint64_t>(end_offset) > static_cast<uint64_t>(f.Size())) {
+        rstd_error("mdl MDMP end_offset 0x{:X} is past the end of {}",
+                   end_offset,
+                   std::string(path));
+        return false;
+    }
     while (f.Tell() < end_offset) {
+        const idx iter_start = f.Tell();
+
         auto&    sec    = mdl.morph_sections.emplace_back();
         uint16_t count  = f.ReadUint16();
         sec.event_time  = f.ReadFloat();
@@ -761,6 +875,13 @@ bool ParseMDMP(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag, std::st
                 return false;
             }
             uint32_t vcount = length / 6;
+            // Bounds `vertices` and, since length == vcount * 6, `trailer`.
+            if (! CountFitsInStream(f, vcount, 6)) {
+                rstd_error("MDMPSectionData length {} exceeds remaining bytes in {}",
+                           length,
+                           std::string(path));
+                return false;
+            }
             sd.vertices.resize(vcount);
             for (auto& v : sd.vertices) {
                 for (auto& x : v) x = f.ReadUint16();
@@ -772,6 +893,13 @@ bool ParseMDMP(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag, std::st
                 sd.vertex_trailers.resize(vcount);
                 for (auto& v : sd.vertex_trailers) v = f.ReadUint16();
             }
+        }
+
+        // Cheap insurance against the same hang: a section that consumed
+        // nothing would repeat forever while morph_sections keeps growing.
+        if (f.Tell() == iter_start) {
+            rstd_error("mdl MDMP section consumed no bytes in {}", std::string(path));
+            return false;
         }
     }
     if (end_offset > 0 && static_cast<uint32_t>(f.Tell()) != end_offset) {
@@ -785,7 +913,16 @@ bool ParseMDMP(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag, std::st
 }
 
 bool ParseMDLE(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view tag) {
-    mdl.mdle                   = std::stoi(std::string(tag.substr(4, 4)));
+    if (! ParseTagVersion(tag, mdl.mdle)) {
+        rstd_error("mdl MDLE tag is not a version number");
+        return false;
+    }
+    // MDLS is what creates the puppet, and it is an independently optional
+    // block.
+    if (! mdl.puppet) {
+        rstd_error("mdl MDLE block without a preceding MDLS");
+        return false;
+    }
     uint32_t     end_offset    = f.ReadUint32();
     uint32_t     payload_bytes = f.ReadUint32();
     const size_t nbones        = mdl.puppet->bones.size();
@@ -945,7 +1082,7 @@ bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
     }
     if (peek_block_magic(f, "MDAT")) {
         (void)consume_tag();
-        ParseMDAT(f, mdl);
+        if (! ParseMDAT(f, mdl)) return false;
     }
     if (peek_block_magic(f, "MDLA")) {
         std::string tag = consume_tag();

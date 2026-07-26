@@ -938,6 +938,14 @@ void WireCameraFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNo
 
 namespace
 {
+// Highest addressable material texture slot. The renderer only ever binds
+// g_Texture0..g_Texture12 (see WE_GLTEX_NAMES in sr.spec_texs), so a slot
+// index outside that range can never reach the GPU. Slot indices coming out
+// of scene.json (`bind[].index`) or out of a `g_TextureN` uniform name are
+// raw int32s, and using them unchecked to size a vector is a heap-corruption
+// primitive: `(usize)(-1) + 1` wraps to 0 while `operator[]` still writes.
+constexpr i32 kMaxMaterialTextureSlots = static_cast<i32>(WE_GLTEX_NAMES.size());
+
 // mapRate < 1.0
 void GenCardMesh(SceneMesh& mesh, const std::array<float, 2> size,
                  const std::array<float, 2> mapRate         = { 1.0f, 1.0f },
@@ -1568,12 +1576,23 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
     auto textures = wpmat.textures;
     if (pWPShaderInfo->defTexs.size() > 0) {
         for (auto& t : pWPShaderInfo->defTexs) {
-            if (textures.size() > t.first) {
-                if (! textures.at(t.first).empty()) continue;
-            } else {
-                textures.resize(t.first + 1);
+            // `t.first` is a slot index parsed out of a `g_TextureN` uniform
+            // name in shader source (see ShaderAnnotations.cpp). Re-check it
+            // here so this resize can never be driven by shader text, even if
+            // an entry reaches defTexs through another path.
+            if (t.first < 0 || t.first >= kMaxMaterialTextureSlots) {
+                rstd_error("shader default texture slot {} out of range [0,{})",
+                           t.first,
+                           kMaxMaterialTextureSlots);
+                continue;
             }
-            textures[t.first] = t.second;
+            const usize slot = static_cast<usize>(t.first);
+            if (textures.size() > slot) {
+                if (! textures.at(slot).empty()) continue;
+            } else {
+                textures.resize(slot + 1);
+            }
+            textures.at(slot) = t.second;
         }
     }
 
@@ -1929,8 +1948,16 @@ void ApplyTextureBinds(wpscene::Material&                                  wpmat
             rstd_error("fbo {} not found", el.name);
             continue;
         }
-        if (wpmat.textures.size() <= (usize)el.index) wpmat.textures.resize((usize)el.index + 1);
-        wpmat.textures[(usize)el.index] = fboMap.at(el.name);
+        if (el.index < 0 || el.index >= kMaxMaterialTextureSlots) {
+            rstd_error("material bind '{}' texture index {} out of range [0,{})",
+                       el.name,
+                       el.index,
+                       kMaxMaterialTextureSlots);
+            continue;
+        }
+        const usize slot = static_cast<usize>(el.index);
+        if (wpmat.textures.size() <= slot) wpmat.textures.resize(slot + 1);
+        wpmat.textures.at(slot) = fboMap.at(el.name);
     }
 }
 
@@ -3148,6 +3175,31 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     };
 }
 
+// Upper bound for a single emitter's particle count. Scene JSON comes from
+// untrusted packages and these counts end up in reserve()/vertex buffer
+// sizes, so every count (parent and child) is clamped to this on ingest.
+constexpr u32 kMaxParticleCount = 20000u;
+// Aggregate capacity of one particle mesh: per-emitter count times the
+// cumulative child instance multiplier (times trail segments for ropes).
+// Both factors are individually bounded by kMaxParticleCount, but their
+// product still isn't, so cap it here as well. The geometry generators are
+// bounds-checked against the vertex array (WallpaperParticleGeometry.cpp),
+// so this only truncates absurd scenes instead of allocating gigabytes.
+constexpr u32 kMaxParticleMeshCount = 1000000u;
+
+// JSON counts are signed and unvalidated; negatives must not wrap to ~4e9.
+u32 ClampParticleCount(i32 count) {
+    if (count <= 0) return 0u;
+    return std::min(static_cast<u32>(count), kMaxParticleCount);
+}
+
+// Saturating product: overflow, or any result past `bound`, yields `bound`.
+u32 MulParticleCountClamped(u32 lhs, u32 rhs, u32 bound) {
+    u32 product { 0 };
+    if (__builtin_mul_overflow(lhs, rhs, &product)) return bound;
+    return std::min(product, bound);
+}
+
 struct ParticleChildPtr {
     wpscene::ParticleChild* child { nullptr };
     SceneNode*              node_parent { nullptr };
@@ -3218,8 +3270,16 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
                                                         Vector3f(child_ptr.child->angles.data()),
                                                         child_ptr.child->name));
         child_data = ChildData(*child_ptr.child);
+        // ParticleChild::maxcount is raw JSON. It is handed to
+        // ParticleSubSystem as the u32 instance cap (which reserve()s it) and
+        // it multiplies cumulatively down the child chain, so clamp it on
+        // ingest with the same bound the parent's maxcount uses.
+        child_data.maxcount = static_cast<i32>(ClampParticleCount(child_data.maxcount));
 
-        child_ptr.max_instancecount *= child_data.maxcount;
+        child_ptr.max_instancecount = static_cast<i32>(
+            MulParticleCountClamped(static_cast<u32>(std::max(child_ptr.max_instancecount, 0)),
+                                    static_cast<u32>(child_data.maxcount),
+                                    kMaxParticleCount));
 
     } else {
         p_particle_obj = &wppartobj.particleObj;
@@ -3294,7 +3354,7 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
     };
 
     u32 maxcount = particle_obj.maxcount;
-    maxcount     = std::min(maxcount, 20000u);
+    maxcount     = std::min(maxcount, kMaxParticleCount);
 
     if (hastrail) {
         double in_SegmentUVTimeOffset                      = 0.0;
@@ -3374,9 +3434,13 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         // Rope mesh capacity = maxcount * (trail_length-1) since each live
         // particle produces (trail_length-1) GS-input segments. Non-rope path
         // is unchanged: per-particle quad fan-out.
-        u32 mesh_maxcount = maxcount * (u32)child_ptr.max_instancecount;
+        u32 mesh_maxcount =
+            MulParticleCountClamped(maxcount,
+                                    static_cast<u32>(std::max(child_ptr.max_instancecount, 0)),
+                                    kMaxParticleMeshCount);
         if (render_rope) {
-            u32 rope_segs = mesh_maxcount * (trail_length - 1);
+            u32 rope_segs =
+                MulParticleCountClamped(mesh_maxcount, trail_length - 1, kMaxParticleMeshCount);
             SetRopeParticleMesh(mesh, particle_obj, rope_segs, thick_format, use_geometry_shader);
         } else {
             SetParticleMesh(mesh,
