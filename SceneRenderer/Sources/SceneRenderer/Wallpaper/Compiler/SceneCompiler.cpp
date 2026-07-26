@@ -505,10 +505,22 @@ Json ScriptInitialValueForField(std::string_view field, const Json& value) {
     return value.clone();
 }
 
-std::array<i32, 2> TextLayerExtent(const text::TextGeometry& geometry) {
+std::uint32_t TextRenderScale(const text::TextGeometry& geometry, bool has_effect) {
+    // Effect kernels express their radius/fit in layer pixels, so changing
+    // their target resolution would change the authored look. Plain text has
+    // no such dependency and benefits from a 2x intermediate target. Cap the
+    // resulting target at 4096 on either axis for unusually large terminals
+    // and other unbounded scripted layers.
+    if (has_effect || geometry.rt_width > 2048.0f || geometry.rt_height > 2048.0f) return 1;
+    return 2;
+}
+
+std::array<i32, 2> TextLayerExtent(const text::TextGeometry& geometry,
+                                   std::uint32_t             render_scale = 1) {
+    const float scale = static_cast<float>(std::max<std::uint32_t>(1, render_scale));
     return {
-        std::max<i32>(1, static_cast<i32>(std::ceil(geometry.rt_width))),
-        std::max<i32>(1, static_cast<i32>(std::ceil(geometry.rt_height))),
+        std::max<i32>(1, static_cast<i32>(std::ceil(geometry.rt_width * scale))),
+        std::max<i32>(1, static_cast<i32>(std::ceil(geometry.rt_height * scale))),
     };
 }
 
@@ -569,16 +581,21 @@ struct TextRuntimeTargets {
     std::string                        ppong_b;
     std::string                        effect_final;
     bool                               has_effect { false };
+    std::uint32_t                      render_scale { 1 };
     i32                                layer_w { 1 };
     i32                                layer_h { 1 };
+    i32                                logical_w { 1 };
+    i32                                logical_h { 1 };
     std::vector<TextRuntimeFbo>        fbos;
     std::vector<TextRuntimeEffectNode> effect_nodes;
 
     bool Apply(const text::TextGeometry& geometry) {
         if (scene == nullptr) return false;
 
-        bool changed          = false;
-        auto [next_w, next_h] = TextLayerExtent(geometry);
+        bool changed = false;
+        render_scale = TextRenderScale(geometry, has_effect);
+        auto [next_logical_w, next_logical_h] = TextLayerExtent(geometry);
+        auto [next_w, next_h]                 = TextLayerExtent(geometry, render_scale);
         changed |= ResizeRenderTarget(*scene, ppong_a, next_w, next_h);
         if (has_effect) {
             changed |= ResizeRenderTarget(*scene, ppong_b, next_w, next_h);
@@ -587,10 +604,10 @@ struct TextRuntimeTargets {
 
         if (auto it = scene->cameras.find(camera_key); it != scene->cameras.end() && it->second) {
             auto& camera = *it->second;
-            if (camera.Width() != static_cast<double>(next_w) ||
-                camera.Height() != static_cast<double>(next_h)) {
-                camera.SetWidth(next_w);
-                camera.SetHeight(next_h);
+            if (camera.Width() != static_cast<double>(next_logical_w) ||
+                camera.Height() != static_cast<double>(next_logical_h)) {
+                camera.SetWidth(next_logical_w);
+                camera.SetHeight(next_logical_h);
                 camera.Update();
                 changed = true;
             }
@@ -613,6 +630,8 @@ struct TextRuntimeTargets {
 
         layer_w = next_w;
         layer_h = next_h;
+        logical_w = next_logical_w;
+        logical_h = next_logical_h;
         return changed;
     }
 };
@@ -3871,6 +3890,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     style.background_brightness = obj.backgroundbrightness;
     style.halign                = obj.horizontalalign.empty() ? obj.alignment : obj.horizontalalign;
     style.padding               = static_cast<float>(obj.padding);
+    style.center_source         = ! copy_background_seed && ! has_bg;
 
     auto align_or_default = [](std::string      value,
                                std::string_view fallback,
@@ -3943,13 +3963,26 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         Vector3f    origin;
         float       width { 1.0f };
         float       height { 1.0f };
+        bool        authored_width { false };
+        bool        authored_height { false };
     };
+
+    // `size` is the logical text-layer frame used by WE for alignment and
+    // child placement. It must remain independent of the current glyph ink
+    // crop: e.g. a bottom-aligned clock still anchors by its declared 58 px
+    // frame even when the digits themselves occupy only 35 px.
+    const bool  has_authored_width  = obj.size[0] > 0.0f;
+    const bool  has_authored_height = obj.size[1] > 0.0f;
+    const float object_w            = has_authored_width ? obj.size[0] : text_bbox_w;
+    const float object_h            = has_authored_height ? obj.size[1] : text_bbox_h;
     auto anchor_state = std::make_shared<TextAnchorState>(TextAnchorState {
-        .horizontal = initial_halign,
-        .vertical   = initial_valign,
-        .origin     = Vector3f(obj.origin.data()),
-        .width      = text_bbox_w,
-        .height     = text_bbox_h,
+        .horizontal      = initial_halign,
+        .vertical        = initial_valign,
+        .origin          = Vector3f(obj.origin.data()),
+        .width           = object_w,
+        .height          = object_h,
+        .authored_width  = has_authored_width,
+        .authored_height = has_authored_height,
     });
 
     auto compose_node = rstd::sync::Arc<SceneNode>::make(
@@ -3957,8 +3990,6 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // Layer RT must cover the source glyph bounds, not the main canvas.
     // Clock/date scripts often render a large text source and shrink it with
     // the scene transform when composing into the world.
-    const float                    object_w = obj.size[0] > 0.0f ? obj.size[0] : text_bbox_w;
-    const float                    object_h = obj.size[1] > 0.0f ? obj.size[1] : text_bbox_h;
     const text::TextGeometryPolicy geometry_policy {
         .frame_width        = object_w,
         .frame_height       = object_h,
@@ -3967,7 +3998,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         .preserve_text_bbox = has_bg || obj.copybackground,
     };
     const auto initial_geometry = text::ResolveTextGeometry(geometry_policy, layouter->Metrics());
-    const auto [initial_layer_w, initial_layer_h] = TextLayerExtent(initial_geometry);
+    const auto initial_render_scale = TextRenderScale(initial_geometry, has_text_effect);
+    const auto [initial_logical_w, initial_logical_h] = TextLayerExtent(initial_geometry);
+    const auto [initial_layer_w, initial_layer_h] =
+        TextLayerExtent(initial_geometry, initial_render_scale);
     auto runtime_targets                          = std::make_shared<TextRuntimeTargets>();
     {
         auto&             scene   = *context.scene;
@@ -3983,14 +4017,17 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         runtime_targets->ppong_b        = ppong_b;
         runtime_targets->effect_final   = effect_final;
         runtime_targets->has_effect     = has_text_effect;
+        runtime_targets->render_scale   = initial_render_scale;
         runtime_targets->layer_w        = initial_layer_w;
         runtime_targets->layer_h        = initial_layer_h;
+        runtime_targets->logical_w      = initial_logical_w;
+        runtime_targets->logical_h      = initial_logical_h;
 
         // Per-layer ortho camera. effect_camera_node sits at origin so the
         // view matrix is identity; ortho extents = bbox so glyph pixel
         // coords (centered around 0) map directly to [-1, +1] NDC.
         scene.cameras[addr] =
-            std::make_shared<SceneCamera>(initial_layer_w, initial_layer_h, -1.0f, 1.0f);
+            std::make_shared<SceneCamera>(initial_logical_w, initial_logical_h, -1.0f, 1.0f);
         scene.cameras.at(addr)->AttatchNode(sp_node.as_ptr());
 
         scene.renderTargets[ppong_a] = {
@@ -4006,12 +4043,12 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
 
         compose_node->CopyTrans(*sp_node.as_ptr());
         compose_node->ID() = obj.id;
-        compose_node->SetSize({ initial_geometry.draw_width, initial_geometry.draw_height });
+        compose_node->SetSize({ object_w, object_h });
 
         auto layer = std::make_shared<SceneImageEffectLayer>(has_text_effect ? compose_node.as_ptr()
                                                                              : sp_node.as_ptr(),
-                                                             static_cast<float>(initial_layer_w),
-                                                             static_cast<float>(initial_layer_h),
+                                                             static_cast<float>(initial_logical_w),
+                                                             static_cast<float>(initial_logical_h),
                                                              ppong_a,
                                                              has_text_effect ? ppong_b : ppong_a);
         scene.cameras.at(addr)->AttatchImgEffect(layer);
@@ -4262,8 +4299,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
 
         auto compose_mesh = std::make_shared<SceneMesh>(/*dynamic=*/wants_dynamic_text);
         GenCardMesh(*compose_mesh,
-                    { static_cast<float>(runtime_targets->layer_w),
-                      static_cast<float>(runtime_targets->layer_h) });
+                    { static_cast<float>(runtime_targets->logical_w),
+                      static_cast<float>(runtime_targets->logical_h) });
         auto loaded = load_passthrough_material(compose_node.as_ptr(),
                                                 has_text_effect ? effect_final : ppong_a);
         if (! loaded.has_value()) return;
@@ -4285,19 +4322,18 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto compose_hold      = SceneNodeArcHold(compose_node.clone());
     auto apply_text_anchor = [compose_hold, anchor_state]() {
         auto* compose_ptr = compose_hold.get();
-        auto  contains    = [](const std::string& value, std::string_view token) {
-            return value.find(token) != std::string::npos;
-        };
         const auto& scale = compose_ptr->Scale();
-        Vector3f    pos   = anchor_state->origin;
-        if (contains(anchor_state->horizontal, "left"))
-            pos.x() += anchor_state->width * scale.x() * 0.5f;
-        if (contains(anchor_state->horizontal, "right"))
-            pos.x() -= anchor_state->width * scale.x() * 0.5f;
-        if (contains(anchor_state->vertical, "top"))
-            pos.y() -= anchor_state->height * scale.y() * 0.5f;
-        if (contains(anchor_state->vertical, "bottom"))
-            pos.y() += anchor_state->height * scale.y() * 0.5f;
+        const auto anchored = text::ResolveTextAnchorPosition(anchor_state->horizontal,
+                                                              anchor_state->vertical,
+                                                              anchor_state->origin.x(),
+                                                              anchor_state->origin.y(),
+                                                              anchor_state->width,
+                                                              anchor_state->height,
+                                                              scale.x(),
+                                                              scale.y());
+        Vector3f pos = anchor_state->origin;
+        pos.x()      = anchored[0];
+        pos.y()      = anchored[1];
         compose_ptr->SetTranslate(pos);
     };
 
@@ -4317,9 +4353,11 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         metrics.padding           = text_padding;
         const auto geometry       = text::ResolveTextGeometry(geometry_policy, metrics);
         const bool target_changed = runtime_targets->Apply(geometry);
-        anchor_state->width       = geometry.draw_width;
-        anchor_state->height      = geometry.draw_height;
-        compose_ptr->SetSize({ geometry.draw_width, geometry.draw_height });
+        if (! anchor_state->authored_width)
+            anchor_state->width = std::max(1.0f, metrics.text_width + 2.0f * text_padding);
+        if (! anchor_state->authored_height)
+            anchor_state->height = std::max(1.0f, metrics.text_height + 2.0f * text_padding);
+        compose_ptr->SetSize({ anchor_state->width, anchor_state->height });
         apply_text_anchor();
         const float                 hx = geometry.draw_width * 0.5f;
         const float                 hy = geometry.draw_height * 0.5f;
@@ -4330,9 +4368,11 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             cx + hx, cy - hy, 0.0f, cx + hx, cy + hy, 0.0f,
         };
         const float u_half =
-            0.5f * std::min(1.0f, geometry.uv_source_width / float(runtime_targets->layer_w));
+            0.5f *
+            std::min(1.0f, geometry.uv_source_width / float(runtime_targets->logical_w));
         const float v_half =
-            0.5f * std::min(1.0f, geometry.uv_source_height / float(runtime_targets->layer_h));
+            0.5f *
+            std::min(1.0f, geometry.uv_source_height / float(runtime_targets->logical_h));
         const float                u_l = 0.5f - u_half;
         const float                u_r = 0.5f + u_half;
         const float                v_t = 0.5f - v_half;
