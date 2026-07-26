@@ -40,6 +40,12 @@ typedef struct {
 
 @property (nonatomic, copy, nullable) void (^videoDidEndBlock)(void);
 
+// Called on the main thread the first time playback of the current wallpaper
+// fails. -openWallpaper:error: cannot detect an undecodable file — queueing
+// only validates queue constraints — so without this a malformed video is a
+// permanently black desktop with no diagnostic anywhere.
+@property (nonatomic, copy, nullable) void (^videoDidFailBlock)(NSString *message);
+
 @property (nonatomic, strong, readonly) AVQueuePlayer *player;
 @property (nonatomic, assign, readonly) BOOL loaded;
 @property (nonatomic, assign, readonly) float volume;

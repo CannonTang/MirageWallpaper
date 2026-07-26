@@ -10,6 +10,23 @@ enum {
     VRVideoEngineErrorCannotQueueItem,
 };
 
+// KVO contexts. -canInsertItem:afterItem: only validates queue constraints, so
+// a truncated/garbage/unsupported file queues fine and then never produces a
+// frame — the wallpaper reports success and the user gets a permanently black
+// desktop with nothing on stderr or the control channel. These are the two
+// signals that actually report decode failure: AVPlayerLooper fails when it
+// cannot load the template asset (the common case for a bad file), and the
+// current AVPlayerItem fails for anything that survives to enqueue. Note the
+// looper plays COPIES of the template item, so observing the template's own
+// status would never fire.
+static void *kVRLooperStatusContext = &kVRLooperStatusContext;
+static void *kVRCurrentItemStatusContext = &kVRCurrentItemStatusContext;
+
+// AVPlayerLooper restarts the media continuously, so end-of-item fires once per
+// loop. The consumer writes a line to stdout for each one; rate-limit so a
+// short clip cannot spin the control channel.
+static const CFTimeInterval kVRMinItemEndInterval = 0.5;
+
 static NSError *VRVideoEngineError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:VRVideoEngineErrorDomain
                                code:code
@@ -36,7 +53,6 @@ static float VRClampVolume(float value) {
 @property (nonatomic, strong) AVQueuePlayer *player;
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
 @property (nonatomic, strong) AVPlayerLooper *looper;
-@property (nonatomic, strong) id activity;
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
@@ -44,7 +60,16 @@ static float VRClampVolume(float value) {
 @property (nonatomic, assign) BOOL autoplay;
 @property (nonatomic, assign) BOOL loadFromMemory;
 @property (nonatomic, strong) VRMemoryAssetLoader *memoryAssetLoader;
-@property (nonatomic, strong) id itemEndObserver;
+@property (nonatomic, strong) NSMutableArray<id> *itemEndObservers;
+@property (nonatomic, strong) id itemFailedObserver;
+@property (nonatomic, assign) BOOL looperObserved;
+@property (nonatomic, assign) BOOL failureReported;
+@property (nonatomic, assign) CFTimeInterval lastItemEndReport;
+- (void)detachLooperObserver;
+- (void)removeItemEndObservers;
+- (void)installItemEndObserversForLooper:(AVPlayerLooper *)looper;
+- (void)handleItemDidPlayToEnd;
+- (void)reportPlaybackFailure:(NSError *)error fallback:(NSString *)fallback;
 @end
 
 @implementation VRVideoRendererEngine
@@ -84,7 +109,27 @@ static float VRClampVolume(float value) {
         _muted = config.muted;
         _autoplay = config.autoplay;
         _loadFromMemory = config.loadFromMemory;
+        _itemEndObservers = [NSMutableArray array];
         [self setFillMode:config.fillMode];
+
+        // The player outlives every wallpaper this engine opens, so these two
+        // registrations are made once here and torn down once in -dealloc.
+        [_player addObserver:self
+                  forKeyPath:@"currentItem.status"
+                     options:NSKeyValueObservingOptionNew
+                     context:kVRCurrentItemStatusContext];
+        __weak __typeof__(self) weakSelf = self;
+        _itemFailedObserver = [NSNotificationCenter.defaultCenter
+            addObserverForName:AVPlayerItemFailedToPlayToEndTimeNotification
+                        object:nil
+                         queue:NSOperationQueue.mainQueue
+                    usingBlock:^(NSNotification * _Nonnull note) {
+            __strong __typeof__(weakSelf) strongSelf = weakSelf;
+            if (strongSelf == nil || note.object == nil) return;
+            if (![strongSelf.player.items containsObject:note.object]) return;
+            [strongSelf reportPlaybackFailure:note.userInfo[AVPlayerItemFailedToPlayToEndTimeErrorKey]
+                                     fallback:@"video stopped: failed to play to end"];
+        }];
     }
     return self;
 }
@@ -98,13 +143,118 @@ static float VRClampVolume(float value) {
     self.playerLayer.frame = self.bounds;
 }
 
+// KVO and NSNotification registrations that survive -dealloc crash the process,
+// so every one of them is undone here. Ivars only, no property accessors.
 - (void)dealloc {
-    [self pause];
-    if (self.itemEndObserver) {
-        [[NSNotificationCenter defaultCenter] removeObserver:self.itemEndObserver];
-        self.itemEndObserver = nil;
+    [_player removeObserver:self
+                 forKeyPath:@"currentItem.status"
+                    context:kVRCurrentItemStatusContext];
+    if (_looperObserved) {
+        [_looper removeObserver:self forKeyPath:@"status" context:kVRLooperStatusContext];
+        _looperObserved = NO;
     }
-    [self.player removeAllItems];
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    if (_itemFailedObserver != nil) {
+        [center removeObserver:_itemFailedObserver];
+        _itemFailedObserver = nil;
+    }
+    for (id observer in _itemEndObservers) {
+        [center removeObserver:observer];
+    }
+    [_itemEndObservers removeAllObjects];
+    [_player pause];
+    [_player removeAllItems];
+}
+
+#pragma mark - Failure reporting
+
+- (void)detachLooperObserver {
+    if (!self.looperObserved) return;
+    [self.looper removeObserver:self forKeyPath:@"status" context:kVRLooperStatusContext];
+    self.looperObserved = NO;
+}
+
+- (void)reportPlaybackFailure:(NSError *)error fallback:(NSString *)fallback {
+    if (self.failureReported) return;
+    self.failureReported = YES;
+    NSString *message = error.localizedDescription.length > 0 ? error.localizedDescription : fallback;
+    fprintf(stderr, "VideoRenderer: playback failed: %s\n", message.UTF8String ?: "unknown error");
+    if (self.videoDidFailBlock) self.videoDidFailBlock(message);
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context {
+    if (context == kVRCurrentItemStatusContext) {
+        AVPlayerItem *current = self.player.currentItem;
+        if (current != nil && current.status == AVPlayerItemStatusFailed) {
+            [self reportPlaybackFailure:current.error fallback:@"video item failed to load"];
+        }
+        return;
+    }
+    if (context == kVRLooperStatusContext) {
+        AVPlayerLooper *looper = (AVPlayerLooper *)object;
+        if (looper.status == AVPlayerLooperStatusFailed) {
+            [self reportPlaybackFailure:looper.error
+                               fallback:@"video could not be decoded or looped"];
+            return;
+        }
+        // Re-scope the end-of-item observers: the items the looper actually
+        // plays only exist once it leaves the unknown state.
+        [self installItemEndObserversForLooper:looper];
+        return;
+    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+#pragma mark - End of item
+
+- (void)removeItemEndObservers {
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    for (id observer in self.itemEndObservers) {
+        [center removeObserver:observer];
+    }
+    [self.itemEndObservers removeAllObjects];
+}
+
+- (void)installItemEndObserversForLooper:(AVPlayerLooper *)looper {
+    [self removeItemEndObservers];
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    __weak __typeof__(self) weakSelf = self;
+    // AVPlayerLooper plays COPIES of the template item, so these are the only
+    // items that ever post the notification for us. Scoping the observer to
+    // each of them keeps it off every other AVPlayerItem in the process.
+    for (AVPlayerItem *looped in looper.loopingPlayerItems) {
+        [self.itemEndObservers addObject:
+            [center addObserverForName:AVPlayerItemDidPlayToEndTimeNotification
+                                object:looped
+                                 queue:NSOperationQueue.mainQueue
+                            usingBlock:^(NSNotification * _Nonnull note) {
+                (void)note;
+                [weakSelf handleItemDidPlayToEnd];
+            }]];
+    }
+    if (self.itemEndObservers.count > 0) return;
+    // The looper is not ready yet (or exposes no items): keep a filtered
+    // process-wide observer so the event is never silently lost.
+    [self.itemEndObservers addObject:
+        [center addObserverForName:AVPlayerItemDidPlayToEndTimeNotification
+                            object:nil
+                             queue:NSOperationQueue.mainQueue
+                        usingBlock:^(NSNotification * _Nonnull note) {
+            __strong __typeof__(weakSelf) strongSelf = weakSelf;
+            if (strongSelf == nil || note.object == nil) return;
+            if (![strongSelf.player.items containsObject:note.object]) return;
+            [strongSelf handleItemDidPlayToEnd];
+        }]];
+}
+
+- (void)handleItemDidPlayToEnd {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (self.lastItemEndReport > 0 && (now - self.lastItemEndReport) < kVRMinItemEndInterval) return;
+    self.lastItemEndReport = now;
+    if (self.videoDidEndBlock) self.videoDidEndBlock();
 }
 
 - (BOOL)openWallpaper:(VRVideoManifest *)manifest error:(NSError **)error {
@@ -116,9 +266,13 @@ static float VRClampVolume(float value) {
 
     [self.player pause];
     [self.player removeAllItems];
+    [self removeItemEndObservers];
+    [self detachLooperObserver];
     self.looper = nil;
     self.memoryAssetLoader = nil;
     self.loaded = NO;
+    self.failureReported = NO;
+    self.lastItemEndReport = 0;
 
     NSDictionary *assetOptions = @{
         AVURLAssetPreferPreciseDurationAndTimingKey: @NO,
@@ -149,47 +303,38 @@ static float VRClampVolume(float value) {
     self.player.muted = self.muted;
     self.loaded = YES;
 
-    if (self.itemEndObserver) {
-        [[NSNotificationCenter defaultCenter] removeObserver:self.itemEndObserver];
-        self.itemEndObserver = nil;
-    }
-    __weak __typeof__(self) weakSelf = self;
-    self.itemEndObserver = [[NSNotificationCenter defaultCenter]
-        addObserverForName:AVPlayerItemDidPlayToEndTimeNotification
-                    object:nil
-                     queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification * _Nonnull note) {
-        __strong __typeof__(weakSelf) strongSelf = weakSelf;
-        if (strongSelf == nil) return;
-        AVPlayerItem *ended = note.object;
-        BOOL ours = NO;
-        for (AVPlayerItem *queued in strongSelf.player.items) {
-            if (queued == ended) { ours = YES; break; }
-        }
-        if (!ours) return;
-        if (strongSelf.videoDidEndBlock) strongSelf.videoDidEndBlock();
-    }];
+    // Initial delivery arms the fallback end-of-item observer immediately and
+    // reports a looper that has already failed; the Ready transition then
+    // re-scopes the observers to the items the looper actually plays.
+    // NSKeyValueObservingOptionInitial delivers SYNCHRONOUSLY from inside
+    // -addObserver:, so the flag has to be set first: an already-failed looper
+    // reports the failure from that call, and a handler that re-enters
+    // -openWallpaper: would otherwise reach -detachLooperObserver with the flag
+    // still NO, skip the removal, and leave the looper deallocating with a live
+    // KVO registration.
+    self.looperObserved = YES;
+    [self.looper addObserver:self
+                  forKeyPath:@"status"
+                     options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+                     context:kVRLooperStatusContext];
 
     if (self.autoplay) [self play];
     return YES;
 }
 
+// No NSProcessInfo activity assertion: this is background desktop decoration.
+// Holding one for the whole playback lifetime raised the process to
+// UserInitiated QoS and disabled App Nap, timer coalescing and automatic
+// termination. AVPlayer already takes the assertions it actually needs while
+// it has frames to present, and a wallpaper that gets throttled while it is
+// fully occluded is the desired behaviour, not a bug.
 - (void)play {
     if (!self.loaded) return;
-    if (self.activity == nil) {
-        self.activity = [NSProcessInfo.processInfo
-            beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
-                              reason:@"VideoRenderer video wallpaper playback"];
-    }
     [self.player play];
 }
 
 - (void)pause {
     [self.player pause];
-    if (self.activity != nil) {
-        [NSProcessInfo.processInfo endActivity:self.activity];
-        self.activity = nil;
-    }
 }
 
 - (void)setVolume:(float)volume {
