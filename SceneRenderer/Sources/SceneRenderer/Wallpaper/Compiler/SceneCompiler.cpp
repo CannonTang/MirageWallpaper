@@ -778,8 +778,9 @@ void LoadRootCameraPaths(ParseContext& context, const wpscene::SceneMetadata& sc
 // Walks `fb.scripts` for one parsed object's field bindings and, for the
 // supported fields, creates a FieldScript + closure-based Actuator. Text
 // bindings are wired by ParseTextObj's own call site (with the layouter
-// closure); side-effect-only bindings (`visible`) get the script without an
-// actuator so update() still drives scene mutations.
+// closure). A `visible` binding drives layer visibility from update()'s
+// return value; scripts that only mutate the scene as a side effect return
+// undefined, which coerces to monostate and leaves visibility untouched.
 void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& node_sp,
                       const wpscene::FieldBindings&                   fb,
                       std::function<void(const script::ScriptValue&)> origin_apply = {},
@@ -792,8 +793,8 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
     for (const auto& [field, sb] : fb.scripts) {
         script::NodeTransformTarget tgt = script::NodeTransformTarget::Translate;
         script::FieldKind           kind;
-        bool                        has_actuator = true;
-        bool                        is_alpha     = false;
+        bool                        is_visible = false;
+        bool                        is_alpha   = false;
         if (field == "origin") {
             tgt  = script::NodeTransformTarget::Translate;
             kind = script::FieldKind::Vec3;
@@ -804,11 +805,8 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             tgt  = script::NodeTransformTarget::Rotation;
             kind = script::FieldKind::Vec3;
         } else if (field == "visible") {
-            // Side-effect-only script bound to visibility. update() may
-            // drive other layers via createLayer + property writes; we
-            // don't write a return value back to the node.
-            kind         = script::FieldKind::Bool;
-            has_actuator = false;
+            kind       = script::FieldKind::Bool;
+            is_visible = true;
         } else if (field == "alpha") {
             kind     = script::FieldKind::Scalar;
             is_alpha = true;
@@ -831,8 +829,10 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             context.create_layer_asset_requests.push_back(
                 { fs, node->ID(), std::string(sb.source) });
         }
-        if (! has_actuator) continue;
-        if (is_alpha)
+        if (is_visible)
+            ss.AddActuator(
+                { fs, script::MakeNodeVisibleApply(node_sp.clone(), context.scene.get()) });
+        else if (is_alpha)
             ss.AddActuator({ fs, script::MakeNodeAlphaApply(node_sp.clone()) });
         else if (field == "origin" && origin_apply)
             ss.AddActuator({ fs, origin_apply });
@@ -4456,7 +4456,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         rebuild_compose(layouter->Metrics());
     };
 
-    if (! context.script_scene) context.script_scene = std::make_unique<script::ScriptScene>();
+    // Must go through EnsureScriptScene: it is the only place that seeds
+    // engine.userProperties and the bone resolvers into a fresh JS runtime.
+    EnsureScriptScene(context);
     context.script_scene->runtime().RegisterTextAlignSetters(
         compose_node.as_ptr(),
         anchor_state->horizontal,
@@ -4495,9 +4497,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         rebuild_compose(layouter->Metrics());
     };
     if (has_text_script) {
-        const auto& sb = text_binding_it->second;
-        if (! context.script_scene) context.script_scene = std::make_unique<script::ScriptScene>();
-        auto&       ss  = *context.script_scene;
+        const auto& sb  = text_binding_it->second;
+        auto&       ss  = EnsureScriptScene(context);
         std::string sha = utils::genSha1(std::span<const char>(sb.source));
         auto*       fs  = ss.runtime().MakeFieldScript(sb.source,
                                                        sha,
@@ -4515,9 +4516,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         }
     }
     if (has_pointsize_script) {
-        const auto& sb = pointsize_binding_it->second;
-        if (! context.script_scene) context.script_scene = std::make_unique<script::ScriptScene>();
-        auto&       ss  = *context.script_scene;
+        const auto& sb  = pointsize_binding_it->second;
+        auto&       ss  = EnsureScriptScene(context);
         std::string sha = utils::genSha1(std::span<const char>(sb.source));
         auto*       fs  = ss.runtime().MakeFieldScript(sb.source,
                                                        sha,
@@ -4541,7 +4541,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // field-bound script's `thisLayer` resolves to (WireFieldScripts at
     // line above).
     if (wants_dynamic_text) {
-        if (! context.script_scene) context.script_scene = std::make_unique<script::ScriptScene>();
+        EnsureScriptScene(context);
         context.script_scene->runtime().RegisterTextSetter(compose_node.as_ptr(),
                                                            [set_text](std::string_view s) {
                                                                set_text(s);
@@ -4693,7 +4693,8 @@ void AddSceneObject(std::vector<SceneObjectVar>& objs, const Json& json_obj, fs:
         return;
     }
     ResolveVisibleUserBinding(scene_obj.visible, scene_obj.visible_user, user_props);
-    if constexpr (std::is_same_v<T, wpscene::ImageObject>) {
+    if constexpr (std::is_same_v<T, wpscene::ImageObject> ||
+                  std::is_same_v<T, wpscene::TextObject>) {
         for (auto& effect : scene_obj.effects)
             ResolveVisibleUserBinding(effect.visible, effect.visible_user, user_props);
     }
@@ -5302,10 +5303,19 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
             }
             auto vit = visibility_info.find(id);
             if (vit != visibility_info.end()) {
-                bool visible =
-                    vit->second.visible &&
-                    ! HasHiddenUserAncestor(static_cast<std::uint32_t>(id), visibility_info);
-                if (! visible) node->SetVisible(false);
+                const bool hidden_ancestor =
+                    HasHiddenUserAncestor(static_cast<std::uint32_t>(id), visibility_info);
+                if (! vit->second.visible || hidden_ancestor) {
+                    node->SetVisible(false);
+                    // A container owns no mesh, so the render graph can only see
+                    // this hide through the elision set; SceneNode::Visible() is
+                    // never consulted during graph build. Without the mark the
+                    // whole subtree keeps emitting passes.
+                    if (vit->second.user_bound || hidden_ancestor) {
+                        context.scene->MarkLayerVisibilityElidable(
+                            WallpaperLayerId { .value = id });
+                    }
+                }
             }
             wpscene::VisibleUserBinding visible_user;
             wpscene::ReadVisibleUserBinding(o, visible_user);

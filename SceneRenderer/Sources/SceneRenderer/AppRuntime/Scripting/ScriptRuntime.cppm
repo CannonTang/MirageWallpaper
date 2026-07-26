@@ -257,6 +257,12 @@ std::function<void(const ScriptValue&)> MakeNodeTransformApply(rstd::sync::Arc<s
 // Build the closure that drives a SceneNode alpha field.
 std::function<void(const ScriptValue&)> MakeNodeAlphaApply(rstd::sync::Arc<sr::SceneNode> node);
 
+// Build the closure that drives a layer's visibility. Routed through Scene so
+// the render-graph elision set follows; a monostate value (update() returned
+// undefined — the side-effect-only script shape) leaves visibility alone.
+std::function<void(const ScriptValue&)> MakeNodeVisibleApply(rstd::sync::Arc<sr::SceneNode> node,
+                                                             sr::Scene*                     scene);
+
 // Owns one JsRuntime + the actuator list for one Scene. Constructed and
 // populated by the parser, attached to the Scene as an opaque pointer
 // (Scene::script_scene). Ticked once per frame by `TickSceneScripts`.

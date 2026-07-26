@@ -937,9 +937,15 @@ void Scene::MarkLayerVisibilityElidable(WallpaperLayerId id) {
 }
 
 bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
-    if (node.Visible() == visible) return false;
-
     const i32 id = node.ID();
+    // Same-value calls still have to run when the elision set disagrees with
+    // the node flag: parse-time SetVisible() bypasses this bookkeeping, so the
+    // first user toggle would otherwise no-op and leave the layer emitting.
+    if (node.Visible() == visible) {
+        if (id < 0) return false;
+        if ((visibility_elidable_layer_ids.count(id) != 0) == ! visible) return false;
+    }
+
     node.SetVisible(visible);
     if (id < 0) return false;
 

@@ -3119,6 +3119,16 @@ std::function<void(const ScriptValue&)> MakeNodeAlphaApply(rstd::sync::Arc<sr::S
     };
 }
 
+std::function<void(const ScriptValue&)> MakeNodeVisibleApply(rstd::sync::Arc<sr::SceneNode> node,
+                                                             sr::Scene*                     scene) {
+    return [hold = SceneNodeArcCapture(rstd::move(node)), scene](const ScriptValue& v) {
+        if (scene == nullptr) return;
+        auto* p = std::get_if<BoolValue>(&v);
+        if (p == nullptr) return;
+        scene->SetNodeVisible(*hold.node.as_ptr(), p->v);
+    };
+}
+
 void ScriptScene::Tick(const FrameInputs& fi) {
     m_impl->rt.SetFrameInputs(fi);
     m_impl->rt.TickAll();
