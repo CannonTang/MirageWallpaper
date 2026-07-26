@@ -400,6 +400,15 @@ struct EngineHostState {
     // Empty `ls_path` means in-memory only (the legacy bootstrap shape).
     std::unordered_map<std::string, std::string> ls_data;
     std::string                                  ls_path;
+    // SR-SEC-16: quota + write debounce. `ls_bytes` is the running key+value
+    // byte total so the cap check stays O(1) per set(); `ls_dirty` defers the
+    // full re-serialise + blocking write off the per-frame path (a script
+    // calling localStorage.set() from update() otherwise wrote the whole
+    // store to disk every frame). See MaybeFlushLocalStorage.
+    std::size_t                           ls_bytes { 0 };
+    bool                                  ls_dirty { false };
+    bool                                  ls_quota_logged { false };
+    std::chrono::steady_clock::time_point ls_last_flush {};
     // The script currently running. createLayer pops clones from this
     // FieldScript's clone_queue. Set around every init/update/cursor invoke.
     FieldScript* active_field_script { nullptr };
@@ -434,6 +443,107 @@ struct EngineHostState {
     JsRuntime::BoneIndexResolver                        bone_index_resolver;
     JsRuntime::BoneTransformResolver                    bone_transform_resolver;
     sr::SceneNode*                                     scene_root { nullptr };
+    // --- untrusted-script sandbox state ------------------------------------
+    // Workshop packages ship arbitrary JS, so every host->script call runs
+    // under a wall-clock deadline enforced by ScriptInterruptHandler.
+    // ScriptDeadlineGuard arms it at each entry point; when it expires the
+    // handler latches `scripts_halted` and QuickJS unwinds the script with an
+    // uncatchable error. `js_rt` is only used to re-anchor the stack limit to
+    // the calling thread (see ScriptDeadlineGuard).
+    JSRuntime*                            js_rt { nullptr };
+    std::chrono::steady_clock::time_point script_deadline {};
+    bool                                  watchdog_armed { false };
+    bool                                  scripts_halted { false };
+    bool                                  scripts_halt_logged { false };
+};
+
+// --- untrusted-script sandbox ------------------------------------------------
+// Without these limits one Workshop package can SIGSEGV the render thread
+// (unbounded native recursion), hang it forever (`while(true){}`) or exhaust
+// the process heap.
+
+// Hard heap cap for the whole JS runtime. Corpus scripts are small state
+// machines; 64 MiB is far more than anything observed and still small enough
+// that a runaway allocator fails fast with an OOM exception instead of
+// dragging the compositor down with it.
+constexpr std::size_t kScriptMemoryLimitBytes = 64ull * 1024 * 1024;
+// Initial GC threshold. QuickJS starts at 256 KiB and grows it adaptively
+// after every collection (Vendor/quickjs/quickjs.c:1957 and :1577). Raising
+// the starting point keeps scene init from GC-thrashing; it is a pacing knob,
+// not a security one, and stays two orders of magnitude below the hard cap.
+constexpr std::size_t kScriptGcThresholdBytes = 2ull * 1024 * 1024;
+// JS stack budget, measured from the stack top ScriptDeadlineGuard records at
+// the current entry point. This was previously 0 — "no limit"
+// (Vendor/quickjs/quickjs.c:2732) — which removed the guard entirely, so
+// `function f(){f()}; f()` overflowed the native thread stack and SIGSEGVd
+// instead of throwing a catchable RangeError. The original reason for zeroing
+// it was real but misdiagnosed: QuickJS records `stack_top` inside
+// JS_NewRuntime, i.e. on the parse thread, while update()/cursor callbacks run
+// on the render thread, so the limit was being measured against an unrelated
+// stack and even `new Date()` could trip it. ScriptDeadlineGuard fixes that by
+// calling JS_UpdateStackTop at each entry point, re-anchoring the budget to the
+// thread and depth actually in use. Both loops are plain std::thread (512 KiB
+// stacks on macOS), so a "generous" multi-MiB budget would never fire; 256 KiB
+// is QuickJS's own default and leaves roughly half the thread stack for the
+// native frames above and below the interpreter.
+constexpr std::size_t kScriptStackLimitBytes = 256ull * 1024;
+// Wall-clock budgets, per host->script entry. Whole-script evaluation and
+// init() legitimately do heavy one-shot work (lookup tables, particle seeding),
+// so they get 2 s. Everything on the per-frame path (timer sweep, cursor
+// callbacks, update()) gets 100 ms, which is already ~6 dropped frames at
+// 60 Hz — a per-frame callback slower than that is broken by definition.
+constexpr std::chrono::milliseconds kScriptEvalBudget { 2000 };
+constexpr std::chrono::milliseconds kScriptFrameBudget { 100 };
+
+// QuickJS interrupt callback. Called from js_poll_interrupts every
+// JS_INTERRUPT_COUNTER_INIT (10k) bytecode ops and directly from
+// lre_check_timeout during regexp execution, so it must stay a predicate plus
+// one clock read. A non-zero return raises an *uncatchable* error
+// (Vendor/quickjs/quickjs.c:8165), so script `try`/`catch` cannot swallow it.
+int ScriptInterruptHandler(JSRuntime*, void* opaque) {
+    auto* host = static_cast<EngineHostState*>(opaque);
+    if (host == nullptr || ! host->watchdog_armed) return 0;
+    if (std::chrono::steady_clock::now() < host->script_deadline) return 0;
+    // Latch here rather than in the unwind path: the interrupted exception
+    // surfaces at half a dozen different call sites and timer callbacks have
+    // no owning FieldScript to attribute it to.
+    host->scripts_halted = true;
+    return 1;
+}
+
+// Arms the watchdog for the duration of one host->script call. Nested
+// construction (a host binding that re-enters JS) is a no-op, so the outermost
+// budget bounds the whole entry and only the outermost guard re-anchors the
+// stack limit. The opaque handed to JS_SetInterruptHandler is the same
+// EngineHostState, which lives in JsRuntime::Impl and therefore outlives the
+// JSRuntime it is registered on.
+class ScriptDeadlineGuard {
+public:
+    ScriptDeadlineGuard(EngineHostState* host, std::chrono::milliseconds budget)
+        : m_host(host), m_outermost(host != nullptr && ! host->watchdog_armed) {
+        if (! m_outermost) return;
+        // Re-anchor the stack-overflow check to *this* thread at *this* depth;
+        // JS_NewRuntime captured the parse thread's stack top.
+        if (m_host->js_rt != nullptr) JS_UpdateStackTop(m_host->js_rt);
+        m_host->script_deadline = std::chrono::steady_clock::now() + budget;
+        m_host->watchdog_armed  = true;
+    }
+    ~ScriptDeadlineGuard() {
+        if (! m_outermost) return;
+        m_host->watchdog_armed = false;
+        if (m_host->scripts_halted && ! m_host->scripts_halt_logged) {
+            m_host->scripts_halt_logged = true;
+            rstd_error("script watchdog: script exceeded its time budget and was "
+                       "interrupted; scripting disabled for this wallpaper "
+                       "(rendering continues without it)");
+        }
+    }
+    ScriptDeadlineGuard(const ScriptDeadlineGuard&)            = delete;
+    ScriptDeadlineGuard& operator=(const ScriptDeadlineGuard&) = delete;
+
+private:
+    EngineHostState* m_host { nullptr };
+    bool             m_outermost { false };
 };
 
 uint32_t NormalizeAudioResolution(int32_t requested) {
@@ -532,9 +642,14 @@ struct JsRuntime::Impl {
     JSValue         wrapped_scene { JS_UNDEFINED };
 
     void LogError(JSContext* c, std::string_view sha, const char* what) {
-        if (errored.contains(std::string(sha))) return;
-        errored.insert(std::string(sha));
-        JSValue     exc = JS_GetException(c);
+        // Drain unconditionally, even for an already-reported sha: leaving the
+        // exception pending poisons the next JS_Call, and the watchdog's
+        // "interrupted" error is uncatchable so it would never clear itself.
+        JSValue exc = JS_GetException(c);
+        if (! errored.insert(std::string(sha)).second) {
+            JS_FreeValue(c, exc);
+            return;
+        }
         const char* msg = JS_ToCString(c, exc);
         rstd_error("script[{}] {}: {}",
                    sha,
@@ -746,7 +861,13 @@ JSValue EngineClearDeferred(JSContext* ctx, JSValueConst, int argc, JSValueConst
 // that round-trip Vec3 through localStorage must re-wrap; none observed
 // in the surveyed corpus.
 //
-// Writes flush to disk synchronously when a persistence path is set.
+// SR-SEC-16: the store is quota-capped (key count + total bytes) and writes
+// are debounced. Untrusted scripts call set() from update(), so a synchronous
+// full re-serialise per call meant a blocking disk write on the render thread
+// every frame, and an unbounded store meant a script could fill the user's
+// disk. Writes now only mark the store dirty; MaybeFlushLocalStorage lands
+// them at most once per kLocalStorageFlushInterval (driven from TickAll) and
+// ~JsRuntime performs a guaranteed final flush so nothing is lost on exit.
 // The file format is a flat JSON object: {"k1": "json string", ...}.
 
 namespace
@@ -754,7 +875,18 @@ namespace
 struct PersistedLocalStorage {};
 } // namespace
 
+// Room for the ~dozens of keys real wallpapers persist, with a wide margin,
+// while keeping the worst-case file the flush has to rewrite bounded.
+constexpr std::size_t kLocalStorageMaxKeys  = 1024;
+constexpr std::size_t kLocalStorageMaxBytes = 1ull * 1024 * 1024;
+constexpr std::size_t kLocalStorageMaxValue = 64ull * 1024;
+// Long enough that a per-frame writer costs at most one write every two
+// seconds, short enough that a crash loses very little.
+constexpr std::chrono::milliseconds kLocalStorageFlushInterval { 2000 };
+
 void FlushLocalStorage(EngineHostState* host) {
+    host->ls_dirty      = false;
+    host->ls_last_flush = std::chrono::steady_clock::now();
     if (host->ls_path.empty()) return;
     auto object = rstd::json::Map::make();
     for (const auto& [k, v] : host->ls_data)
@@ -769,8 +901,22 @@ void FlushLocalStorage(EngineHostState* host) {
     f << Dump(out);
 }
 
+// Cheap enough to call once per frame: one bool plus one steady_clock read.
+void MaybeFlushLocalStorage(EngineHostState* host) {
+    if (! host->ls_dirty) return;
+    if (std::chrono::steady_clock::now() - host->ls_last_flush < kLocalStorageFlushInterval) return;
+    FlushLocalStorage(host);
+}
+
+void RecomputeLocalStorageBytes(EngineHostState* host) {
+    std::size_t total = 0;
+    for (const auto& [k, v] : host->ls_data) total += k.size() + v.size();
+    host->ls_bytes = total;
+}
+
 void LoadLocalStorage(EngineHostState* host) {
     host->ls_data.clear();
+    host->ls_bytes = 0;
     if (host->ls_path.empty()) return;
     std::ifstream f(host->ls_path);
     if (! f) return;
@@ -790,6 +936,7 @@ void LoadLocalStorage(EngineHostState* host) {
         if (auto stored = value.as_str(); stored.is_some())
             host->ls_data[std::string(key)] = rstd::cppstd::to_string(*stored);
     });
+    RecomputeLocalStorageBytes(host);
 }
 
 JSValue LocalStorageGet(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -816,11 +963,45 @@ JSValue LocalStorageSet(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     }
     const char* s    = JS_ToCString(ctx, jv);
     auto*       host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (s) host->ls_data[key] = s;
+    if (s) {
+        // SR-SEC-16 quota. An over-quota write is a logged no-op (logged once,
+        // so a script calling set() from update() cannot spam the log) rather
+        // than a thrown error — the other localStorage entry points also
+        // report failure by returning undefined. Writes that do not grow the
+        // store stay allowed so a script can always shrink or delete its way
+        // back under the cap.
+        const std::string key_str(key);
+        const std::string value(s);
+        auto              it        = host->ls_data.find(key_str);
+        const bool        has       = it != host->ls_data.end();
+        const std::size_t old_size  = has ? key_str.size() + it->second.size() : 0;
+        const std::size_t new_total = host->ls_bytes - old_size + key_str.size() + value.size();
+        const bool        over_quota =
+            value.size() > kLocalStorageMaxValue ||
+            (! has && host->ls_data.size() >= kLocalStorageMaxKeys) ||
+            (new_total > kLocalStorageMaxBytes && new_total > host->ls_bytes);
+        if (over_quota) {
+            if (! host->ls_quota_logged) {
+                host->ls_quota_logged = true;
+                rstd_warn("localStorage quota exceeded ({} keys, {} bytes); write to '{}' "
+                          "ignored, further over-quota writes will be silent",
+                          host->ls_data.size(),
+                          host->ls_bytes,
+                          key_str);
+            }
+        } else {
+            if (has)
+                it->second = value;
+            else
+                host->ls_data.emplace(key_str, value);
+            host->ls_bytes = new_total;
+            host->ls_dirty = true;
+        }
+    }
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, jv);
     JS_FreeCString(ctx, key);
-    FlushLocalStorage(host);
+    MaybeFlushLocalStorage(host);
     return JS_UNDEFINED;
 }
 
@@ -829,9 +1010,13 @@ JSValue LocalStorageRemove(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     const char* key = JS_ToCString(ctx, argv[0]);
     if (! key) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    host->ls_data.erase(key);
+    if (auto it = host->ls_data.find(key); it != host->ls_data.end()) {
+        host->ls_bytes -= it->first.size() + it->second.size();
+        host->ls_data.erase(it);
+        host->ls_dirty = true;
+    }
     JS_FreeCString(ctx, key);
-    FlushLocalStorage(host);
+    MaybeFlushLocalStorage(host);
     return JS_UNDEFINED;
 }
 
@@ -1456,6 +1641,11 @@ if (! globalThis.shared) globalThis.shared = {};
 
 void InstallEngineGlobal(JSContext* ctx) {
     // Run the bootstrap to create createScriptProperties + skeleton engine.
+    // Trusted source, but it is still a host->script entry: arm the watchdog so
+    // every JS_Eval / JS_Call in this file is covered by the same rule.
+    ScriptDeadlineGuard guard(static_cast<EngineHostState*>(JS_GetContextOpaque(ctx)),
+                              kScriptEvalBudget);
+
     JSValue r = JS_Eval(
         ctx, kBootstrapJs, std::strlen(kBootstrapJs), "<sr-bootstrap>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) {
@@ -2525,15 +2715,21 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
         rstd_error("script: JS_NewRuntime/JS_NewContext failed");
         return;
     }
-    // QuickJS's default stack-overflow check is conservative (relative to
-    // the OS thread stack at runtime init). When the wallpaper renderer
-    // runs scripts from a deep call site (Vulkan render thread, post-
-    // particle emission), `new Date()` and similar built-ins hit the
-    // stack-frame guard and throw "Maximum call stack size exceeded".
-    // Disable the soft check; the OS stack is plenty for clock/audio-
-    // response style scripts in the corpus.
-    JS_SetMaxStackSize(m_impl->rt, 0);
+    // Sandbox for untrusted Workshop JS: bounded native stack, bounded heap,
+    // and a wall-clock watchdog. See the kScript* constants for the rationale
+    // behind each value — in particular why the stack check used to be
+    // disabled here and why re-enabling it needs the JS_UpdateStackTop that
+    // ScriptDeadlineGuard performs at every entry point.
+    JS_SetMaxStackSize(m_impl->rt, kScriptStackLimitBytes);
+    JS_SetMemoryLimit(m_impl->rt, kScriptMemoryLimitBytes);
+    JS_SetGCThreshold(m_impl->rt, kScriptGcThresholdBytes);
     JS_SetContextOpaque(m_impl->ctx, &m_impl->host);
+    // The opaque is EngineHostState, a member of Impl, so it outlives the
+    // JSRuntime it is registered on (the runtime is freed in ~JsRuntime's body,
+    // Impl is destroyed afterwards). The handler is also unregistered before
+    // teardown so it cannot fire during JS_FreeContext / JS_FreeRuntime.
+    m_impl->host.js_rt = m_impl->rt;
+    JS_SetInterruptHandler(m_impl->rt, ScriptInterruptHandler, &m_impl->host);
     // Built-in ES modules (WEMath, …). Resolves bare `import 'WEMath'`
     // against the kBuiltinModules table; unknown names raise
     // ReferenceError via the loader.
@@ -2551,6 +2747,13 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
 
 JsRuntime::~JsRuntime() {
     if (! m_impl) return;
+    // SR-SEC-16: localStorage writes are debounced, so land any pending one
+    // before teardown. Normal exit must not lose a script's saved state.
+    if (m_impl->host.ls_dirty) FlushLocalStorage(&m_impl->host);
+    // No script may run from here on: unregister the watchdog so it cannot
+    // fire from anything JS_FreeContext / JS_FreeRuntime triggers.
+    if (m_impl->rt) JS_SetInterruptHandler(m_impl->rt, nullptr, nullptr);
+    m_impl->host.watchdog_armed = false;
     // Drop FieldScripts before tearing down the runtime so their JSValues
     // go through JS_FreeValue while the context is still alive.
     for (auto& fs : m_impl->scripts) {
@@ -2597,13 +2800,22 @@ JsRuntime::~JsRuntime() {
 }
 
 void JsRuntime::SetFrameInputs(const FrameInputs& fi) {
+    // The FrameInputs snapshot itself is read by C++ (hit testing, engine.*
+    // getters), so keep storing it even after the watchdog disabled scripting.
     m_impl->host.inputs = fi;
+    if (m_impl->host.scripts_halted) return;
+    // Writing globalThis.input can run script code (a script is free to swap
+    // `input` for a Proxy or install setters), so this is a real entry point.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
     UpdateInputObject(m_impl->ctx);
     if (m_impl->host.audio_buffer_built) RefreshAudioBuffer(m_impl->ctx);
 }
 
 void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
     if (! m_impl || ! m_impl->ctx) return;
+    if (m_impl->host.scripts_halted) return;
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
+
     std::string key_str { key };
     JSContext*  ctx    = m_impl->ctx;
     JSValue     global = JS_GetGlobalObject(ctx);
@@ -2647,6 +2859,9 @@ void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
 
 void JsRuntime::SetMediaStatus(const MediaStatus& status) {
     if (! m_impl || ! m_impl->ctx) return;
+    if (m_impl->host.scripts_halted) return;
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
+
     JSContext* ctx         = m_impl->ctx;
     auto&      host        = m_impl->host;
     const bool first       = ! host.media_initialized;
@@ -2713,6 +2928,11 @@ void JsRuntime::SetScene(sr::Scene* scene) {
 
 void JsRuntime::SetSceneRoot(sr::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
+    if (m_impl->host.scripts_halted) return;
+    // Covers BindThisScene (a globalThis write a script can intercept) and the
+    // deferred init() pass below; the budget is shared by every script's init
+    // so a whole scene cannot stall the loader for more than one eval budget.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptEvalBudget);
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
     m_impl->scene_root      = root;
     m_impl->host.scene_root = root;
@@ -2725,6 +2945,19 @@ void JsRuntime::SetSceneRoot(sr::SceneNode* root) {
 
 void JsRuntime::TickAll() {
     JSContext* ctx = m_impl->ctx;
+    // SR-SEC-16: the once-per-frame hook that lands debounced localStorage
+    // writes. Runs before the halt check so a store dirtied by the script that
+    // was just disabled still reaches disk.
+    MaybeFlushLocalStorage(&m_impl->host);
+    // A script the watchdog interrupted is never called again: without this the
+    // engine would re-enter the same runaway loop and burn the whole budget
+    // every frame, for the life of the wallpaper. Actuators keep applying each
+    // script's last_value, so the scene renders on with its final state.
+    if (m_impl->host.scripts_halted) return;
+    // One budget for the whole tick — timer sweep, cursor callbacks and every
+    // update() together — because what matters is the frame the render thread
+    // owes the compositor, not any single callback.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
     SweepDeferred(ctx, &m_impl->host);
 
     // Cursor event dispatch. For every script bound to a SceneNode, hit-
@@ -2882,12 +3115,16 @@ bool FunctionTakesArg(JSContext* ctx, JSValue fn) {
 
 void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     if (! fs || ! fs->m_impl || fs->m_impl->init_done) return;
+    if (rt->host.scripts_halted) return;
     auto* I = fs->m_impl.get();
     if (! JS_IsFunction(ctx, I->init_fn)) {
         I->init_done = true;
         return;
     }
 
+    // init() legitimately does heavy one-shot work, so it gets the eval budget
+    // rather than the per-frame one.
+    ScriptDeadlineGuard guard(&rt->host, kScriptEvalBudget);
     BindThisLayer(ctx,
                   JS_IsUndefined(I->wrapped_layer) ? rt->host.default_layer : I->wrapped_layer);
     if (! JS_IsUndefined(rt->wrapped_scene)) BindThisScene(ctx, rt->wrapped_scene);
@@ -2910,6 +3147,12 @@ FieldScript* JsRuntime::MakeFieldScript(
     std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clones) {
     JSContext* ctx = m_impl->ctx;
     if (! ctx) return nullptr;
+    // Once the watchdog has fired for this wallpaper, stop compiling and
+    // evaluating the rest of its scripts as well.
+    if (m_impl->host.scripts_halted) return nullptr;
+    // Covers the compile, the module body (untrusted top-level code) and the
+    // init() that RunFieldScriptInit may run at the end of this function.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptEvalBudget);
 
     // Wrap `node` (if any) up front. Bind it as `thisLayer` for the
     // duration of module eval + init so module-body top-level statements
