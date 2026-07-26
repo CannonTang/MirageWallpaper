@@ -139,15 +139,43 @@ struct GifImage: NSViewRepresentable {
         imageView.image = image
     }
 
+    /// Above this decoded footprint an animated preview is not worth playing.
+    /// A 1920×1080 GIF with 80 frames decodes to ~660 MB; sweeping the cursor
+    /// across a grid used to do that once per cell.
+    private static let maxAnimatedDecodedBytes = 64 * 1024 * 1024
+
     private static func loadImage(at url: URL, animates: Bool) -> NSImage? {
-        guard !animates else { return NSImage(contentsOf: url) }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 512
-              ] as CFDictionary) else {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return NSImage(contentsOf: url)
+        }
+        guard animates else {
+            return downsampledStill(from: source) ?? NSImage(contentsOf: url)
+        }
+
+        // The animated hover path used to decode at full resolution
+        // unconditionally. Play the animation only when its decoded size is
+        // sane; otherwise fall back to the same downsampled still the cell
+        // already shows when it is not hovered.
+        let frameCount = max(CGImageSourceGetCount(source), 1)
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let width = (properties?[kCGImagePropertyPixelWidth] as? Int) ?? 0
+        let height = (properties?[kCGImagePropertyPixelHeight] as? Int) ?? 0
+        if width > 0, height > 0 {
+            let decodedBytes = width * height * 4 * frameCount
+            if decodedBytes > maxAnimatedDecodedBytes {
+                return downsampledStill(from: source) ?? NSImage(contentsOf: url)
+            }
+        }
+        return NSImage(contentsOf: url)
+    }
+
+    private static func downsampledStill(from source: CGImageSource) -> NSImage? {
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 512
+        ] as CFDictionary) else {
+            return nil
         }
         return NSImage(cgImage: thumbnail, size: .zero)
     }

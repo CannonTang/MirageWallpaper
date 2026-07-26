@@ -59,7 +59,28 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
     @Published var screenSaverFeedback: ScreenSaverFeedback?
 
-    @Published var searchText = "" { didSet { currentPage = 1 } }
+    // Debounced: every keystroke used to kick off a full search + filter + sort
+    // over the whole library. The pipeline already runs off the main thread, but
+    // typing "landscape" still queued nine complete passes of which only the
+    // last mattered. Matches the 500 ms debounce the Workshop search already had.
+    @Published var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            searchDebounceWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if self.currentPage != 1 {
+                    self.currentPage = 1  // its didSet schedules the recompute
+                } else {
+                    self.scheduleRecomputePage()
+                }
+            }
+            searchDebounceWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        }
+    }
+
+    private var searchDebounceWorkItem: DispatchWorkItem?
 
     @Published var isSteamSetupPresented = false
     

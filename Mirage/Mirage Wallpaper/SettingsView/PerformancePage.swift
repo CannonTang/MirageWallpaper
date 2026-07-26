@@ -85,8 +85,12 @@ struct PerformancePage: SettingsPage {
                     Spacer()
                     MirageSlider(value: $viewModel.settings.fps, in: 10...120, step: 1)
                         .frame(width: 150)
-                        .onChange(of: viewModel.settings.fps) { _, v in
-                            AppDelegate.shared.wallpaperViewModel.renderer.setFps(Int(v))
+                        .onChange(of: viewModel.settings.fps) { _, _ in
+                            // Route through the playback policy rather than
+                            // pushing the raw value: the policy centre owns the
+                            // final frame rate and may be capping it for thermal
+                            // or low-power reasons the slider knows nothing about.
+                            AppDelegate.shared.wallpaperViewModel.reapplyFrameRate()
                         }
                     Text(String(format: "%.0f", viewModel.settings.fps))
                         .frame(width: 30).monospacedDigit()
