@@ -7,6 +7,51 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 26 Jul 2026 10:58:43 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>203</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 0377b0c706a01e75bc1ef69013da31a9740fe605
+Channel: beta
+
+perf(ui): render rich labels natively, debounce search, cap GIF decode
+
+Every rich Wallpaper Engine property label instantiated a WKWebView, and
+therefore a WebKit content process. A property panel with fifteen such
+labels spawned fifteen processes.
+
+Render them with NSAttributedString instead - but not unconditionally.
+That importer resolves referenced resources synchronously on the calling
+thread, so swapping it in wholesale would trade process overhead for a
+main-thread network stall. Only labels referencing a remote image, frame
+or video still use a web view; everything else is native, which in
+practice means none. Imported fonts and colours are stripped so the
+SwiftUI environment styles the text and it stays legible in dark mode, and
+parsed results are memoised since SwiftUI re-evaluates bodies freely.
+
+Debounce the library search by 250 ms. The pipeline already runs off the
+main thread, but typing "landscape" still queued nine complete
+search/filter/sort passes over the whole library of which only the last
+mattered. The Workshop search already debounced.
+
+Animated hover previews decoded at full resolution: a 1920x1080 GIF with
+80 frames decodes to roughly 660 MB, once per cell swept. Play the
+animation only when its decoded footprint is sane, otherwise fall back to
+the downsampled still the cell already shows unhovered.
+
+The frame-rate slider now routes through the playback policy rather than
+pushing the raw value, which would bypass a thermal or low-power cap.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-203-0377b0c706a0-macOS-arm64.zip" length="192768513" type="application/octet-stream" sparkle:edSignature="ElCjrIzr4Fs0/cWtYa/Ps9JTkubZCK9WuLr2cuEO5BdWuzLYeKAeRQYv524hCeHzGaELmfi275N/F83I7nkbCA=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 26 Jul 2026 07:20:40 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -115,27 +160,9 @@ fix(ui): let sidebar sliders receive drag events instead of moving window
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-185-5ee6c42f8e2d-macOS-arm64.zip" length="192418968" type="application/octet-stream" sparkle:edSignature="GboNRTO5hjqcbKajuehY4/dKHSbLMCViS+vYr11wjz2jOfwgwDIWoEZ4QEK5W9aJSnKZtyEfd0cRuhv0ypJ/DQ=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 23 Jul 2026 15:45:25 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>184</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 02fc527f742c75def132eca6a176833fec0b9c3e
-Channel: beta
-
-perf(scene): stop frame-rate halving when a frame overruns budget
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-184-02fc527f742c-macOS-arm64.zip" length="192418968" type="application/octet-stream" sparkle:edSignature="Nfy+po/Ss1U4uOFdhuCL02iX+DzL0hXXT3eJvS2nHagGg6o2o0BnDFiNZyESKFL5QXXFOB19L9GQHeJNBCI2DQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ylphYzMhA3B69U34vJPgYnbS01Z38pGXRKiObqDr56XAv67eJFKZDQc+bN67FM2pZ1gO1VW2hz4Ns08WEDwCCg==
-length: 7988
+edSignature: WlyPfbAZnIQlecVdtYSuV/kCV2TNh69rB0UXwzIgyOG/aP8ZyBUV3St0cNixezVdQ+bVPCMa+udFATrj/j5UAQ==
+length: 9481
 -->
