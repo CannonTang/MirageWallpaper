@@ -96,7 +96,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         wallpaperViewModel.saveRuntime()
-        wallpaperViewModel.renderer.stopAll()
+        // This method returns directly into process exit, so the renderers must
+        // be reaped here and now. Anything deferred would never run and a hung
+        // renderer would outlive the app as an orphan still drawing on the
+        // desktop. Bounded to roughly two seconds in total.
+        wallpaperViewModel.renderer.stopAllAndWait()
 
         // NSScreen.main can be nil (all displays asleep / disconnected / app in
         // background). Never force-unwrap it or the app crashes on quit.

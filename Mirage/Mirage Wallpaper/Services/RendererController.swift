@@ -5,6 +5,7 @@
 //
 
 import AppKit
+import Darwin
 import Foundation
 
 enum FillMode: String, CaseIterable, Codable, Identifiable {
@@ -19,6 +20,18 @@ enum FillMode: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+/// Final playback state handed to a renderer. The renderer never learns *why*
+/// it is in this state — that judgement belongs to the app, which is the only
+/// process with a global view of window layering, displays and power sources.
+enum MiragePowerState: String {
+    /// Render normally at the configured frame rate.
+    case run
+    /// Keep rendering, but at the reduced frame rate carried alongside.
+    case throttle
+    /// Stop producing frames entirely.
+    case pause
+}
+
 final class RendererProcess {
     let process: Process
     let stdinPipe: Pipe
@@ -30,17 +43,42 @@ final class RendererProcess {
     var desiredVolume: Float
     var desiredMuted: Bool
     var desiredPaused = false
+    /// Last power directive sent, replayed when a candidate is activated so a
+    /// renderer that came up mid-throttle does not silently run at full rate.
+    var desiredPowerState = MiragePowerState.run
+    var desiredPowerFps: Int?
     let spectrumEnabled: Bool
     var spectrumDemanded: Bool
 
     private let stateLock = NSLock()
-    private let writeLock = NSLock()
     private let spectrumStateLock = NSLock()
     private let spectrumQueue = DispatchQueue(label: "cn.laobamac.Mirage.renderer.spectrum")
     private var terminated = false
     private var pendingSpectrum: [Float]?
     private var spectrumWriterActive = false
     private var stdoutBuffer = Data()
+
+    // MARK: Non-blocking outbound pipe
+    //
+    // The renderer's stdin has a fixed-size kernel buffer. A renderer that is
+    // slow to drain it (shader compilation, Vulkan init, a wedged scene) used
+    // to block whichever thread happened to call write() — including the main
+    // thread, which beachballed the whole app. The write end is therefore put
+    // into O_NONBLOCK and every command goes through this queue, drained on a
+    // dedicated serial queue by a write source.
+    private let outboundLock = NSLock()
+    private let ioQueue = DispatchQueue(label: "cn.laobamac.Mirage.renderer.io")
+    private var outboundControl: [Data] = []
+    private var outboundSpectrumLine: Data?
+    private var outboundChunk: Data?
+    private var outboundOffset = 0
+    private var writeSource: DispatchSourceWrite?
+    private var writerResumed = false
+    private var outboundClosed = false
+    private var closeWhenDrained = false
+    /// Control commands are never dropped on purpose. This bound only stops a
+    /// permanently wedged renderer from growing the queue without limit.
+    private static let maxPendingControlCommands = 512
 
     var isTerminated: Bool {
         stateLock.lock()
@@ -65,10 +103,18 @@ final class RendererProcess {
         self.desiredMuted = desiredMuted
         self.spectrumEnabled = spectrumEnabled
         self.spectrumDemanded = false
+        setUpWriter()
+    }
+
+    deinit {
+        // A suspended dispatch source must never be released, so the writer is
+        // always torn down explicitly — including for handles that are dropped
+        // without ever having been stopped.
+        closeWriter()
     }
 
     func send(_ command: [String: Any]) {
-        write(command, allowAfterStop: false)
+        enqueue(command, allowAfterStop: false)
     }
 
     func sendSpectrum(_ spectrum: [Float]) {
@@ -93,28 +139,215 @@ final class RendererProcess {
             }
             pendingSpectrum = nil
             spectrumStateLock.unlock()
-            send(["cmd": "audioSpectrum", "data": spectrum])
+            enqueue(["cmd": "audioSpectrum", "data": spectrum],
+                    allowAfterStop: false, kind: .spectrum)
         }
     }
 
-    private func write(_ command: [String: Any], allowAfterStop: Bool) {
+    // MARK: Outbound queue
+
+    private enum OutboundKind {
+        case control
+        case spectrum
+    }
+
+    /// Serializes `command` and hands it to the writer. Never blocks: the
+    /// caller is only charged the JSON encoding plus two uncontended locks.
+    private func enqueue(_ command: [String: Any], allowAfterStop: Bool,
+                         kind: OutboundKind = .control) {
         guard let data = try? JSONSerialization.data(withJSONObject: command, options: []) else {
             NSLog("[Mirage] 无法序列化控制指令: \(command)")
             return
         }
         var line = data
         line.append(0x0A)
-        let handle = stdinPipe.fileHandleForWriting
-        writeLock.lock()
-        defer { writeLock.unlock() }
         stateLock.lock()
         let canWrite = (allowAfterStop || !terminated) && process.isRunning
         stateLock.unlock()
         guard canWrite else { return }
-        do {
-            try handle.write(contentsOf: line)
-        } catch {
-            NSLog("[Mirage] 发送控制指令失败 (屏幕=\(screenIndex)): \(error.localizedDescription)")
+
+        var overflowed = false
+        outboundLock.lock()
+        if outboundClosed || (closeWhenDrained && kind == .spectrum) {
+            outboundLock.unlock()
+            return
+        }
+        switch kind {
+        case .spectrum:
+            // Spectrum frames are telemetry. A renderer that stalls must never
+            // accumulate a backlog of them, so a still-pending frame is
+            // replaced rather than queued behind.
+            outboundSpectrumLine = line
+        case .control:
+            if outboundControl.count >= Self.maxPendingControlCommands {
+                outboundControl.removeFirst()
+                overflowed = true
+            }
+            outboundControl.append(line)
+        }
+        if !writerResumed, let source = writeSource {
+            writerResumed = true
+            source.resume()
+        }
+        outboundLock.unlock()
+        if overflowed {
+            NSLog("[Mirage] 控制指令队列已满，丢弃最旧指令 (屏幕=\(screenIndex))")
+        }
+    }
+
+    private func setUpWriter() {
+        let fd = stdinPipe.fileHandleForWriting.fileDescriptor
+        guard fd >= 0 else { return }
+        // Non-blocking from here on, so no caller of send() can ever be parked
+        // inside write() by a renderer that stopped reading its stdin.
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+        let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: ioQueue)
+        source.setEventHandler { [weak self] in
+            self?.drainOutbound()
+        }
+        // The source references the descriptor for as long as it is alive, so
+        // the pipe is closed only once cancellation has completed — never from
+        // under a live event handler.
+        source.setCancelHandler { [pipe = stdinPipe] in
+            try? pipe.fileHandleForWriting.close()
+        }
+        writeSource = source
+    }
+
+    /// Runs on `ioQueue` whenever the pipe has room. The descriptor is
+    /// O_NONBLOCK, so a partial write simply leaves the remainder queued for
+    /// the next writable event instead of parking the thread.
+    private func drainOutbound() {
+        let fd = stdinPipe.fileHandleForWriting.fileDescriptor
+        while true {
+            outboundLock.lock()
+            if outboundClosed {
+                outboundLock.unlock()
+                return
+            }
+            if outboundChunk == nil {
+                // Control commands always win over telemetry.
+                if !outboundControl.isEmpty {
+                    outboundChunk = outboundControl.removeFirst()
+                } else if let spectrum = outboundSpectrumLine {
+                    outboundSpectrumLine = nil
+                    outboundChunk = spectrum
+                }
+                outboundOffset = 0
+            }
+            guard let chunk = outboundChunk else {
+                let shouldClose = closeWhenDrained
+                if !shouldClose, writerResumed {
+                    // Park the source: a write source fires continuously while
+                    // its descriptor is writable. Suspending under the same
+                    // lock that guards `writerResumed` keeps suspend/resume
+                    // balanced against a concurrent enqueue.
+                    writerResumed = false
+                    writeSource?.suspend()
+                }
+                outboundLock.unlock()
+                if shouldClose { closeWriter() }
+                return
+            }
+            let offset = outboundOffset
+            outboundLock.unlock()
+
+            var result = -1
+            var failure: Int32 = 0
+            chunk.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                guard let base = raw.baseAddress else {
+                    result = 0
+                    return
+                }
+                result = Darwin.write(fd, base + offset, chunk.count - offset)
+                if result < 0 { failure = errno }
+            }
+
+            if result < 0 {
+                if failure == EINTR { continue }
+                if failure == EAGAIN || failure == EWOULDBLOCK {
+                    // Not writable right now. Leave the source resumed; it
+                    // fires again as soon as the renderer drains its stdin.
+                    return
+                }
+                if failure != EPIPE {
+                    NSLog("[Mirage] 控制管道写入失败 (屏幕=\(screenIndex)): errno=\(failure)")
+                }
+                // EPIPE / EBADF: the renderer is gone. Drop the queue instead
+                // of spinning on a dead descriptor.
+                closeWriter()
+                return
+            }
+            guard result > 0 else {
+                // A pipe never accepts zero bytes of a non-empty write. Bail
+                // out rather than spin: the source is level-triggered and
+                // would fire again immediately.
+                NSLog("[Mirage] 控制管道写入 0 字节，关闭通道 (屏幕=\(screenIndex))")
+                closeWriter()
+                return
+            }
+
+            outboundLock.lock()
+            outboundOffset += result
+            if let pending = outboundChunk, outboundOffset >= pending.count {
+                outboundChunk = nil
+                outboundOffset = 0
+            }
+            outboundLock.unlock()
+        }
+    }
+
+    /// Requests EOF on the renderer's stdin, but only once everything already
+    /// queued (notably the graceful `quit`) has actually reached the pipe.
+    private func closeWriterWhenDrained() {
+        outboundLock.lock()
+        if outboundClosed {
+            outboundLock.unlock()
+            return
+        }
+        closeWhenDrained = true
+        outboundSpectrumLine = nil
+        let hasPending = outboundChunk != nil || !outboundControl.isEmpty
+        if let source = writeSource, hasPending {
+            if !writerResumed {
+                writerResumed = true
+                source.resume()
+            }
+            outboundLock.unlock()
+            return
+        }
+        outboundLock.unlock()
+        closeWriter()
+    }
+
+    /// Tears the writer down exactly once. A suspended dispatch source can be
+    /// neither released nor cancelled, so it is always resumed one last time
+    /// before cancellation — that keeps suspend/resume balanced.
+    private func closeWriter() {
+        outboundLock.lock()
+        if outboundClosed {
+            outboundLock.unlock()
+            return
+        }
+        outboundClosed = true
+        outboundControl.removeAll()
+        outboundSpectrumLine = nil
+        outboundChunk = nil
+        outboundOffset = 0
+        let source = writeSource
+        writeSource = nil
+        if let source, !writerResumed {
+            writerResumed = true
+            source.resume()
+        }
+        outboundLock.unlock()
+        if let source {
+            source.cancel()
+        } else {
+            try? stdinPipe.fileHandleForWriting.close()
         }
     }
 
@@ -133,16 +366,36 @@ final class RendererProcess {
         // The graceful quit must be written after marking the handle stopped,
         // so no later live-control command can race it. Use the private bypass
         // instead of send(), whose normal guard intentionally rejects it.
-        write(["cmd": "quit"], allowAfterStop: true)
-        let handle = stdinPipe.fileHandleForWriting
-        try? handle.close()
+        enqueue(["cmd": "quit"], allowAfterStop: true)
+        // stdin can no longer be closed right here: the quit line may still be
+        // sitting in the outbound queue. Close it once the queue drains, so
+        // the renderer still sees EOF.
+        closeWriterWhenDrained()
         let proc = process
+        // Best-effort escalation for runtime switches. It is deliberately
+        // asynchronous here; app termination uses the synchronous variant on
+        // RendererController because deferred work never runs once
+        // applicationWillTerminate returns.
         DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
             if proc.isRunning { proc.terminate() }
             DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
                 if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
             }
         }
+    }
+
+    /// SIGTERM. Safe to call on an already dead renderer.
+    func forceTerminate() {
+        guard process.isRunning else { return }
+        process.terminate()
+    }
+
+    func forceKill() {
+        guard process.isRunning else { return }
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        kill(pid, SIGKILL)
+        NSLog("[Mirage] 渲染器未响应退出请求，已强制结束 (屏幕=\(screenIndex))")
     }
 
     func startReadingOutput(onEvent: @escaping ([String: Any]) -> Void) {
@@ -184,6 +437,7 @@ final class RendererProcess {
     }
 
     func cleanupAfterExit() {
+        closeWriter()
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
         for url in tempFiles {
@@ -218,6 +472,14 @@ final class RendererController {
     private static let sceneStartupTimeout: TimeInterval = 75
 
     var onProcessExit: ((Int, Bool) -> Void)?
+
+    /// Safety backstop for web wallpapers. The user-facing confirmation lives
+    /// in the UI layer, but too many call sites assign the current wallpaper
+    /// directly (playlist rotation, per-screen apply, launch restore) to rely
+    /// on it. This closure is consulted at the one place a web renderer is
+    /// actually spawned. It is injected rather than resolved through the view
+    /// model so the controller keeps no reference back to its owner.
+    var isWallpaperTrusted: ((WEWallpaper) -> Bool)?
 
     init() {
         SystemAudioSpectrumService.shared.onSpectrum = { [weak self] spectrum in
@@ -325,6 +587,12 @@ final class RendererController {
     @discardableResult
     func render(_ wallpaper: WEWallpaper, on screenIndex: Int = 0, options: RenderOptions) -> Bool {
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return false }
+        // Web wallpapers execute untrusted third-party HTML/JS. Never spawn one
+        // the user has not explicitly confirmed, whatever code path led here.
+        if wallpaper.kind == .web, let isTrusted = isWallpaperTrusted, !isTrusted(wallpaper) {
+            NSLog("[Mirage] 已阻止未确认的网页壁纸启动 (屏幕=\(screenIndex)): \(wallpaper.id)")
+            return false
+        }
         guard let binary = binaryURL(for: wallpaper.kind) else {
             NSLog("[Mirage] 找不到 \(wallpaper.kind) 渲染器二进制")
             return false
@@ -590,7 +858,8 @@ final class RendererController {
                 previous?.stop()
                 handle.send(["cmd": "volume", "value": handle.desiredVolume])
                 handle.send(["cmd": "muted", "value": handle.desiredMuted])
-                handle.send(["cmd": handle.desiredPaused ? "pause" : "resume"])
+                handle.send(Self.powerCommand(state: handle.desiredPowerState,
+                                              fps: handle.desiredPowerFps))
                 SystemAudioSpectrumService.shared.setEnabled(
                     self.hasSpectrumConsumersLocked())
                 NSLog("[Mirage] 场景切换完成 (屏幕=\(handle.screenIndex), generation=\(handle.generation))")
@@ -625,6 +894,56 @@ final class RendererController {
         SystemAudioSpectrumService.shared.setEnabled(false)
     }
 
+    /// Synchronous, bounded shutdown for app termination.
+    ///
+    /// `applicationWillTerminate` returns straight into process exit, so any
+    /// escalation deferred with asyncAfter never runs: a hung renderer would
+    /// survive as an orphan still drawing a fullscreen desktop-level window
+    /// with no parent left to kill it. Escalate here instead — quit, SIGTERM,
+    /// SIGKILL — waiting on every renderer in parallel so the worst case stays
+    /// around two seconds regardless of how many are running.
+    func stopAllAndWait() {
+        let handles: [RendererProcess] = queue.sync {
+            let result = Array(running.values) + Array(candidates.values)
+            for screen in Set(running.keys).union(candidates.keys) {
+                generations[screen] = (generations[screen] ?? 0) &+ 1
+            }
+            running.removeAll()
+            candidates.removeAll()
+            return result
+        }
+        SystemAudioSpectrumService.shared.setEnabled(false)
+        // The handles are dropped from `running`/`candidates` above, so nothing
+        // else will ever reap them. `defer` covers every early return below;
+        // cleanupAfterExit is idempotent and safe on an already-exited process.
+        defer { handles.forEach { $0.cleanupAfterExit() } }
+        handles.forEach { $0.stop() }
+        guard !handles.isEmpty else { return }
+
+        var alive = Self.waitForExit(handles, timeout: 1.2)
+        guard !alive.isEmpty else { return }
+        alive.forEach { $0.forceTerminate() }
+        alive = Self.waitForExit(alive, timeout: 0.5)
+        guard !alive.isEmpty else { return }
+        alive.forEach { $0.forceKill() }
+        _ = Self.waitForExit(alive, timeout: 0.3)
+    }
+
+    /// Waits for all `handles` at once — N renderers cost the same wall-clock
+    /// time as one. Returns the handles that are still alive at the deadline.
+    private static func waitForExit(_ handles: [RendererProcess],
+                                    timeout: TimeInterval) -> [RendererProcess] {
+        var alive = handles.filter { $0.process.isRunning }
+        guard !alive.isEmpty else { return [] }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            usleep(20_000)
+            alive = alive.filter { $0.process.isRunning }
+            if alive.isEmpty { return [] }
+        }
+        return alive
+    }
+
     func isRendering(on screenIndex: Int) -> Bool {
         queue.sync { running[screenIndex]?.process.isRunning ?? false }
     }
@@ -647,19 +966,30 @@ final class RendererController {
 
     // MARK: Live control (broadcast or per-screen)
 
-    private func forEach(_ screenIndex: Int?, includeCandidates: Bool = true,
-                         _ body: (RendererProcess) -> Void) {
-        queue.sync {
-            if let s = screenIndex {
-                if let p = running[s] { body(p) }
-                if includeCandidates, let p = candidates[s] { body(p) }
-            } else {
-                for (_, p) in running { body(p) }
-                if includeCandidates {
-                    for (_, p) in candidates { body(p) }
-                }
+    /// Callers must already be executing on `queue`.
+    private func targetsLocked(_ screenIndex: Int?, includeCandidates: Bool) -> [RendererProcess] {
+        var result: [RendererProcess] = []
+        if let s = screenIndex {
+            if let p = running[s] { result.append(p) }
+            if includeCandidates, let p = candidates[s] { result.append(p) }
+        } else {
+            result.append(contentsOf: running.values)
+            if includeCandidates {
+                result.append(contentsOf: candidates.values)
             }
         }
+        return result
+    }
+
+    private func forEach(_ screenIndex: Int?, includeCandidates: Bool = true,
+                         _ body: (RendererProcess) -> Void) {
+        // Snapshot the targets under the controller queue, then run `body`
+        // outside it. Bodies talk to renderer stdin, which must never happen
+        // while the serial queue is held.
+        let targets = queue.sync {
+            targetsLocked(screenIndex, includeCandidates: includeCandidates)
+        }
+        targets.forEach(body)
     }
 
     private func hasSpectrumConsumersLocked() -> Bool {
@@ -688,61 +1018,82 @@ final class RendererController {
     }
 
     func setVolume(_ volume: Float, on screenIndex: Int? = nil) {
-        forEach(screenIndex) {
-            $0.desiredVolume = volume
-            $0.send(["cmd": "volume", "value": volume])
+        // The desired-state mutation stays on the controller queue; only the
+        // stdin traffic happens outside it.
+        let targets: [RendererProcess] = queue.sync {
+            let list = targetsLocked(screenIndex, includeCandidates: true)
+            for handle in list { handle.desiredVolume = volume }
+            return list
         }
+        for handle in targets { handle.send(["cmd": "volume", "value": volume]) }
     }
 
     func setMuted(_ muted: Bool, on screenIndex: Int? = nil) {
         // A scene candidate must remain silent until activation. Remember the
         // latest policy for it, but only send the live mute command to active
         // renderers.
-        queue.sync {
+        let actives: [RendererProcess] = queue.sync { () -> [RendererProcess] in
             if let screenIndex {
                 candidates[screenIndex]?.desiredMuted = muted
-                if let active = running[screenIndex] {
-                    active.desiredMuted = muted
-                    active.send(["cmd": "muted", "value": muted])
-                }
-            } else {
-                for candidate in candidates.values { candidate.desiredMuted = muted }
-                for active in running.values {
-                    active.desiredMuted = muted
-                    active.send(["cmd": "muted", "value": muted])
-                }
+                guard let active = running[screenIndex] else { return [] }
+                active.desiredMuted = muted
+                return [active]
             }
+            for candidate in candidates.values { candidate.desiredMuted = muted }
+            for active in running.values { active.desiredMuted = muted }
+            return Array(running.values)
         }
+        for active in actives { active.send(["cmd": "muted", "value": muted]) }
     }
 
+    // Pause/resume route through the same power directive as everything else so
+    // `desiredPowerState` can never disagree with what the renderer was told.
+    // Passing no fps leaves the renderer's current frame rate untouched.
     func pause(on screenIndex: Int? = nil) {
-        updatePaused(true, on: screenIndex)
+        setPower(.pause, fps: nil, on: screenIndex)
     }
 
     func resume(on screenIndex: Int? = nil) {
-        updatePaused(false, on: screenIndex)
+        setPower(.run, fps: nil, on: screenIndex)
     }
 
-    private func updatePaused(_ paused: Bool, on screenIndex: Int?) {
+    /// Single authoritative power directive for the renderers.
+    ///
+    /// The renderers deliberately observe nothing themselves: their windows are
+    /// `canHide = NO` + `orderFrontRegardless`, so AppKit never reports them as
+    /// occluded and they cannot see the truth even if they looked. All of the
+    /// policy — occlusion, lock, sleep, battery, thermal — is decided here, and
+    /// the renderer only ever learns the final state, never the reason.
+    func setPower(_ state: MiragePowerState, fps: Int?, on screenIndex: Int? = nil) {
+        let paused = state == .pause
         // Pausing a candidate before its first frame would prevent the
-        // presentation handshake from ever completing. Defer that state until
-        // activation, just like unmuting.
-        queue.sync {
-            if let screenIndex {
-                candidates[screenIndex]?.desiredPaused = paused
-                if let active = running[screenIndex] {
-                    active.desiredPaused = paused
-                    active.send(["cmd": paused ? "pause" : "resume"])
-                }
-            } else {
-                for candidate in candidates.values { candidate.desiredPaused = paused }
-                for active in running.values {
-                    active.desiredPaused = paused
-                    active.send(["cmd": paused ? "pause" : "resume"])
-                }
+        // presentation handshake from ever completing, so candidates only
+        // record the desired state and replay it on activation.
+        let actives: [RendererProcess] = queue.sync { () -> [RendererProcess] in
+            func record(_ process: RendererProcess) {
+                process.desiredPaused = paused
+                process.desiredPowerState = state
+                process.desiredPowerFps = fps
             }
+            if let screenIndex {
+                if let candidate = candidates[screenIndex] { record(candidate) }
+                guard let active = running[screenIndex] else { return [] }
+                record(active)
+                return [active]
+            }
+            for candidate in candidates.values { record(candidate) }
+            for active in running.values { record(active) }
+            return Array(running.values)
         }
+        let command = Self.powerCommand(state: state, fps: fps)
+        for active in actives { active.send(command) }
         refreshAudioSpectrumService()
+    }
+
+    private static func powerCommand(state: MiragePowerState, fps: Int?) -> [String: Any] {
+        var command: [String: Any] = ["cmd": "power", "state": state.rawValue]
+        if let fps { command["fps"] = fps }
+        return command
     }
 
     func setFps(_ fps: Int, on screenIndex: Int? = nil) {

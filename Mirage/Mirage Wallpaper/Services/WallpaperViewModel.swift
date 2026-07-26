@@ -29,6 +29,8 @@ class WallpaperViewModel: ObservableObject {
         let muted: Bool
         let volume: Float
         let speed: Float
+        let powerState: MiragePowerState
+        let fps: Int
     }
 
     private var lastAppliedPlaybackState: AppliedPlaybackState?
@@ -107,6 +109,13 @@ class WallpaperViewModel: ObservableObject {
         } else {
             currentWallpaper = WallpaperViewModel.invalidWallpaper
         }
+        // Silent backstop. The nextCurrentWallpaper willSet above remains the
+        // thing that prompts the user; this makes sure an unconfirmed web
+        // wallpaper can never be spawned by one of the many paths that assign
+        // currentWallpaper directly (playlist rotation, per-screen apply,
+        // launch restore). Deliberately a context-free closure, so the renderer
+        // holds nothing of `self`.
+        renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
         NotificationCenter.default.addObserver(
             self, selector: #selector(displayTopologyChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -136,9 +145,16 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 信任（网页壁纸安全确认）
 
-    func isTrusted(_ w: WEWallpaper) -> Bool {
+    /// The trust store is plain UserDefaults state, so it is exposed as a type
+    /// method: `RendererController` consults it through an injected closure and
+    /// never needs (or retains) a reference to the view model.
+    static func isWallpaperTrusted(_ w: WEWallpaper) -> Bool {
         let list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
         return list.contains(w.id)
+    }
+
+    func isTrusted(_ w: WEWallpaper) -> Bool {
+        WallpaperViewModel.isWallpaperTrusted(w)
     }
 
     func trust(_ w: WEWallpaper) {
@@ -492,6 +508,13 @@ class WallpaperViewModel: ObservableObject {
         applyPlaybackPolicy(currentPlaybackPolicy)
     }
 
+    /// Re-push the frame rate after the user changes it. `force` because only
+    /// the fps component of the applied state changed, and the policy action
+    /// itself is unchanged.
+    func reapplyFrameRate() {
+        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
+    }
+
     func applyPlaybackPolicy(_ action: GSPlayback, force: Bool = false) {
         if action == .stop {
             if !stoppedByPlaybackPolicy {
@@ -512,23 +535,32 @@ class WallpaperViewModel: ObservableObject {
             lastAppliedPlaybackState = nil
         }
 
+        // The frame rate the app wants right now: the configured rate, reduced
+        // when the policy centre reports thermal or low-power pressure.
+        let throttledFps = AppDelegate.shared.globalSettingsViewModel.throttledFps(base: globalFps)
+        let paused = playRate == 0 || action == .pause
+        let powerState: MiragePowerState = paused ? .pause
+            : (throttledFps < globalFps ? .throttle : .run)
+
         let state = AppliedPlaybackState(
-            paused: playRate == 0 || action == .pause,
+            paused: paused,
             muted: runtime.muted || globalMuted || runtime.volume == 0 || action == .mute,
             volume: runtime.volume * masterVolume,
-            speed: playRate
+            speed: playRate,
+            powerState: powerState,
+            fps: throttledFps
         )
         guard force || state != lastAppliedPlaybackState else { return }
 
         if state.paused {
-            renderer.pause()
+            renderer.setPower(state.powerState, fps: state.fps)
             renderer.setVolume(state.volume)
             renderer.setMuted(state.muted)
         } else {
             renderer.setVolume(state.volume)
             renderer.setMuted(state.muted)
             renderer.setSpeed(state.speed)
-            renderer.resume()
+            renderer.setPower(state.powerState, fps: state.fps)
         }
         lastAppliedPlaybackState = state
     }
@@ -541,16 +573,19 @@ class WallpaperViewModel: ObservableObject {
         let paused = runtime.speed == 0 || action == .pause
         let muted = runtime.muted || globalMuted || runtime.volume == 0 || action == .mute
         let volume = runtime.volume * masterVolume
+        let throttledFps = AppDelegate.shared.globalSettingsViewModel.throttledFps(base: globalFps)
+        let powerState: MiragePowerState = paused ? .pause
+            : (throttledFps < globalFps ? .throttle : .run)
 
         if paused {
-            renderer.pause(on: screen)
+            renderer.setPower(powerState, fps: throttledFps, on: screen)
             renderer.setVolume(volume, on: screen)
             renderer.setMuted(muted, on: screen)
         } else {
             renderer.setVolume(volume, on: screen)
             renderer.setMuted(muted, on: screen)
             renderer.setSpeed(runtime.speed, on: screen)
-            renderer.resume(on: screen)
+            renderer.setPower(powerState, fps: throttledFps, on: screen)
         }
     }
 
