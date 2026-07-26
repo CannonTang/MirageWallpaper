@@ -7,6 +7,37 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 26 Jul 2026 07:20:40 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>190</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 761a9103099994d95598b3d753b1232c035b385b
+Channel: beta
+
+fix(scene): apply container visibility gates to the render graph
+
+Container layers hid themselves through SceneNode::SetVisible alone, but
+graph build only reads the elision set, so a user property gating a whole
+group (weekday component, language variant) never reached the renderer.
+The load-time binding pass then re-lit each child on its own font-variant
+binding, leaving both language groups drawn until the user toggled the
+property once. Mark user-gated containers elidable, and let SetNodeVisible
+queue same-value calls whenever the elision set disagrees with the node
+flag so a parse-time hide can still be picked up.
+
+Also route text layers through EnsureScriptScene so engine.userProperties
+and the bone resolvers are seeded when a text layer is the first object to
+need a JS runtime, resolve effect visibility bindings for text objects,
+and write a visible-bound script's return value back to layer visibility.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-190-761a91030999-macOS-arm64.zip" length="192676400" type="application/octet-stream" sparkle:edSignature="4g9lHrA82kisS6Fd65T1CeZyPYGP9HV6dofA1cCDMFAMbj8pyE5z7yhVs8LBsO+GOS0ZFt1tecME6xbvNUOODQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 26 Jul 2026 05:16:17 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -102,27 +133,9 @@ perf(scene): stop frame-rate halving when a frame overruns budget
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-184-02fc527f742c-macOS-arm64.zip" length="192418968" type="application/octet-stream" sparkle:edSignature="Nfy+po/Ss1U4uOFdhuCL02iX+DzL0hXXT3eJvS2nHagGg6o2o0BnDFiNZyESKFL5QXXFOB19L9GQHeJNBCI2DQ=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Wed, 22 Jul 2026 17:09:55 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>181</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 98d812596007feb97df9e932ba6128c6bc83e0cf
-Channel: beta
-
-fix(app): avoid crash when running apps share a pid
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-181-98d812596007-macOS-arm64.zip" length="192405051" type="application/octet-stream" sparkle:edSignature="Qo1aM07jkL7EGw3zVtVjZ1Ho/+DbJ4IUMb7wjw0jtYQszw0NhLCiAUFvHCSgcUUtE1fWZXC+53tliGAB4MJIAA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: fbysbZDHb15R/puqE0c8BA8wKzUFxv16VTLADsFCGaF2WKHOtcjigx/ympafDKMvkGnxu9Y02dSC+ZKTOyd8CA==
-length: 7118
+edSignature: ylphYzMhA3B69U34vJPgYnbS01Z38pGXRKiObqDr56XAv67eJFKZDQc+bN67FM2pZ1gO1VW2hz4Ns08WEDwCCg==
+length: 7988
 -->
