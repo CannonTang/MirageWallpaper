@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 26 Jul 2026 16:07:02 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>204</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: b8cdd391b53d6bab2aebd6cad8373d80f434d265
+Channel: beta
+
+fix(render): avoid empty optional dereference after m_tx.reset()
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-204-b8cdd391b53d-macOS-x86_64.zip" length="197796867" type="application/octet-stream" sparkle:edSignature="wYyjJ6nNOZVUdcvPezmIQKlAS1XqyQYLbxCoHzEqE1uFMYIhcMp8crASSp/GNC/eQFmp2h+F0Cjx92YgSfWfAA=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 26 Jul 2026 10:58:36 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -137,26 +154,9 @@ current wallpaper in WallpaperViewModel for independent playlists.
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-186-d148391e0e1a-macOS-x86_64.zip" length="197691584" type="application/octet-stream" sparkle:edSignature="T2jH7AIxLybgWxq/yKF4lxd18QNWjuuaE1hCrfMi56X+AeqWK7sBDz/tf9vxltHPLRR329QcgXTDRja7LzltCA=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 23 Jul 2026 15:56:37 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>185</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 5ee6c42f8e2daa3f638a431fb1d84d348352a97a
-Channel: beta
-
-fix(ui): let sidebar sliders receive drag events instead of moving window
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-185-5ee6c42f8e2d-macOS-x86_64.zip" length="197439415" type="application/octet-stream" sparkle:edSignature="rnm/FvlOGyhbldS1zp6bdOdlmu98PNijfZlge92bTT83R0zc/NweUz+pH4pEZWmzAehkZvVceq2raHQLQKw0Dg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: djL73sSqdDHrr2AAZK+JBW0VKY8iQHxTIcmOivfofNH8etzm5rH2RxTOaLMdQK2u4l1ERGNNaLo2m27usghyCg==
-length: 9013
+edSignature: ys5tJ2M+Ho4iXQMgFUaj7kKQyoKnQ+8YttjIc8mRlFqqrDjtWHlrfdimpCohfmrSZwGs/1elQgqfLT0gVT7/Cg==
+length: 9004
 -->

@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 26 Jul 2026 16:07:13 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>204</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: b8cdd391b53d6bab2aebd6cad8373d80f434d265
+Channel: beta
+
+fix(render): avoid empty optional dereference after m_tx.reset()
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-204-b8cdd391b53d-macOS-arm64.zip" length="192766926" type="application/octet-stream" sparkle:edSignature="1EzdG6KrvSRiXYR1Q7QNyQLl9OPnSzAymK3l74ikkAOo/NmjI323oRu4a0CIDlLhXusoh2FLwFe0lnR7n5gIAQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 26 Jul 2026 10:58:43 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -142,27 +160,9 @@ current wallpaper in WallpaperViewModel for independent playlists.
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-186-d148391e0e1a-macOS-arm64.zip" length="192665986" type="application/octet-stream" sparkle:edSignature="t9fzGUpfVO5aHPND4V0MNnqNq92XwVNgD8BaGmVxHQVQ3BQAlRaPIjvWuKXSCwLXZIZhdw48SMCNwDzxAgKfDw=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 23 Jul 2026 15:56:50 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>185</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 5ee6c42f8e2daa3f638a431fb1d84d348352a97a
-Channel: beta
-
-fix(ui): let sidebar sliders receive drag events instead of moving window
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-185-5ee6c42f8e2d-macOS-arm64.zip" length="192418968" type="application/octet-stream" sparkle:edSignature="GboNRTO5hjqcbKajuehY4/dKHSbLMCViS+vYr11wjz2jOfwgwDIWoEZ4QEK5W9aJSnKZtyEfd0cRuhv0ypJ/DQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: WlyPfbAZnIQlecVdtYSuV/kCV2TNh69rB0UXwzIgyOG/aP8ZyBUV3St0cNixezVdQ+bVPCMa+udFATrj/j5UAQ==
-length: 9481
+edSignature: +zCoVRwlF3fDQNyShMy2onUY93tQJkt+FuozaqxmMR3pYpe9SpNQAfOv7j5n5LUnomhF9mogPFYFE2hnipJKCg==
+length: 9472
 -->
