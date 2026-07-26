@@ -434,30 +434,65 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
             return fail();
         }
 
+        // One staging allocation per texture instead of one per mip level.
+        // Each level used to pay its own VMA create + map + memcpy + unmap,
+        // which a texture-heavy scene ran into the thousands. The levels are
+        // packed into a single buffer and addressed through the buffer_offset
+        // that PendingImageUpload already carried.
+        //
+        // 16 bytes is at least as large as any block-compressed texel block
+        // and is a multiple of 4, satisfying vkCmdCopyBufferToImage's
+        // bufferOffset alignment rules for every format handled here.
+        constexpr VkDeviceSize    upload_alignment = 16;
+        std::vector<VkDeviceSize> mip_offsets(image_slot.mipmaps.size(), 0);
+        VkDeviceSize              staging_size = 0;
         for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
-            auto&               image_data = image_slot.mipmaps[j];
+            auto& image_data = image_slot.mipmaps[j];
             if (image_data.size == 0 || image_data.data == nullptr || image_data.width <= 0 ||
                 image_data.height <= 0) {
                 return fail();
             }
-            PendingImageUpload up {};
+            staging_size = (staging_size + upload_alignment - 1) / upload_alignment *
+                           upload_alignment;
+            mip_offsets[j] = staging_size;
+            staging_size += (VkDeviceSize)image_data.size;
+        }
+
+        if (staging_size != 0) {
+            VmaBufferParameters staging {};
             if (! CreateStagingBuffer(
-                    m_device.vma_allocator(), (u32)image_data.size, up.owned_stage)) {
+                    m_device.vma_allocator(), (std::size_t)staging_size, staging)) {
                 return fail();
             }
             {
-                void* v_data;
-                VVK_CHECK(up.owned_stage.handle.MapMemory(&v_data));
-                std::memcpy(v_data, image_data.data.get(), (u32)image_data.size);
-                up.owned_stage.handle.UnMapMemory();
+                void* v_data { nullptr };
+                VVK_CHECK_ACT(return fail(), staging.handle.MapMemory(&v_data));
+                for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
+                    auto& image_data = image_slot.mipmaps[j];
+                    std::memcpy(static_cast<std::uint8_t*>(v_data) + mip_offsets[j],
+                                image_data.data.get(),
+                                (std::size_t)image_data.size);
+                }
+                staging.handle.UnMapMemory();
             }
-            up.image         = ToImageParameters(image_paras);
-            up.buffer        = *up.owned_stage.handle;
-            up.image_extent  = VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 };
-            up.old_layout    = VK_IMAGE_LAYOUT_UNDEFINED;
-            up.final_layout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            up.mip_level     = (std::uint32_t)j;
-            m_pending_uploads.push_back(std::move(up));
+
+            const VkBuffer staging_handle = *staging.handle;
+            for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
+                auto&              image_data = image_slot.mipmaps[j];
+                PendingImageUpload up {};
+                up.image         = ToImageParameters(image_paras);
+                up.buffer        = staging_handle;
+                up.buffer_offset = mip_offsets[j];
+                up.image_extent  = VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 };
+                up.old_layout    = VK_IMAGE_LAYOUT_UNDEFINED;
+                up.final_layout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                up.mip_level     = (std::uint32_t)j;
+                // The allocation rides on the first level. Every upload for this
+                // texture is retired together in ReleaseRecordedUploads, so no
+                // level can outlive the buffer it reads from.
+                if (j == 0) up.owned_stage = std::move(staging);
+                m_pending_uploads.push_back(std::move(up));
+            }
         }
     }
     m_tex_map[image.key] = std::move(img_slots);
@@ -1082,7 +1117,7 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             }
             {
                 void* v = nullptr;
-                VVK_CHECK(s.upload_stage.handle.MapMemory(&v));
+                VVK_CHECK_ACT(return false, s.upload_stage.handle.MapMemory(&v));
                 std::memcpy(v, rgba.data(), bytes);
                 s.upload_stage.handle.UnMapMemory();
             }
@@ -1205,7 +1240,7 @@ bool TextureCache::UploadFontAtlasRegion(const std::string& key, const std::uint
 
     {
         void* v = nullptr;
-        VVK_CHECK(stage.handle.MapMemory(&v));
+        VVK_CHECK_BOOL_RE(stage.handle.MapMemory(&v));
         auto* dst = static_cast<std::uint8_t*>(v);
         for (std::uint32_t row = 0; row < h; ++row) {
             std::memcpy(dst + row * w, atlas + (y + row) * atlas_w + x, w);

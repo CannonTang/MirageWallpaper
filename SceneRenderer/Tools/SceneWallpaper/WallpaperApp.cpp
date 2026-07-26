@@ -21,7 +21,10 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <sys/event.h>
+#include <sys/types.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 #include <xlocale.h>
 
@@ -60,6 +63,60 @@ void InstallCrashHandler() {
     signal(SIGBUS,  CrashHandler);
     signal(SIGILL,  CrashHandler);
     signal(SIGFPE,  CrashHandler);
+}
+
+// Terminate when the parent dies.
+//
+// This renderer is spawned as a child of Mirage.app and driven over stdin. If
+// the parent crashes or is force-quit, an orphaned renderer keeps drawing a
+// fullscreen desktop-level window that the user has no way to close, so the
+// child must not outlive the parent. Stdin EOF already covers a clean parent
+// exit (see SceneControlChannel), but the control channel is optional and is
+// only started after Vulkan init + scene load, so it does not cover the
+// startup window or a --control-stdin-less run.
+//
+// kqueue/EVFILT_PROC/NOTE_EXIT is the reliable macOS mechanism: it fires as
+// soon as the watched pid exits, regardless of how it died. If registration
+// fails (parent already gone, pid reused, kqueue unavailable) we fall back to
+// polling getppid(), which becomes 1 once we are reparented to launchd.
+void ParentDeathWatchdogLoop(pid_t parent) {
+    const int kq = ::kqueue();
+    if (kq >= 0) {
+        struct kevent change {};
+        EV_SET(&change, (uintptr_t)parent, EVFILT_PROC, EV_ADD | EV_ENABLE, NOTE_EXIT, 0, nullptr);
+        if (::kevent(kq, &change, 1, nullptr, 0, nullptr) == 0) {
+            for (;;) {
+                struct kevent event {};
+                const int     n = ::kevent(kq, nullptr, 0, &event, 1, nullptr);
+                if (n < 0 && errno == EINTR) continue;
+                break; // n > 0: NOTE_EXIT delivered. n < 0: the filter is gone.
+            }
+            ::close(kq);
+            return;
+        }
+        ::close(kq);
+    }
+    while (::getppid() == parent) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+
+void StartParentDeathWatchdog() {
+    const pid_t parent = ::getppid();
+    // Already reparented to launchd (or launched directly by it): there is no
+    // owning parent to follow, so watching would mean quitting immediately.
+    if (parent <= 1) return;
+    std::thread([parent]() {
+        ParentDeathWatchdogLoop(parent);
+        std::cerr << "[SceneWallpaper] parent process exited; shutting down" << std::endl;
+        SceneRendererMacDesktopStop(nullptr);
+        // The graceful path needs a running NSApp run loop, which may not have
+        // started yet (the parent can die during Vulkan/scene init while the
+        // main thread is still blocked). Give it a moment, then leave for real
+        // rather than linger as an unclosable fullscreen window.
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::_Exit(0);
+    }).detach();
 }
 } // namespace
 
@@ -365,7 +422,12 @@ int main(int argc, char** argv) {
     if (! ParseArgs(argc, argv, options)) return 1;
 
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
-    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "1", /*overwrite=*/0);
+    // MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS is deliberately NOT set: it makes
+    // every vkQueueSubmit block the calling thread until the Metal command
+    // buffer completes, which stalls the host on top of the frame's own fence
+    // wait and defeats any CPU/GPU overlap. The renderer's synchronisation is
+    // explicit (fences + semaphores), so the asynchronous default is correct.
+    // Still overrideable from the shell for debugging.
 
     sr::SceneWallpaper wallpaper;
     AppState           state;
@@ -391,6 +453,11 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to create macOS desktop wallpaper host\n";
         return 1;
     }
+
+    // From here on there is a window on screen; never let it outlive the
+    // parent that owns it. Installed before the (long) Vulkan + scene init so
+    // a parent that dies during startup is covered too.
+    StartParentDeathWatchdog();
 
     std::uint32_t render_width  = SceneRendererMacDesktopPixelWidth(state.desktop);
     std::uint32_t render_height = SceneRendererMacDesktopPixelHeight(state.desktop);
