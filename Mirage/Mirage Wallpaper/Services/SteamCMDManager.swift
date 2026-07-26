@@ -786,34 +786,11 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func startWorkshopDownload(_ task: SteamCMDWorkshopTask, in session: SteamCMDWorkshopSession) {
         guard task.markCommandSent() else { return }
         DispatchQueue.main.async { task.onProgress(.downloading(percent: nil)) }
-        monitorReceivedBytes(
-            parentPID: session.process.processIdentifier,
-            active: task.polling,
-            receivedBytes: task.receivedBytes,
-            downloadStarted: task.downloadStarted
-        )
-        monitorWorkshopProgress(task)
+        monitorReceivedBytes(task, parentPID: session.process.processIdentifier)
         do {
             try session.input.write(contentsOf: Data("workshop_download_item 431960 \(task.workshopId)\n".utf8))
         } catch {
             failWorkshopDownload(task, in: session, message: error.localizedDescription)
-        }
-    }
-
-    private func monitorWorkshopProgress(_ task: SteamCMDWorkshopTask) {
-        DispatchQueue.global(qos: .utility).async {
-            var lastReported = 0.0
-            while task.polling.value {
-                Thread.sleep(forTimeInterval: 0.1)
-                let total = task.receivedBytes.value
-                let baseline = task.baselineBytes.value
-                guard task.downloadStarted.value, total >= baseline, task.expectedFileSize > 0 else { continue }
-                let progress = min(Double(total - baseline) / Double(task.expectedFileSize), 0.98)
-                if progress >= lastReported + 0.002 {
-                    lastReported = progress
-                    DispatchQueue.main.async { task.onProgress(.downloading(percent: progress)) }
-                }
-            }
         }
     }
 
@@ -1099,67 +1076,54 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func monitorReceivedBytes(
-        parentPID: pid_t,
-        active: LockedFlag,
-        receivedBytes: LockedUInt64,
-        downloadStarted: LockedFlag
-    ) {
+    /// Sample SteamCMD's download progress and report it.
+    ///
+    /// This used to spawn a `nettop` per sample — an `openpty` + `fork/exec` +
+    /// poll + `terminate` + `waitUntilExit` + PTY teardown, two to seven times a
+    /// second for the whole download, purely to move a progress bar. It is now a
+    /// single `proc_pid_rusage` syscall against the same process.
+    ///
+    /// Bytes written to disk also track `expectedFileSize` more faithfully than
+    /// the old bytes-received figure did: Steam transfers content compressed, so
+    /// what lands on disk is what the Workshop file size actually describes.
+    ///
+    /// Progress reporting is folded into this same loop; it used to be a second
+    /// thread spinning at 10 Hz just to read the counter this one wrote.
+    private func monitorReceivedBytes(_ task: SteamCMDWorkshopTask, parentPID: pid_t) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self,
-                  let steamCMDPID = self.waitForSteamCMDChild(of: parentPID, active: active) else { return }
-            while active.value {
-                if let total = self.receivedNetworkBytes(pid: steamCMDPID) {
-                    receivedBytes.value = max(receivedBytes.value, total)
+                  let steamCMDPID = self.waitForSteamCMDChild(of: parentPID, active: task.polling)
+            else { return }
+            var lastReported = 0.0
+            while task.polling.value {
+                if let total = Self.diskBytesWritten(pid: steamCMDPID) {
+                    task.receivedBytes.value = max(task.receivedBytes.value, total)
                 }
-                Thread.sleep(forTimeInterval: downloadStarted.value ? 0.1 : 0.5)
+                let total = task.receivedBytes.value
+                let baseline = task.baselineBytes.value
+                if task.downloadStarted.value, total >= baseline, task.expectedFileSize > 0 {
+                    let progress = min(Double(total - baseline) / Double(task.expectedFileSize), 0.98)
+                    if progress >= lastReported + 0.002 {
+                        lastReported = progress
+                        DispatchQueue.main.async { task.onProgress(.downloading(percent: progress)) }
+                    }
+                }
+                Thread.sleep(forTimeInterval: task.downloadStarted.value ? 0.25 : 0.5)
             }
         }
     }
 
-    private func receivedNetworkBytes(pid: pid_t) -> UInt64? {
-        var masterFD: Int32 = 0
-        var slaveFD: Int32 = 0
-        guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else { return nil }
-
-        let monitor = Process()
-        monitor.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
-        monitor.arguments = ["-P", "-L", "0", "-x", "-J", "bytes_in", "-p", String(pid)]
-        monitor.standardInput = FileHandle.nullDevice
-        monitor.standardOutput = FileHandle(fileDescriptor: slaveFD, closeOnDealloc: false)
-        monitor.standardError = FileHandle(fileDescriptor: slaveFD, closeOnDealloc: false)
-
-        do {
-            try monitor.run()
-            close(slaveFD)
-        } catch {
-            close(slaveFD)
-            close(masterFD)
-            return nil
+    /// Cumulative bytes this process has written to disk, straight from the
+    /// kernel. No subprocess, no parsing.
+    private static func diskBytesWritten(pid: pid_t) -> UInt64? {
+        var info = rusage_info_v2()
+        let status = withUnsafeMutablePointer(to: &info) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
+                proc_pid_rusage(pid, RUSAGE_INFO_V2, rebound)
+            }
         }
-
-        var output = ""
-        var totalBytes: UInt64?
-        let deadline = Date().addingTimeInterval(0.4)
-        while Date() < deadline, totalBytes == nil {
-            var descriptor = pollfd(fd: masterFD, events: Int16(POLLIN), revents: 0)
-            guard Darwin.poll(&descriptor, 1, 50) > 0 else { continue }
-            var buffer = [UInt8](repeating: 0, count: 4096)
-            let count = Darwin.read(masterFD, &buffer, buffer.count)
-            guard count > 0 else { break }
-            output += String(decoding: buffer.prefix(Int(count)), as: UTF8.self)
-            totalBytes = output.split(whereSeparator: { $0.isNewline }).compactMap { line in
-                let columns = line.split(separator: ",", omittingEmptySubsequences: false)
-                guard columns.count > 1 else { return nil }
-                return UInt64(columns[1].trimmingCharacters(in: .whitespacesAndNewlines))
-            }.max()
-        }
-        if monitor.isRunning {
-            monitor.terminate()
-            monitor.waitUntilExit()
-        }
-        close(masterFD)
-        return totalBytes
+        guard status == 0 else { return nil }
+        return info.ri_diskio_byteswritten
     }
 
     private func waitForSteamCMDChild(of parentPID: pid_t, active: LockedFlag) -> pid_t? {
@@ -1168,7 +1132,9 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             if let pid = descendantPIDs(of: parentPID).first(where: { processName(pid: $0) == "steamcmd" }) {
                 return pid
             }
-            Thread.sleep(forTimeInterval: 0.05)
+            // 5 Hz is plenty to notice a child appearing; the old 20 Hz walked
+            // the whole process tree four times as often for no benefit.
+            Thread.sleep(forTimeInterval: 0.2)
         }
         return nil
     }
@@ -1334,17 +1300,70 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
 
     // MARK: - Shell helper
 
+    /// Hard limit for one-shot helper processes such as `tar`.  The inspected
+    /// archive arrives over the network, so a hostile or corrupt payload must
+    /// never be able to block the installation thread — and with it
+    /// `installationInProgress` — for the rest of the app's lifetime.
+    private static let shellTimeout: TimeInterval = 60
+    /// Grace period between `SIGTERM` and `SIGKILL`, and the extra budget the
+    /// reader gets once the child is gone.
+    private static let shellKillGrace: TimeInterval = 2
+
+    /// Runs a short-lived helper process and returns its merged stdout/stderr.
+    ///
+    /// Both streams share one `Pipe`, so that pipe has to be drained *while* the
+    /// child runs: waiting for exit first deadlocks as soon as the child writes
+    /// more than the pipe buffer (~64 KB).  A single background reader owns the
+    /// shared read end and runs to EOF, so the returned output is complete.
     private func runShellSync(_ executable: String, arguments: [String]) throws -> ShellResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         let pipe = Pipe()
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()
+
+        let collected = LockedData(Data())
+        let readerFinished = DispatchSemaphore(value: 0)
+        let readHandle = pipe.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async {
+            let data = readHandle.readDataToEndOfFile()
+            collected.value = data
+            readerFinished.signal()
+        }
+
+        var timedOut = false
+        if !waitForExit(process, timeout: Self.shellTimeout) {
+            timedOut = true
+            terminate(process)
+            if !waitForExit(process, timeout: Self.shellKillGrace), process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                _ = waitForExit(process, timeout: Self.shellKillGrace)
+            }
+        }
+        // Never return a partial buffer: the reader holds the only remaining copy
+        // of the read end and stops at EOF, which the dead child guarantees.
+        if readerFinished.wait(timeout: .now() + Self.shellKillGrace) == .timedOut { timedOut = true }
+        guard !timedOut else {
+            throw SteamCMDError.installFailed(
+                L("外部命令执行超时：%@", URL(fileURLWithPath: executable).lastPathComponent)
+            )
+        }
         process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return ShellResult(status: process.terminationStatus, output: String(data: data, encoding: .utf8) ?? "")
+        return ShellResult(status: process.terminationStatus, output: String(data: collected.value, encoding: .utf8) ?? "")
+    }
+
+    /// Polls until `process` exits.  Returns `false` when the timeout elapses
+    /// first; unlike `waitUntilExit()` it can never block forever.
+    private func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return true
     }
 }
 
@@ -1479,6 +1498,18 @@ private final class LockedUInt64 {
     init(_ value: UInt64) { storage = value }
 
     var value: UInt64 {
+        get { lock.lock(); defer { lock.unlock() }; return storage }
+        set { lock.lock(); storage = newValue; lock.unlock() }
+    }
+}
+
+private final class LockedData {
+    private let lock = NSLock()
+    private var storage: Data
+
+    init(_ value: Data) { storage = value }
+
+    var value: Data {
         get { lock.lock(); defer { lock.unlock() }; return storage }
         set { lock.lock(); storage = newValue; lock.unlock() }
     }
