@@ -7,6 +7,7 @@
 //   {"cmd":"setProperty","key":"clock","value":false}
 //   {"cmd":"setProperty","key":"schemecolor","type":"color","value":"1 0 0"}
 //   {"cmd":"pause"} / {"cmd":"resume"}
+//   {"cmd":"power","state":"run"|"throttle"|"pause","fps":30}
 //   {"cmd":"volume","value":0.5}      // 0..1
 //   {"cmd":"muted","value":true}
 //   {"cmd":"fps","value":30}
@@ -14,6 +15,11 @@
 //   {"cmd":"speed","value":1.0}
 //   {"cmd":"activate"}              // reveal a deferred-show window
 //   {"cmd":"quit"}
+//
+// `power` is the authoritative playback state. All policy — occlusion, screen
+// lock, display sleep, battery, thermal pressure — is decided in Mirage.app,
+// which is the only process with a global view of window layering and power
+// sources; this renderer never observes any of it and only obeys the result.
 //
 // The reader runs on its own std::thread; sr::SceneWallpaper's setters post
 // thread-safe messages to the render/main message loops (rstd mpsc channel),

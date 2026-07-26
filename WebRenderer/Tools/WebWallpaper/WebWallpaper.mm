@@ -25,7 +25,14 @@
 #import "WebRendererEngine.h"
 #import "WRDesktopInputForwarder.h"
 
+#include <cerrno>
+#include <fcntl.h>
+#include <pthread.h>
 #include <string>
+#include <sys/event.h>
+#include <sys/syslimits.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <vector>
 
 struct WallpaperArgs {
@@ -39,8 +46,135 @@ struct WallpaperArgs {
     BOOL  diag = NO;
     BOOL  controlStdin = NO;
     BOOL  loadFromMemory = NO;
+    WRNetworkPolicy networkPolicy = WRNetworkPolicyObserve;
     std::vector<std::string> assetOverlays;
 };
+
+// Orphan guard: if Mirage.app crashes or is force-quit, a renderer left behind
+// keeps drawing a full-screen desktop-level window the user cannot close.
+// EVFILT_PROC/NOTE_EXIT on the parent is the reliable macOS signal; the
+// getppid() poll afterwards covers the case where kqueue registration fails
+// (e.g. the parent already exited) and doubles as the fallback.
+static void *MirageParentWatchdogMain(void *context) {
+    pid_t parent = (pid_t)(intptr_t)context;
+    int kq = kqueue();
+    if (kq >= 0) {
+        struct kevent change;
+        EV_SET(&change, (uintptr_t)parent, EVFILT_PROC, EV_ADD | EV_ENABLE, NOTE_EXIT, 0, NULL);
+        if (kevent(kq, &change, 1, NULL, 0, NULL) == 0) {
+            struct kevent event;
+            for (;;) {
+                int n = kevent(kq, NULL, 0, &event, 1, NULL);
+                if (n > 0) break;                    // parent exited
+                if (n < 0 && errno != EINTR) break;  // fall through to polling
+            }
+        }
+        close(kq);
+    }
+    while (getppid() == parent) {
+        sleep(1);
+    }
+    fprintf(stderr, "WebWallpaper: parent process %d exited; shutting down\n", (int)parent);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp terminate:nil];
+    });
+    // If the main thread is wedged, do not leave an undismissable window up.
+    sleep(2);
+    _exit(0);
+    return NULL;
+}
+
+static void MirageStartParentWatchdog(void) {
+    pid_t parent = getppid();
+    if (parent <= 1) return; // already orphaned / no parent to watch
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, MirageParentWatchdogMain,
+                       (void *)(intptr_t)parent) == 0) {
+        pthread_detach(thread);
+    }
+}
+
+// Events are emitted from the main thread. With a blocking stdout a parent that
+// stops draining the pipe fills the 64 KiB buffer and freezes the wallpaper, so
+// the descriptor is switched to non-blocking and events are DROPPED rather than
+// allowed to stall the renderer. The all-or-nothing guarantee for such a write
+// only holds up to PIPE_BUF — 512 bytes on Darwin, NOT the 64 KiB pipe
+// capacity. A longer line can come back SHORT, and a truncated JSON line
+// desyncs the parent's line parser for every event after it. Payloads are
+// therefore clamped below PIPE_BUF. Kept in sync with VideoWallpaper.mm.
+static const size_t kMirageMaxEventLine = PIPE_BUF; // 512 on Darwin
+static const NSUInteger kMirageMaxEventStringBytes = 256;
+
+static void MirageMakeStdoutNonBlocking(void) {
+    int flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
+    if (flags != -1) fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK);
+}
+
+// Cuts on a composed-character boundary: slicing UTF-16 units blindly can split
+// a surrogate pair and yield a string NSJSONSerialization refuses to encode.
+static NSString *MirageClampEventString(NSString *value) {
+    if ([value lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= kMirageMaxEventStringBytes) {
+        return value;
+    }
+    NSUInteger cut = MIN(value.length, kMirageMaxEventStringBytes);
+    while (cut > 0) {
+        cut = [value rangeOfComposedCharacterSequenceAtIndex:cut - 1].location;
+        NSString *head = [value substringToIndex:cut];
+        if ([head lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= kMirageMaxEventStringBytes - 3) {
+            return [head stringByAppendingString:@"..."];
+        }
+    }
+    return @"...";
+}
+
+static void MirageEmitEvent(NSDictionary *event) {
+    // Page-supplied text is attacker-influenced and unbounded, so every string
+    // value is clamped before serialising; that also bounds the line itself.
+    NSMutableDictionary *clamped = [event mutableCopy];
+    for (id key in event) {
+        NSString *value = event[key];
+        if (![value isKindOfClass:[NSString class]]) continue;
+        clamped[key] = MirageClampEventString(value);
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:clamped options:0 error:nil];
+    if (data == nil) return;
+    if (data.length + 1 > kMirageMaxEventLine) {
+        // JSON escaping can still expand a clamped payload past PIPE_BUF.
+        // Dropping the event whole is the only outcome that cannot corrupt the
+        // stream for the events that follow it.
+        fprintf(stderr, "WebWallpaper: dropping oversized event line (%lu bytes)\n",
+                (unsigned long)data.length);
+        return;
+    }
+    NSMutableData *line = [data mutableCopy];
+    [line appendBytes:"\n" length:1];
+    const uint8_t *cursor = (const uint8_t *)line.bytes;
+    size_t remaining = line.length;
+    while (remaining > 0) {
+        ssize_t written = write(STDOUT_FILENO, cursor, remaining);
+        if (written > 0) {
+            cursor += written;
+            remaining -= (size_t)written;
+            continue;
+        }
+        if (written < 0 && errno == EINTR) continue;
+        break; // EAGAIN at offset 0 (parent not draining) or error: drop it
+    }
+    if (remaining > 0 && remaining < line.length) {
+        // Unreachable for a line <= PIPE_BUF, but a half-written line would
+        // corrupt every event after it: terminate it so the parent resyncs.
+        ssize_t ignored = write(STDOUT_FILENO, "\n", 1);
+        (void)ignored;
+    }
+}
+
+static BOOL ParseNetworkPolicy(const char *value, WRNetworkPolicy &out) {
+    if (strcmp(value, "block") == 0)   { out = WRNetworkPolicyBlock;   return YES; }
+    if (strcmp(value, "observe") == 0) { out = WRNetworkPolicyObserve; return YES; }
+    if (strcmp(value, "allow") == 0)   { out = WRNetworkPolicyAllow;   return YES; }
+    fprintf(stderr, "unknown --network-policy value: %s (block|observe|allow)\n", value);
+    return NO;
+}
 
 static void PrintUsage(const char *argv0) {
     fprintf(stderr,
@@ -51,6 +185,10 @@ static void PrintUsage(const char *argv0) {
         "  --no-spectrum          disable audio-spectrum capture\n"
         "  --external-spectrum    receive spectrum from the control channel\n"
         "  --screen N             screen index to cover (default 0 = main)\n"
+        "  --network-policy MODE  block | observe | allow (default observe).\n"
+        "                         observe logs every remote request the page makes\n"
+        "                         without blocking it; block denies everything but\n"
+        "                         the wallpaper's own we-wallpaper: resources\n"
         "  --asset-overlay DIR    serve preset assets before base assets\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --load-from-memory     cache wallpaper resources in memory\n"
@@ -79,6 +217,11 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.externalSpectrum = YES;
         } else if (strcmp(arg, "--screen") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.screen = atoi(v);
+        } else if (strncmp(arg, "--network-policy=", 17) == 0) {
+            if (!ParseNetworkPolicy(arg + 17, out.networkPolicy)) return false;
+        } else if (strcmp(arg, "--network-policy") == 0) {
+            const char *v = take(i, arg);
+            if (!v || !ParseNetworkPolicy(v, out.networkPolicy)) return false;
         } else if (strcmp(arg, "--asset-overlay") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.assetOverlays.emplace_back(v);
         } else if (strcmp(arg, "--run-seconds") == 0) {
@@ -117,14 +260,53 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) WebRendererEngine *engine;
 @property (nonatomic, strong) WRDesktopInputForwarder *inputForwarder;
 @property (nonatomic, strong) MirageControlChannel *control;
+@property (nonatomic, assign) int screenIndex;
+- (void)observeScreenParameterChanges;
 @end
 @implementation WebWallpaperAppDelegate
+
+// Resolution changes, display rearrangement and unplug/replug all leave the
+// window (and the input forwarder's coordinate normalization) on a stale
+// frame, because both captured screen.frame once at launch.
+- (void)observeScreenParameterChanges {
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(screenParametersDidChange:)
+                                               name:NSApplicationDidChangeScreenParametersNotification
+                                             object:nil];
+}
+
+- (void)screenParametersDidChange:(NSNotification *)note {
+    (void)note;
+    NSArray<NSScreen *> *screens = NSScreen.screens;
+    // The configured index may no longer exist (display unplugged): fall back
+    // to the main screen rather than leaving a window on a screen that is gone.
+    NSScreen *screen = (self.screenIndex >= 0 && self.screenIndex < (int)screens.count)
+                           ? screens[self.screenIndex]
+                           : NSScreen.mainScreen;
+    if (screen == nil) screen = screens.firstObject;
+    if (screen == nil) return;
+    NSRect frame = screen.frame;
+    if (NSWidth(frame) <= 0 || NSHeight(frame) <= 0) return;
+    if (!NSEqualRects(self.window.frame, frame)) {
+        fprintf(stderr, "WebWallpaper: screen parameters changed; resizing to %.0fx%.0f at (%.0f,%.0f)\n",
+                NSWidth(frame), NSHeight(frame), NSMinX(frame), NSMinY(frame));
+        [self.window setFrame:frame display:YES];
+    }
+    [self.inputForwarder updateScreen:screen];
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
 @end
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         WallpaperArgs args;
         if (!ParseArgs(argc, argv, args)) return 1;
+
+        MirageStartParentWatchdog();
+        MirageMakeStdoutNonBlocking();
 
         NSError *manifestErr = nil;
         WRManifest *manifest = [WRManifest loadFromDirectory:@(args.workshop) error:&manifestErr];
@@ -152,6 +334,7 @@ int main(int argc, char *argv[]) {
         cfg.initialVolume = args.volume;
         cfg.frameRate = args.fps;
         cfg.loadFromMemory = args.loadFromMemory;
+        cfg.networkPolicy = args.networkPolicy;
         NSMutableArray<NSString *> *assetOverlays = [NSMutableArray arrayWithCapacity:args.assetOverlays.size()];
         for (const auto &path : args.assetOverlays) {
             NSString *overlay = [NSString stringWithUTF8String:path.c_str()];
@@ -162,9 +345,7 @@ int main(int argc, char *argv[]) {
         WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:screenFrame config:cfg];
         delegate.engine = engine;
         engine.audioSpectrumDemandHandler = ^(BOOL needed) {
-            fprintf(stdout, "{\"event\":\"audio-demand\",\"needed\":%s}\n",
-                    needed ? "true" : "false");
-            fflush(stdout);
+            MirageEmitEvent(@{ @"event": @"audio-demand", @"needed": @(needed) });
         };
 
         WebWallpaperWindow *window = [[WebWallpaperWindow alloc]
@@ -205,6 +386,9 @@ int main(int argc, char *argv[]) {
         delegate.inputForwarder = [[WRDesktopInputForwarder alloc] initWithWebView:engine.webView screen:screen];
         [delegate.inputForwarder start];
 
+        delegate.screenIndex = args.screen;
+        [delegate observeScreenParameterChanges];
+
         // Live control channel: Mirage.app pipes JSON commands on stdin.
         if (args.controlStdin) {
             WebRendererEngine *eng = engine;
@@ -232,6 +416,27 @@ int main(int argc, char *argv[]) {
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
                         [eng setPaused:NO];
                         [delegate.inputForwarder setPaused:NO];
+                    } else if ([name isEqualToString:@"power"]) {
+                        // Authoritative playback state from the app. This window
+                        // is canHide=NO + orderFrontRegardless, so AppKit never
+                        // reports it occluded and this process cannot observe
+                        // occlusion, lock or sleep itself — it only obeys.
+                        NSString *state = [cmd[@"state"] isKindOfClass:[NSString class]]
+                            ? cmd[@"state"] : nil;
+                        if (state == nil) return;
+                        BOOL shouldPause = [state isEqualToString:@"pause"];
+                        if (!shouldPause && ![state isEqualToString:@"run"]
+                            && ![state isEqualToString:@"throttle"]) {
+                            return;
+                        }
+                        if (!shouldPause) {
+                            id fps = cmd[@"fps"];
+                            if ([fps isKindOfClass:[NSNumber class]]) {
+                                [eng setFrameRate:[fps intValue]];
+                            }
+                        }
+                        [eng setPaused:shouldPause];
+                        [delegate.inputForwarder setPaused:shouldPause];
                     } else if ([name isEqualToString:@"volume"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
                     } else if ([name isEqualToString:@"muted"]) {
