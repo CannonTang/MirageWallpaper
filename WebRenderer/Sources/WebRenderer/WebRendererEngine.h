@@ -8,6 +8,20 @@ NS_ASSUME_NONNULL_BEGIN
 @class WRManifest;
 @class WRAudioTap;
 
+// Egress policy for the untrusted wallpaper page. The navigation delegate only
+// gates NAVIGATIONS; fetch/XMLHttpRequest/WebSocket/<img src>/<script src> to
+// arbitrary hosts are otherwise completely unrestricted, so a Workshop
+// wallpaper can exfiltrate anything it can read.
+typedef NS_ENUM(NSInteger, WRNetworkPolicy) {
+    // Default. Does not block — logs every remote request to stderr so the
+    // wallpaper corpus can be audited before the default is tightened.
+    WRNetworkPolicyObserve = 0,
+    // WKContentRuleList denying everything but we-wallpaper:/about:/data:/blob:.
+    WRNetworkPolicyBlock,
+    // Legacy behaviour: unrestricted, and silent about it.
+    WRNetworkPolicyAllow,
+};
+
 typedef struct {
     BOOL enableInspector;            // webView.inspectable — Safari Web Inspector
     BOOL enableAudioSpectrum;        // start WRAudioTap for wallpaperRegisterAudioListener
@@ -15,6 +29,7 @@ typedef struct {
     float initialVolume;             // master volume 0..1 (applied via "audio" property)
     int  frameRate;                  // target fps (0 or ≥60 ⇒ no throttle)
     BOOL loadFromMemory;             // cache wallpaper resource bytes for process lifetime
+    WRNetworkPolicy networkPolicy;   // egress control for untrusted page script
     NSString *_Nullable userAgent;   // nil ⇒ Chrome-on-mac default
     NSArray<NSString *> *_Nullable assetOverlayDirectories;
 } WREngineConfig;

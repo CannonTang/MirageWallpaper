@@ -215,6 +215,22 @@ static NSString *const kShimJS = @"\
     if(p)root.classList.add('__wr-paused');else root.classList.remove('__wr-paused');\
   }\
   window.__wr_pauseStreams=__pauseMedia; window.__wr_resumeStreams=__resumeMedia;\
+  /* WebKit never marks this page hidden: the wallpaper window is canHide=NO + \
+     orderFrontRegardless, so AppKit never reports it occluded and WebKit's own \
+     hidden-page throttling therefore never engages. rAF and timers are already \
+     intercepted above, which is what actually stops the work; this additionally \
+     surfaces the paused state through the standard Page Visibility API so that \
+     wallpapers listening for visibilitychange (many drop their own work on it) \
+     observe it too. */\
+  var __wrHidden=false;\
+  try{\
+    Object.defineProperty(document,'hidden',{configurable:true,get:function(){return __wrHidden;}});\
+    Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return __wrHidden?'hidden':'visible';}});\
+  }catch(e){}\
+  function __setPageVisibility(hidden){\
+    if(__wrHidden===hidden)return; __wrHidden=hidden;\
+    try{document.dispatchEvent(new Event('visibilitychange'));}catch(e){}\
+  }\
   var __wr_pendingProps={},__wr_listener=null;\
   function __wr_flushProps(){\
     var listener=__wr_listener;\
@@ -259,6 +275,7 @@ static NSString *const kShimJS = @"\
   window.__wr_setPaused = function(p){\
     p=!!p; if (__paused===p) return; __paused=p; window.wallpaperEngine_paused=p;\
     __setCssPaused(p);\
+    __setPageVisibility(p);\
     if(p){\
       if(__rafNative)__nativeCancel(__rafNative);__rafNative=0;\
       if(__rafDelay)__nativeClearTimeout(__rafDelay);__rafDelay=0;\
@@ -315,17 +332,132 @@ static NSString *const kShimJS = @"\
   }\
 })();";
 
+// WRNetworkPolicyBlock. Default-deny with ignore-previous-rules exemptions for
+// the schemes the wallpaper document itself needs. Later rules win in WebKit
+// content extensions, so the exemptions override the catch-all block.
+static NSString *const kBlockExternalRules = @"["
+    "{\"trigger\":{\"url-filter\":\".*\"},\"action\":{\"type\":\"block\"}},"
+    "{\"trigger\":{\"url-filter\":\"^we-wallpaper://\"},\"action\":{\"type\":\"ignore-previous-rules\"}},"
+    "{\"trigger\":{\"url-filter\":\"^about:\"},\"action\":{\"type\":\"ignore-previous-rules\"}},"
+    "{\"trigger\":{\"url-filter\":\"^data:\"},\"action\":{\"type\":\"ignore-previous-rules\"}},"
+    "{\"trigger\":{\"url-filter\":\"^blob:\"},\"action\":{\"type\":\"ignore-previous-rules\"}}"
+    "]";
+
+static NSString *const kBlockRuleListIdentifier = @"MirageWebRendererBlockExternal";
+
+// WRNetworkPolicyObserve. A WKContentRuleList CANNOT report without blocking:
+// its only actions are block, block-cookies, css-display-none,
+// ignore-previous-rules and make-https — there is no "report" action, and
+// WKWebView exposes no public per-resource load delegate. So observation is
+// done from inside the page instead: PerformanceObserver('resource') yields an
+// entry for every subresource actually fetched (img/script/css/font/xhr/fetch)
+// with its absolute URL and without affecting the load, and WebSocket and
+// sendBeacon — which resource timing does not cover — are wrapped directly.
+// Limits, stated honestly: requests that fail before producing a timing entry
+// (DNS/TLS failure, blocked-by-CSP) are not reported, and a page that deletes
+// PerformanceObserver before its own requests cannot be observed this way.
+// This is auditing, not enforcement; use --network-policy=block for that.
+static NSString *const kNetworkObserverJS = @"\
+(function(){\
+  if (window.__wr_netobs) return;\
+  window.__wr_netobs = true;\
+  var __seen = {}, __count = 0, __limit = 256;\
+  function __post(kind, url){\
+    try {\
+      if (typeof url !== 'string' || !url) return;\
+      if (/^(we-wallpaper|about|data|blob):/i.test(url)) return;\
+      var key = kind + ' ' + url;\
+      if (__seen[key] || __count >= __limit) return;\
+      __seen[key] = 1; __count++;\
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.wrNetwork)\
+        window.webkit.messageHandlers.wrNetwork.postMessage({kind:String(kind), url:String(url)});\
+    } catch(e) {}\
+  }\
+  function __drain(list){\
+    try { list.getEntries().forEach(function(e){ __post(e.initiatorType || 'resource', e.name); }); }\
+    catch(e) {}\
+  }\
+  try {\
+    var __po = new PerformanceObserver(function(list){ __drain(list); });\
+    try { __po.observe({type:'resource', buffered:true}); }\
+    catch(e) { __po.observe({entryTypes:['resource']}); }\
+  } catch(e) {}\
+  try {\
+    var __NativeWS = window.WebSocket;\
+    if (__NativeWS) {\
+      var __WS = function(url, protocols){\
+        __post('websocket', String(url));\
+        return protocols === undefined ? new __NativeWS(url) : new __NativeWS(url, protocols);\
+      };\
+      __WS.prototype = __NativeWS.prototype;\
+      ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k){ try { __WS[k] = __NativeWS[k]; } catch(e) {} });\
+      window.WebSocket = __WS;\
+    }\
+  } catch(e) {}\
+  try {\
+    var __beacon = navigator.sendBeacon;\
+    if (typeof __beacon === 'function')\
+      navigator.sendBeacon = function(url, data){ __post('beacon', String(url)); return __beacon.call(navigator, url, data); };\
+  } catch(e) {}\
+})();";
+
+// Cap on distinct observed requests reported to stderr, so a wallpaper cannot
+// turn the audit log into a denial of service against whoever drains stderr.
+static const NSUInteger kMaxNetworkObservations = 256;
+static const NSUInteger kMaxObservedURLLength = 512;
+
 static NSString *const kDefaultUserAgent =
     @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// Script-message bodies come from untrusted wallpaper JS: any page can
+// postMessage() an arbitrary JSON value to every registered handler. Checking
+// only the container is not enough — {"count":null} arrives as NSNull and
+// -[NSNull integerValue] (or -[NSNumber UTF8String]) is an unrecognized
+// selector that aborts the process. Every value is coerced through these.
+static NSDictionary *WRDictionaryValue(id value) {
+    return [value isKindOfClass:[NSDictionary class]] ? (NSDictionary *)value : nil;
+}
+
+static NSNumber *WRNumberValue(id value) {
+    return [value isKindOfClass:[NSNumber class]] ? (NSNumber *)value : nil;
+}
+
+static NSString *WRStringValue(id value) {
+    return [value isKindOfClass:[NSString class]] ? (NSString *)value : nil;
+}
+
+// WKUserContentController retains its script message handlers STRONGLY, so
+// registering the engine itself closed the cycle
+// ucc → engine → webView → configuration → ucc. Nothing ever broke it: the
+// engine, its WRAudioTap (hence a live system-wide audio tap) and the
+// WKWebView were immortal. Register this weak forwarder instead and drop the
+// names in -[WebRendererEngine dealloc].
+@interface WRWeakScriptMessageHandler : NSObject <WKScriptMessageHandler>
+@property (nonatomic, weak) id<WKScriptMessageHandler> target;
+@end
+
+@implementation WRWeakScriptMessageHandler
+- (void)userContentController:(WKUserContentController *)ucc
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    [self.target userContentController:ucc didReceiveScriptMessage:message];
+}
+@end
+
 @interface WebRendererEngine () <WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
+@property (nonatomic, strong) WKUserContentController *userContentController;
+@property (nonatomic, strong) WRWeakScriptMessageHandler *messageHandlerProxy;
+@property (nonatomic, strong) NSMutableSet<NSString *> *scriptHandlerNames;
 @property (nonatomic, strong) WRAudioTap *audioTap;
 @property (nonatomic, strong) NSTimer *audioTimer;
 @property (nonatomic, strong) WRManifest *manifest;
 @property (nonatomic, strong) WRURLSchemeHandler *schemeHandler;
 @property (nonatomic, assign) BOOL didFinishLoad;
+@property (nonatomic, assign) BOOL networkRulesReady;
+@property (nonatomic, assign) BOOL networkRulesFailed;
+@property (nonatomic, assign) BOOL pendingWallpaperLoad;
+@property (nonatomic, assign) NSUInteger networkObservationCount;
 @property (nonatomic, strong) NSMutableArray<NSString *> *pendingJS;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
@@ -337,6 +469,8 @@ static NSString *const kDefaultUserAgent =
 @property (nonatomic, assign) BOOL audioSpectrumRequested;
 @property (nonatomic, assign) BOOL audioListenerDemand;
 @property (nonatomic, assign) BOOL paused;
+- (void)installNetworkRuleList;
+- (void)loadWallpaperEntry;
 @end
 
 @implementation WebRendererEngine {
@@ -351,6 +485,7 @@ static NSString *const kDefaultUserAgent =
     c.initialVolume = 1.0f;
     c.frameRate = 60;
     c.loadFromMemory = NO;
+    c.networkPolicy = WRNetworkPolicyObserve;
     c.userAgent = nil;
     c.assetOverlayDirectories = nil;
     return c;
@@ -376,13 +511,36 @@ static NSString *const kDefaultUserAgent =
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:YES];
     [ucc addUserScript:shim];
+    _messageHandlerProxy = [WRWeakScriptMessageHandler new];
+    _messageHandlerProxy.target = self;
+    // Two of these registrations are conditional, so -dealloc cannot just
+    // remove a hardcoded list: removing a name that was never added only
+    // happens to be a no-op in current WebKit. Record exactly what was
+    // registered and remove exactly that, so the two lists cannot drift.
+    _scriptHandlerNames = [NSMutableSet set];
+    WRWeakScriptMessageHandler *proxy = _messageHandlerProxy;
+    NSMutableSet<NSString *> *handlerNames = _scriptHandlerNames;
+    void (^addScriptHandler)(NSString *) = ^(NSString *name) {
+        [ucc addScriptMessageHandler:proxy name:name];
+        [handlerNames addObject:name];
+    };
     if (_config.enableInspector || getenv("WR_DEBUG") != NULL) {
-        [ucc addScriptMessageHandler:self name:@"wrConsole"];
+        addScriptHandler(@"wrConsole");
     }
-    [ucc addScriptMessageHandler:self name:@"wrProperties"];
-    [ucc addScriptMessageHandler:self name:@"wrAudioDemand"];
+    addScriptHandler(@"wrProperties");
+    addScriptHandler(@"wrAudioDemand");
+    if (_config.networkPolicy == WRNetworkPolicyObserve) {
+        WKUserScript *netobs = [[WKUserScript alloc] initWithSource:kNetworkObserverJS
+                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                   forMainFrameOnly:YES];
+        [ucc addUserScript:netobs];
+        addScriptHandler(@"wrNetwork");
+    }
+    _userContentController = ucc;
     cfg.userContentController = ucc;
-    cfg.preferences.javaScriptCanOpenWindowsAutomatically = YES;
+    // Untrusted page script has no legitimate need to open windows, and the
+    // wallpaper host has no UI to show them in.
+    cfg.preferences.javaScriptCanOpenWindowsAutomatically = NO;
     cfg.suppressesIncrementalRendering = NO;
     if (_config.enableAudioPlayback) {
         cfg.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
@@ -392,13 +550,84 @@ static NSString *const kDefaultUserAgent =
     _schemeHandler = [WRURLSchemeHandler new];
     [cfg setURLSchemeHandler:_schemeHandler forURLScheme:@"we-wallpaper"];
 
+    // Untrusted Workshop content must not get on-disk cookies/localStorage/
+    // IndexedDB/cache shared with every other wallpaper. This has to be set on
+    // the configuration BEFORE the web view is created: -[WKWebView
+    // configuration] returns a COPY, so assigning it afterwards is a no-op.
+    cfg.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+
     _webView = [[WKWebView alloc] initWithFrame:frame configuration:cfg];
     _webView.navigationDelegate = self;
     _webView.customUserAgent = (_config.userAgent.length > 0) ? _config.userAgent : kDefaultUserAgent;
     if (@available(macOS 13.0, *)) {
         _webView.inspectable = _config.enableInspector ? YES : NO;
     }
-    _webView.configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+
+    switch (_config.networkPolicy) {
+    case WRNetworkPolicyBlock:
+        [self installNetworkRuleList];
+        break;
+    case WRNetworkPolicyObserve:
+        fprintf(stderr, "WebRenderer: network policy=observe "
+                        "(remote requests are logged, not blocked)\n");
+        break;
+    case WRNetworkPolicyAllow:
+        fprintf(stderr, "WebRenderer: network policy=allow (no egress restriction)\n");
+        break;
+    }
+}
+
+- (void)dealloc {
+    // KVO/notification-style registrations that outlive the object crash the
+    // process, and WKUserContentController holds its handlers strongly — drop
+    // everything explicitly. No property accessors, no blocks: ivars only.
+    [_audioTimer invalidate];
+    _audioTimer = nil;
+    [_audioTap stop];
+    for (NSString *name in _scriptHandlerNames) {
+        [_userContentController removeScriptMessageHandlerForName:name];
+    }
+    [_scriptHandlerNames removeAllObjects];
+    [_userContentController removeAllUserScripts];
+    [_userContentController removeAllContentRuleLists];
+}
+
+#pragma mark - Network policy
+
+// Rule-list compilation is ASYNCHRONOUS, so -openWallpaper: defers the page
+// load until the list is actually installed on the (shared) user content
+// controller. Note that -[WKWebView configuration] hands back a copy, so the
+// list must be added to the controller instance we kept, not to
+// webView.configuration.userContentController.
+- (void)installNetworkRuleList {
+    WKContentRuleListStore *store = [WKContentRuleListStore defaultStore];
+    if (store == nil) {
+        fprintf(stderr, "WebRenderer: network policy=block cannot be enforced "
+                        "(no content rule list store); refusing to load wallpaper\n");
+        _networkRulesFailed = YES;
+        return;
+    }
+    __weak WebRendererEngine *weakSelf = self;
+    [store compileContentRuleListForIdentifier:kBlockRuleListIdentifier
+                        encodedContentRuleList:kBlockExternalRules
+                             completionHandler:^(WKContentRuleList *list, NSError *error) {
+        __strong WebRendererEngine *s = weakSelf;
+        if (s == nil) return;
+        if (list == nil) {
+            // Fail closed: silently degrading an explicitly requested security
+            // control to "allow" is worse than not showing the wallpaper.
+            fprintf(stderr, "WebRenderer: network policy=block failed to compile (%s); "
+                            "refusing to load wallpaper\n",
+                    error.localizedDescription.UTF8String ?: "unknown error");
+            s.networkRulesFailed = YES;
+            s.pendingWallpaperLoad = NO;
+            return;
+        }
+        [s.userContentController addContentRuleList:list];
+        s.networkRulesReady = YES;
+        fprintf(stderr, "WebRenderer: network policy=block (external requests blocked)\n");
+        if (s.pendingWallpaperLoad) [s loadWallpaperEntry];
+    }];
 }
 
 #pragma mark - Open wallpaper
@@ -416,6 +645,27 @@ static NSString *const kDefaultUserAgent =
     _schemeHandler.overlayDirectories = _config.assetOverlayDirectories ?: @[];
     [_schemeHandler clearMemoryCache];
     _schemeHandler.loadFromMemory = _config.loadFromMemory;
+
+    if (_config.networkPolicy == WRNetworkPolicyBlock && !_networkRulesReady) {
+        if (_networkRulesFailed) {
+            fprintf(stderr, "WebRenderer: not loading wallpaper — "
+                            "network policy=block could not be enforced\n");
+            return;
+        }
+        // The content rule list is still compiling. Loading now would give the
+        // page a window of unrestricted egress, so hand the load to the
+        // compilation completion handler instead.
+        _pendingWallpaperLoad = YES;
+        fprintf(stderr, "WebRenderer: deferring load until the network rule list is installed\n");
+        return;
+    }
+    [self loadWallpaperEntry];
+}
+
+- (void)loadWallpaperEntry {
+    _pendingWallpaperLoad = NO;
+    WRManifest *manifest = _manifest;
+    if (manifest == nil) return;
     NSString *entry = manifest.entryHTML ?: @"index.html";
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"we-wallpaper://wallpaper/%@", entry]];
     fprintf(stderr, "WebRenderer: loading %s\n", entry.UTF8String ?: "index.html");
@@ -587,9 +837,17 @@ static NSString *const kDefaultUserAgent =
         if (getenv("WR_DEBUG")) {
             fprintf(stderr, "WebRenderer: audio spectrum tap running\n");
         }
-        s->_audioTimer = [NSTimer scheduledTimerWithTimeInterval:1.0/30.0 repeats:YES
-            block:^(NSTimer *t) { (void)t; [s tickAudio]; }];
-        [[NSRunLoop mainRunLoop] addTimer:s->_audioTimer forMode:NSRunLoopCommonModes];
+        // The timer block must capture weakSelf, not the strong `s`: the run
+        // loop retains the timer and the timer retains the block, so a strong
+        // capture made engine and timer keep each other alive forever.
+        // -timerWithTimeInterval: is unscheduled, so the addTimer: below is the
+        // one and only registration. -scheduledTimerWithTimeInterval: had
+        // already scheduled it in the default mode, which made the addTimer:
+        // register the same timer twice instead of upgrading it to common modes.
+        NSTimer *timer = [NSTimer timerWithTimeInterval:1.0/30.0 repeats:YES
+            block:^(NSTimer *t) { (void)t; [weakSelf tickAudio]; }];
+        s->_audioTimer = timer;
+        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     }];
 }
 
@@ -626,11 +884,21 @@ static NSString *const kDefaultUserAgent =
 
 - (void)pushAudioSpectrum:(NSArray<NSNumber *> *)spectrum {
     if (!_audioListenerDemand || _paused || spectrum.count != 128) return;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:spectrum options:0 error:nil];
-    if (data == nil) return;
-    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (json == nil) return;
-    [self eval:[NSString stringWithFormat:@"__wr_pushAudio(%@);", json]];
+    // Spectrum frames are only meaningful live. Before the page has loaded there
+    // is nothing to receive them, and queueing them would just replay stale
+    // audio once it does.
+    if (!_didFinishLoad) return;
+    // Pass the samples as a structured argument rather than serialising them to
+    // JSON and pasting that into a freshly built ~800-character source string
+    // 30 times a second — roughly 3900 NSString allocations per second, plus a
+    // full parse/compile of a new script for each frame. The body is constant
+    // now; only the argument changes.
+    static NSString *const kPushAudioBody = @"window.__wr_pushAudio(d);";
+    [_webView callAsyncJavaScript:kPushAudioBody
+                        arguments:@{ @"d": spectrum }
+                          inFrame:nil
+                   inContentWorld:WKContentWorld.pageWorld
+                completionHandler:nil];
 }
 
 #pragma mark - WKNavigationDelegate
@@ -662,10 +930,26 @@ static NSString *const kDefaultUserAgent =
                         decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     (void)webView;
     NSString *scheme = navigationAction.request.URL.scheme.lowercaseString;
-    // Allow our scheme + local/about/data; cancel external page-level nav so a
+    // Allow our scheme + about: only; cancel external page-level nav so a
     // wallpaper can't yank the window off to the web. Sub-resources unaffected.
-    if ([scheme isEqualToString:@"we-wallpaper"] || [scheme isEqualToString:@"file"] ||
-        [scheme isEqualToString:@"about"] || [scheme isEqualToString:@"data"]) {
+    // file: and data: are deliberately NOT allowed in the MAIN frame: a
+    // top-level navigation to either hands untrusted page script a document on
+    // a different security origin than the we-wallpaper: sandbox it is
+    // supposed to stay inside.
+    if ([scheme isEqualToString:@"we-wallpaper"] || [scheme isEqualToString:@"about"]) {
+        decisionHandler(WKNavigationActionPolicyAllow);
+        return;
+    }
+    // This delegate also fires for IFRAME navigations, and Wallpaper Engine web
+    // wallpapers routinely isolate widgets in <iframe src="data:text/html,...">
+    // — blocking those just leaves the widget blank without buying anything,
+    // since the sub-frame document does not become the wallpaper's own origin.
+    // targetFrame is nil for a navigation that would open a new window, which
+    // is explicitly NOT a sub-frame and stays denied. file: is denied in every
+    // frame: it would reach the real filesystem outside the wallpaper dir.
+    WKFrameInfo *targetFrame = navigationAction.targetFrame;
+    BOOL isSubframe = (targetFrame != nil && !targetFrame.isMainFrame);
+    if (isSubframe && ([scheme isEqualToString:@"data"] || [scheme isEqualToString:@"blob"])) {
         decisionHandler(WKNavigationActionPolicyAllow);
         return;
     }
@@ -691,15 +975,17 @@ static NSString *const kDefaultUserAgent =
 - (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
     (void)ucc;
     if ([message.name isEqualToString:@"wrProperties"]) {
-        NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+        NSDictionary *body = WRDictionaryValue(message.body);
+        NSString *generation = WRStringValue(body[@"generation"]);
+        NSNumber *count = WRNumberValue(body[@"count"]);
         fprintf(stderr, "WebRenderer: applied property snapshot generation=%s count=%ld\n",
-                [body[@"generation"] description].UTF8String ?: "unknown",
-                (long)[body[@"count"] integerValue]);
+                generation.UTF8String ?: "unknown",
+                count != nil ? (long)count.integerValue : -1L);
         return;
     }
     if ([message.name isEqualToString:@"wrAudioDemand"]) {
-        NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
-        BOOL needed = [body[@"needed"] boolValue];
+        NSDictionary *body = WRDictionaryValue(message.body);
+        BOOL needed = WRNumberValue(body[@"needed"]).boolValue;
         if (_audioListenerDemand != needed) {
             _audioListenerDemand = needed;
             [self reconcileAudioSpectrum];
@@ -709,10 +995,33 @@ static NSString *const kDefaultUserAgent =
         }
         return;
     }
+    if ([message.name isEqualToString:@"wrNetwork"]) {
+        NSDictionary *body = WRDictionaryValue(message.body);
+        NSString *url = WRStringValue(body[@"url"]);
+        NSString *kind = WRStringValue(body[@"kind"]) ?: @"resource";
+        if (url.length == 0) return;
+        if (_networkObservationCount > kMaxNetworkObservations) return;
+        _networkObservationCount += 1;
+        if (_networkObservationCount > kMaxNetworkObservations) {
+            fprintf(stderr, "WebRenderer: [network-observe] reached %lu distinct requests; "
+                            "further reports suppressed\n",
+                    (unsigned long)kMaxNetworkObservations);
+            return;
+        }
+        // The page can postMessage to this handler directly, so neither field
+        // can be trusted to be short.
+        if (url.length > kMaxObservedURLLength) {
+            url = [[url substringToIndex:kMaxObservedURLLength] stringByAppendingString:@"..."];
+        }
+        if (kind.length > 32) kind = [kind substringToIndex:32];
+        fprintf(stderr, "WebRenderer: [network-observe] would block %s request: %s\n",
+                kind.UTF8String ?: "resource", url.UTF8String ?: "");
+        return;
+    }
     if (![message.name isEqualToString:@"wrConsole"]) return;
-    NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
-    NSString *type = body[@"type"] ?: @"log";
-    NSString *text = body[@"message"] ?: @"";
+    NSDictionary *body = WRDictionaryValue(message.body);
+    NSString *type = WRStringValue(body[@"type"]) ?: @"log";
+    NSString *text = WRStringValue(body[@"message"]) ?: @"";
     fprintf(stderr, "WebRenderer [%s] %s\n", type.UTF8String ?: "log", text.UTF8String ?: "");
 }
 
