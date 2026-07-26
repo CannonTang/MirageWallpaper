@@ -225,7 +225,15 @@ bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> d
                                size_t offset) {
     CHECK_REF(ref, return false);
 
-    if (m_stage_raw == nullptr) mapStageBuf();
+    if (m_stage_raw == nullptr && (mapStageBuf() != VK_SUCCESS || m_stage_raw == nullptr))
+        return false;
+    // `offset` comes from shader-reflected uniform offsets, so it is only as
+    // trustworthy as the reflection. Without this guard `ref.size - offset`
+    // wraps around and the copy runs past the mapped staging region.
+    if (offset >= ref.size) {
+        rstd_error("stage write out of range: offset {} >= size {}", offset, ref.size);
+        return false;
+    }
     VkDeviceSize size = std::min<VkDeviceSize>(ref.size - offset, data.size());
     uint8_t*     raw  = (uint8_t*)m_stage_raw;
     std::copy(data.begin(), data.begin() + size, raw + ref.offset + offset);
@@ -236,7 +244,12 @@ bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> d
 bool StagingBuffer::fillBuf(const StagingBufferRef& ref, size_t offset, size_t size, uint8_t c) {
     CHECK_REF(ref, return false);
 
-    if (m_stage_raw == nullptr) mapStageBuf();
+    if (m_stage_raw == nullptr && (mapStageBuf() != VK_SUCCESS || m_stage_raw == nullptr))
+        return false;
+    if (offset >= ref.size) {
+        rstd_error("stage fill out of range: offset {} >= size {}", offset, ref.size);
+        return false;
+    }
     VkDeviceSize size_     = std::min<VkDeviceSize>(ref.size - offset, size);
     uint8_t*     raw       = (uint8_t*)m_stage_raw;
     uint8_t*     raw_begin = raw + ref.offset + offset;
