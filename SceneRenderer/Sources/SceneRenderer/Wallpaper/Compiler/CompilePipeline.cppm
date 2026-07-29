@@ -96,6 +96,7 @@ struct ParseContext {
 
     std::unordered_map<std::int32_t, std::string> system_media_image_fallbacks;
     Set<std::int32_t>                             hidden_link_source_ids;
+    Set<std::string>                              unresolved_shader_values;
     bool                                          scene_layer_text_writes { false };
 };
 

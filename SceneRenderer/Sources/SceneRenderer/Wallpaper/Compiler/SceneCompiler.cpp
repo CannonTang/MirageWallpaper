@@ -1749,6 +1749,12 @@ std::string ResolveShaderMaterialKey(const WPShaderInfo& info, const std::string
     return {};
 }
 
+bool IsFrequencyRangeSummary(const WPShaderInfo& info, std::string_view name) {
+    return name == "frequencyRange" &&
+           ! ResolveShaderMaterialKey(info, "frequencyRangeStart").empty() &&
+           ! ResolveShaderMaterialKey(info, "frequencyRangeEnd").empty();
+}
+
 bool IsShaderPositionUniform(const WPShaderInfo& info, const std::string& glname) {
     for (const auto& var : info.scalar_uniforms) {
         if (var.name == glname) return var.position;
@@ -2071,7 +2077,8 @@ void IndexSystemMediaImageFallbacks(ParseContext& context, std::span<SceneObject
 }
 
 void LoadConstvalue(
-    SceneMaterial& material, const wpscene::Material& wpmat, const WPShaderInfo& info,
+    ParseContext& context, SceneMaterial& material, const wpscene::Material& wpmat,
+    const WPShaderInfo& info,
     sr::Map<std::string, SceneShaderValueAnimation>* final_quad_shader_values = nullptr) {
     // load glname from alias and load to constvalue
     for (const auto& cs : wpmat.constantshadervalues) {
@@ -2080,7 +2087,15 @@ void LoadConstvalue(
         std::string               glname = ResolveShaderMaterialKey(info, name);
         if (glname.empty()) {
             if (IsLegacyAtmosphereShadowValue(wpmat, name)) continue;
-            rstd_error("ShaderValue: {} not found in glsl", name);
+            if (IsFrequencyRangeSummary(info, name)) continue;
+            std::string warning_key = wpmat.shader;
+            warning_key.push_back('\0');
+            warning_key.append(name);
+            if (context.unresolved_shader_values.insert(std::move(warning_key)).second) {
+                rstd_warn("ignoring ShaderValue '{}' for shader '{}': no matching GLSL material uniform",
+                          name,
+                          wpmat.shader);
+            }
         } else {
             std::vector<float> const_value = value;
             bool               normalize_position =
@@ -2510,7 +2525,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
             rstd_error("load imageobj '{}' material faild", wpimgobj.name);
             return;
         };
-        LoadConstvalue(material, image_wpmat, shaderInfo);
+        LoadConstvalue(context, material, image_wpmat, shaderInfo);
     }
 
     // Whether the layer's base texture is point-sampled (noInterpolation).
@@ -2522,27 +2537,6 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         auto  it       = textures.find(material.textures.front());
         point_source =
             it != textures.end() && it->second.sample.magFilter == TextureFilter::NEAREST;
-    }
-
-    for (const auto& cs : image_wpmat.constantshadervalues) {
-        const auto&               name  = cs.first;
-        const std::vector<float>& value = cs.second;
-        std::string               glname;
-        if (shaderInfo.alias.count(name) != 0) {
-            glname = shaderInfo.alias.at(name);
-        } else {
-            for (const auto& el : shaderInfo.alias) {
-                if (el.second.substr(2) == name) {
-                    glname = el.second;
-                    break;
-                }
-            }
-        }
-        if (glname.empty()) {
-            rstd_error("ShaderValue: {} not found in glsl", name);
-        } else {
-            material.customShader.constValues[glname] = value;
-        }
     }
 
     // mesh
@@ -2741,7 +2735,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                     rstd_warn("load clipped main material failed for '{}'", wpimgobj.name);
                     continue;
                 }
-                LoadConstvalue(clip_scene_mat, clip_wpmat, clip_shaderInfo);
+                LoadConstvalue(context, clip_scene_mat, clip_wpmat, clip_shaderInfo);
                 uint32_t clip_slot = (uint32_t)mesh.MaterialSlots().size();
                 mesh.AddMaterial(std::move(clip_scene_mat));
                 track_image_property_material(mesh.MaterialSlots().back().get());
@@ -2988,7 +2982,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 }
 
                 // load glname from alias and load to constvalue
-                LoadConstvalue(material, wpmat, wpEffShaderInfo, &final_quad_shader_values);
+                LoadConstvalue(
+                    context, material, wpmat, wpEffShaderInfo, &final_quad_shader_values);
                 auto spMesh = std::make_shared<SceneMesh>();
                 {
                     svData.propagatedParallaxDepth = { wpimgobj.parallaxDepth[0],
@@ -3041,7 +3036,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                                                &mask_shaderInfo)) {
                                 return false;
                             }
-                            LoadConstvalue(mask_material, mask_wpmat, mask_shaderInfo);
+                            LoadConstvalue(context, mask_material, mask_wpmat, mask_shaderInfo);
                             spMesh->AddMaterial(std::move(mask_material));
                             track_image_property_material(spMesh->MaterialSlots().back().get());
 
@@ -3065,7 +3060,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                                                &clip_shaderInfo)) {
                                 return false;
                             }
-                            LoadConstvalue(clip_material, clip_wpmat, clip_shaderInfo);
+                            LoadConstvalue(context, clip_material, clip_wpmat, clip_shaderInfo);
                             spMesh->AddMaterial(std::move(clip_material));
                             track_image_property_material(spMesh->MaterialSlots().back().get());
                         }
@@ -3136,7 +3131,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                                      &finalMaterial,
                                      &finalSvData,
                                      &wpFinalShaderInfo)) {
-                        LoadConstvalue(finalMaterial, passthrough_mat, wpFinalShaderInfo);
+                        LoadConstvalue(
+                            context, finalMaterial, passthrough_mat, wpFinalShaderInfo);
                         auto spFinalMesh = std::make_shared<SceneMesh>();
                         spFinalMesh->AddMaterial(std::move(finalMaterial));
                         track_image_property_material(spFinalMesh->MaterialSlots().back().get());
@@ -3405,7 +3401,7 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         rstd_error("load particleobj '{}' material faild", wppartobj.name);
         return;
     }
-    LoadConstvalue(material, particle_obj.material, shaderInfo);
+    LoadConstvalue(context, material, particle_obj.material, shaderInfo);
     auto  spMesh             = std::make_shared<SceneMesh>(true);
     auto& mesh               = *spMesh;
     auto  sequencemultiplier = particle_obj.sequencemultiplier;
@@ -3665,7 +3661,7 @@ void ParseModelObj(ParseContext& context, wpscene::ModelObject& model_obj) {
                 "load model material '{}' failed for '{}'", mdl_mesh.mat_json_file, model_obj.name);
             continue;
         }
-        LoadConstvalue(scene_mat, *wpmat, shader_info);
+        LoadConstvalue(context, scene_mat, *wpmat, shader_info);
 
         const uint32_t material_slot  = static_cast<uint32_t>(mesh->MaterialSlots().size());
         const auto     texcoord_scale = Texture0UvScale(scene_mat);
@@ -4192,7 +4188,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                 rstd_error("text '{}': compose LoadMaterial failed", obj.name);
                 return std::nullopt;
             }
-            LoadConstvalue(mat, pt_mat, si);
+            LoadConstvalue(context, mat, pt_mat, si);
             mat.blenmode = BlendMode::Translucent;
             return LoadedTextMaterial {
                 .source      = std::move(pt_mat),
@@ -4313,7 +4309,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                         effect_ok = false;
                         break;
                     }
-                    LoadConstvalue(mat, wpmat, shader_info, &final_quad_shader_values);
+                    LoadConstvalue(
+                        context, mat, wpmat, shader_info, &final_quad_shader_values);
 
                     auto mesh = std::make_shared<SceneMesh>();
                     mesh->AddMaterial(std::move(mat));
@@ -5156,7 +5153,7 @@ void BuildBloomPostProcess(ParseContext& context, fs::VFS& vfs, const wpscene::S
             rstd_error("bloom: LoadMaterial failed: {}", mat_relpath);
             return false;
         }
-        LoadConstvalue(material, wpmat, wpShaderInfo);
+        LoadConstvalue(context, material, wpmat, wpShaderInfo);
 
         auto pp_mesh = std::make_shared<SceneMesh>();
         pp_mesh->ChangeMeshDataFrom(scene.default_effect_mesh);
