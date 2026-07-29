@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Wed, 29 Jul 2026 19:04:59 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>206</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 55ebda623209d4337105429fd2e4bc72baf47a6b
+Channel: beta
+
+fix(render): handle frequency range shader summaries
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-206-55ebda623209-macOS-x86_64.zip" length="197795758" type="application/octet-stream" sparkle:edSignature="LforiDvHEK52DZtMKVmbBEF6yAr7LD8DSztP/z7CiXayIIn4luo+2BIgputkquoa8U343xVQG02mk0c5Hw8FAg=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 26 Jul 2026 16:07:02 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -130,33 +147,9 @@ fix(ui): square playlist cards, collapsible strip, browse-tab only
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-187-e31defc8b604-macOS-x86_64.zip" length="197698958" type="application/octet-stream" sparkle:edSignature="fbZJ7LmoOnadco0HWyoWjR9BlRgZVCXAxaKEzBtrgWJ/nm1B/dmzrkzWUpCpxX1s/yIEV6jt21zP/qeLiWkyDw=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 23 Jul 2026 17:43:04 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>186</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: d148391e0e1a57b0bb1c5d6548012e098c6f6162
-Channel: beta
-
-feat(app): Wallpaper Engine-style playlists with per-screen rotation
-
-Add playlist data model, manager and per-screen rotator driving the
-bottom-bar strip: ordered/random playback, timer/time-of-day/day-of-week/
-logon timing, transition overlay, and save/open/settings sheets.
-
-Add a video-end IPC event (VideoRenderer -> host) so timer switches can
-defer until the current video finishes its loop, and track per-screen
-current wallpaper in WallpaperViewModel for independent playlists.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-186-d148391e0e1a-macOS-x86_64.zip" length="197691584" type="application/octet-stream" sparkle:edSignature="T2jH7AIxLybgWxq/yKF4lxd18QNWjuuaE1hCrfMi56X+AeqWK7sBDz/tf9vxltHPLRR329QcgXTDRja7LzltCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ys5tJ2M+Ho4iXQMgFUaj7kKQyoKnQ+8YttjIc8mRlFqqrDjtWHlrfdimpCohfmrSZwGs/1elQgqfLT0gVT7/Cg==
-length: 9004
+edSignature: vKpPngociKe024cXfUbezliEiijs+PXOAYILr1OpqsCVaZWRYsbvWTb8RowercBdYq1qXgkOqMm6wJqPWtI8Bg==
+length: 8571
 -->
