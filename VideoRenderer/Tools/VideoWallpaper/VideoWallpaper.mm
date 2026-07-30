@@ -336,6 +336,11 @@ int main(int argc, char *argv[]) {
             MirageEmitEvent(@{ @"event": @"video-error",
                                @"message": message.length > 0 ? message : @"unknown error" });
         };
+        engine.videoTranscodeProgressBlock = ^(double fraction, BOOL done) {
+            MirageEmitEvent(@{ @"event": @"video-transcoding",
+                               @"progress": @(fraction),
+                               @"done": @(done) });
+        };
 
         NSError *openError = nil;
         if (![engine openWallpaper:manifest error:&openError]) {

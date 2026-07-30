@@ -46,6 +46,11 @@ typedef struct {
 // permanently black desktop with no diagnostic anywhere.
 @property (nonatomic, copy, nullable) void (^videoDidFailBlock)(NSString *message);
 
+// Called on the main thread while a wallpaper AVFoundation cannot decode is
+// being rewritten to H.264. `fraction` runs 0...1; `done` marks the last call,
+// after which playback either starts or videoDidFailBlock fires.
+@property (nonatomic, copy, nullable) void (^videoTranscodeProgressBlock)(double fraction, BOOL done);
+
 @property (nonatomic, strong, readonly) AVQueuePlayer *player;
 @property (nonatomic, assign, readonly) BOOL loaded;
 @property (nonatomic, assign, readonly) float volume;

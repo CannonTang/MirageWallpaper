@@ -1,5 +1,6 @@
 #import "VideoRendererEngine.h"
 #import "VRMemoryAssetLoader.h"
+#import "VRTranscoder.h"
 
 #import <QuartzCore/QuartzCore.h>
 
@@ -26,6 +27,13 @@ static void *kVRCurrentItemStatusContext = &kVRCurrentItemStatusContext;
 // loop. The consumer writes a line to stdout for each one; rate-limit so a
 // short clip cannot spin the control channel.
 static const CFTimeInterval kVRMinItemEndInterval = 0.5;
+
+// Neither status probe above catches a track with no decoder on this Mac: the
+// container parses, the looper reports Ready and the play head advances, yet
+// not one frame is ever produced. Undecodable files are normally rewritten
+// before playback starts, so reaching this watchdog means something the probe
+// passed still renders nothing — report it instead of showing black forever.
+static const NSTimeInterval kVRFirstFrameTimeout = 10.0;
 
 static NSError *VRVideoEngineError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:VRVideoEngineErrorDomain
@@ -65,11 +73,16 @@ static float VRClampVolume(float value) {
 @property (nonatomic, assign) BOOL looperObserved;
 @property (nonatomic, assign) BOOL failureReported;
 @property (nonatomic, assign) CFTimeInterval lastItemEndReport;
+@property (nonatomic, strong) AVPlayerItemVideoOutput *frameProbe;
+@property (nonatomic, assign) uint64_t openGeneration;
+@property (nonatomic, strong) dispatch_queue_t transcodeQueue;
 - (void)detachLooperObserver;
 - (void)removeItemEndObservers;
 - (void)installItemEndObserversForLooper:(AVPlayerLooper *)looper;
 - (void)handleItemDidPlayToEnd;
 - (void)reportPlaybackFailure:(NSError *)error fallback:(NSString *)fallback;
+- (BOOL)startPlaybackOfURL:(NSURL *)url error:(NSError **)error;
+- (void)armFirstFrameWatchdogForGeneration:(uint64_t)generation deadline:(NSDate *)deadline;
 @end
 
 @implementation VRVideoRendererEngine
@@ -110,6 +123,10 @@ static float VRClampVolume(float value) {
         _autoplay = config.autoplay;
         _loadFromMemory = config.loadFromMemory;
         _itemEndObservers = [NSMutableArray array];
+        _transcodeQueue = dispatch_queue_create("VideoRenderer.transcode",
+                                                DISPATCH_QUEUE_SERIAL);
+        dispatch_set_target_queue(_transcodeQueue,
+            dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         [self setFillMode:config.fillMode];
 
         // The player outlives every wallpaper this engine opens, so these two
@@ -270,17 +287,90 @@ static float VRClampVolume(float value) {
     [self detachLooperObserver];
     self.looper = nil;
     self.memoryAssetLoader = nil;
+    self.frameProbe = nil;
     self.loaded = NO;
     self.failureReported = NO;
     self.lastItemEndReport = 0;
+    self.openGeneration += 1;
 
+    NSURL *source = manifest.videoURL;
+    NSURL *rewritten = [VRTranscoder playableURLForSourceURL:source];
+
+    // A rewrite from an earlier run wins outright: the source that produced it
+    // is either gone or still undecodable, and probing it again costs a second
+    // metadata load for a question already answered.
+    if (![rewritten isEqual:source] &&
+        [NSFileManager.defaultManager fileExistsAtPath:rewritten.path] &&
+        [VRTranscoder fileIsDecodable:rewritten]) {
+        return [self startPlaybackOfURL:rewritten error:error];
+    }
+
+    if ([VRTranscoder fileIsDecodable:source]) {
+        // Playable directly, so a stale rewrite beside it is only wasting disk.
+        if (![rewritten isEqual:source]) {
+            [NSFileManager.defaultManager removeItemAtURL:rewritten error:nil];
+        }
+        return [self startPlaybackOfURL:source error:error];
+    }
+
+    // Undecodable: rewrite to H.264 off the main thread. -openWallpaper: runs
+    // before [app run], so blocking here would stall the whole launch.
+    fprintf(stderr, "VideoRenderer: %s cannot be decoded; converting to H.264\n",
+            source.lastPathComponent.UTF8String ?: "video");
+    uint64_t generation = self.openGeneration;
+    __weak __typeof__(self) weakSelf = self;
+    // Announce the rewrite before any of it happens: the first real progress
+    // callback can be seconds away on a large file, and the UI needs something
+    // to show for that gap other than a black wallpaper.
+    if (self.videoTranscodeProgressBlock) self.videoTranscodeProgressBlock(0.0, NO);
+    dispatch_async(self.transcodeQueue, ^{
+        NSError *transcodeError = nil;
+        BOOL ok = [VRTranscoder transcodeFileAtURL:source
+                                             toURL:rewritten
+                                          progress:^(double fraction) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong __typeof__(weakSelf) strongSelf = weakSelf;
+                if (strongSelf == nil || strongSelf.openGeneration != generation) return;
+                if (strongSelf.videoTranscodeProgressBlock) {
+                    strongSelf.videoTranscodeProgressBlock(fraction, NO);
+                }
+            });
+        }
+                                             error:&transcodeError];
+        // Freeing the source is only safe once the rewrite is verified and moved
+        // into place, and only when it is a separate file — the substitutable
+        // case already consumed it.
+        if (ok && ![rewritten isEqual:source]) {
+            [NSFileManager.defaultManager removeItemAtURL:source error:nil];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong __typeof__(weakSelf) strongSelf = weakSelf;
+            if (strongSelf == nil || strongSelf.openGeneration != generation) return;
+            if (strongSelf.videoTranscodeProgressBlock) {
+                strongSelf.videoTranscodeProgressBlock(ok ? 1.0 : 0.0, YES);
+            }
+            if (!ok) {
+                [strongSelf reportPlaybackFailure:transcodeError
+                                        fallback:@"video format is not supported"];
+                return;
+            }
+            NSError *playError = nil;
+            if (![strongSelf startPlaybackOfURL:rewritten error:&playError]) {
+                [strongSelf reportPlaybackFailure:playError
+                                        fallback:@"converted video could not be played"];
+            }
+        });
+    });
+    return YES;
+}
+
+- (BOOL)startPlaybackOfURL:(NSURL *)url error:(NSError **)error {
     NSDictionary *assetOptions = @{
         AVURLAssetPreferPreciseDurationAndTimingKey: @NO,
     };
-    NSURL *assetURL = manifest.videoURL;
+    NSURL *assetURL = url;
     if (self.loadFromMemory) {
-        VRMemoryAssetLoader *loader = [VRMemoryAssetLoader loaderWithFileURL:manifest.videoURL
-                                                                       error:error];
+        VRMemoryAssetLoader *loader = [VRMemoryAssetLoader loaderWithFileURL:url error:error];
         if (loader == nil) return NO;
         self.memoryAssetLoader = loader;
         assetURL = loader.assetURL;
@@ -293,7 +383,7 @@ static float VRClampVolume(float value) {
         if (error != NULL) {
             *error = VRVideoEngineError(VRVideoEngineErrorCannotQueueItem,
                                         [NSString stringWithFormat:@"cannot queue video: %@",
-                                                                   manifest.videoURL.path]);
+                                                                   url.path]);
         }
         return NO;
     }
@@ -318,8 +408,65 @@ static float VRClampVolume(float value) {
                      options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
                      context:kVRLooperStatusContext];
 
+    [self armFirstFrameWatchdogForGeneration:self.openGeneration
+                                    deadline:[NSDate dateWithTimeIntervalSinceNow:
+                                                 kVRFirstFrameTimeout]];
+
     if (self.autoplay) [self play];
     return YES;
+}
+
+// Polls rather than sampling once, and attaches the output to the item the looper
+// is actually playing — a copy of the template, which is also why the probe
+// cannot be installed up front. hasNewPixelBufferForItemTime: reads false for a
+// moment after each loop restart too, so only an entire window without a single
+// frame counts as failure.
+- (void)armFirstFrameWatchdogForGeneration:(uint64_t)generation
+                                  deadline:(NSDate *)deadline {
+    __weak __typeof__(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf.openGeneration != generation) return;
+        if (strongSelf.failureReported || !strongSelf.loaded) return;
+
+        AVPlayerItem *current = strongSelf.player.currentItem;
+        if (current == nil) {
+            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:deadline];
+            return;
+        }
+        AVPlayerItemVideoOutput *probe = strongSelf.frameProbe;
+        if (probe == nil || ![current.outputs containsObject:probe]) {
+            probe = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:@{
+                (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+            }];
+            strongSelf.frameProbe = probe;
+            [current addOutput:probe];
+            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:deadline];
+            return;
+        }
+        if ([probe hasNewPixelBufferForItemTime:current.currentTime]) {
+            [current removeOutput:probe];
+            strongSelf.frameProbe = nil;
+            return;
+        }
+        // A paused wallpaper legitimately produces nothing: hold the deadline
+        // open instead of counting occluded or power-saved time against it.
+        if (strongSelf.player.rate == 0) {
+            [strongSelf armFirstFrameWatchdogForGeneration:generation
+                                                 deadline:[NSDate dateWithTimeIntervalSinceNow:
+                                                              kVRFirstFrameTimeout]];
+            return;
+        }
+        if (deadline.timeIntervalSinceNow > 0) {
+            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:deadline];
+            return;
+        }
+        [current removeOutput:probe];
+        strongSelf.frameProbe = nil;
+        [strongSelf reportPlaybackFailure:nil
+                                fallback:@"video produced no frames; format is unsupported"];
+    });
 }
 
 // No NSProcessInfo activity assertion: this is background desktop decoration.
