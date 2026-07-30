@@ -662,3 +662,6 @@
 "移除壁纸" = "Remove Wallpaper";
 "展开播放列表" = "Expand playlist";
 "收起播放列表" = "Collapse playlist";
+
+"视频无法播放" = "Video Cannot Be Played";
+"“%@”无法播放：%@" = "\"%1$@\" cannot be played: %2$@";

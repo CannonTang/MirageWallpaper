@@ -47,6 +47,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Mirage] 渲染子进程异常退出（屏幕 \(screen)）")
             _ = self
         }
+
+        // The renderer keeps a black window up when it cannot decode, so this
+        // alert is the only thing that tells the user why.
+        wallpaperViewModel.renderer.onVideoError = { [weak self] _, wallpaper, message in
+            self?.contentViewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("视频无法播放"),
+                message: L("“%@”无法播放：%@", wallpaper.project.title, message)
+            )
+        }
+
+        wallpaperViewModel.renderer.onVideoTranscodeProgress = { _, wallpaper, progress, done in
+            if done {
+                NSLog("[Mirage] 视频转码结束: \(wallpaper.project.title)")
+            } else {
+                NSLog("[Mirage] 视频转码中 \(Int(progress * 100))%: \(wallpaper.project.title)")
+            }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

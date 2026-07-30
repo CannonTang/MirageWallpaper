@@ -473,6 +473,16 @@ final class RendererController {
 
     var onProcessExit: ((Int, Bool) -> Void)?
 
+    /// A video wallpaper reported that it cannot be played at all. Carries the
+    /// renderer's own message; the wallpaper stays up showing black until it is
+    /// replaced, so this is the only chance to tell the user why.
+    var onVideoError: ((Int, WEWallpaper, String) -> Void)?
+
+    /// Progress of rewriting a video AVFoundation cannot decode into H.264.
+    /// `done` marks the final call, after which playback starts or `onVideoError`
+    /// fires.
+    var onVideoTranscodeProgress: ((Int, WEWallpaper, Double, Bool) -> Void)?
+
     /// Safety backstop for web wallpapers. The user-facing confirmation lives
     /// in the UI layer, but too many call sites assign the current wallpaper
     /// directly (playlist rotation, per-screen apply, launch restore) to rely
@@ -825,6 +835,41 @@ final class RendererController {
                 guard self.running[handle.screenIndex] === handle else { return }
                 let screen = handle.screenIndex
                 DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .rendererVideoDidEnd,
+                        object: nil,
+                        userInfo: ["screen": screen]
+                    )
+                }
+                return
+            }
+
+            // Video renderers are never candidates — only scene wallpapers use the
+            // deferred first-frame handshake — so their events have to be handled
+            // ahead of the candidate gate below or they are silently dropped.
+            if event == "video-transcoding" {
+                guard self.running[handle.screenIndex] === handle else { return }
+                let screen = handle.screenIndex
+                let wallpaper = handle.wallpaper
+                let progress = (message["progress"] as? NSNumber)?.doubleValue ?? 0
+                let done = (message["done"] as? NSNumber)?.boolValue ?? false
+                DispatchQueue.main.async {
+                    self.onVideoTranscodeProgress?(screen, wallpaper, progress, done)
+                }
+                return
+            }
+
+            if event == "video-error" {
+                guard self.running[handle.screenIndex] === handle else { return }
+                let screen = handle.screenIndex
+                let wallpaper = handle.wallpaper
+                let text = (message["message"] as? String) ?? "unknown error"
+                NSLog("[Mirage] 视频壁纸无法播放 (屏幕=\(screen)): \(text)")
+                DispatchQueue.main.async {
+                    self.onVideoError?(screen, wallpaper, text)
+                    // A playlist waits on end-of-video to advance, and a wallpaper
+                    // that cannot decode never reaches an end. Nudge it so one
+                    // unplayable entry cannot park the rotation on a black screen.
                     NotificationCenter.default.post(
                         name: .rendererVideoDidEnd,
                         object: nil,
