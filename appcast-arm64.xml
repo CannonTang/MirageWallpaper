@@ -7,6 +7,31 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Thu, 30 Jul 2026 18:01:42 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>210</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 8cfc493fd0226d57dd4c7ab9da54ad9044d45d09
+Channel: beta
+
+fix(i18n): translate the screen saver strings
+
+Every entry in the saver's en and zh-Hant tables was still the Simplified
+Chinese key verbatim. Because the keys are themselves Chinese, the missing
+translations fell back to the key and read as Simplified in both locales
+instead of failing visibly.
+
+zh-Hant follows Taiwan usage rather than a glyph-level conversion:
+螢幕保護程式, 元件, 載入, 設定, 影片, 壁紙.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-210-8cfc493fd022-macOS-arm64.zip" length="192818969" type="application/octet-stream" sparkle:edSignature="KFNKC0grJ6/fZTW/DwgsdEYj2cqandcGrealy5zU/9n/SNOwGNvu2RronbDGcq8AneexxHrf3rQNrTbBdBTZAQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Wed, 29 Jul 2026 19:05:11 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -135,27 +160,9 @@ test(scene): cover text geometry regressions
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-189-992b1849f1e7-macOS-arm64.zip" length="192674857" type="application/octet-stream" sparkle:edSignature="0dKQV6OH/FGCu6+j4HMKJAphJgNOXB0DcHV73lDl/nsNQ6uqsUnojg0uo1JOrbt2b3FIIjb1OkLHVu0CWOE7AA=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 23 Jul 2026 18:14:15 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>187</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: e31defc8b604672528a7bd90d9c1cb6b5dbb1664
-Channel: beta
-
-fix(ui): square playlist cards, collapsible strip, browse-tab only
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-187-e31defc8b604-macOS-arm64.zip" length="192672371" type="application/octet-stream" sparkle:edSignature="lGOt1JeQrBgVXAJ14GUf7+rzghzgxv5ye4MNOpONzQY5oqcjGt/H5c2qgkIF4C8Faq3ubJtl5X2w5BezbWYfAg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: im+cK+9Brh7/UgG3hvQPV9AnhTJkc7tUuWVWpCpijB38t/nO6vr54sUaWeJXuSTGVIjcQXDChld5ijoFxD7jAA==
-length: 9039
+edSignature: xT4YJs9SrhD20nw9L8Iwkhm/adHajYAcxyNacjUGJqvNWmxyEbeAH+rbs2+dsdEBNbbLxk15HjXJ8/KyVaepAQ==
+length: 9396
 -->
