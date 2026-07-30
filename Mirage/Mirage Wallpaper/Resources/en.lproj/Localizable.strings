@@ -665,3 +665,7 @@
 
 "视频无法播放" = "Video Cannot Be Played";
 "“%@”无法播放：%@" = "\"%1$@\" cannot be played: %2$@";
+
+"正在转换视频格式" = "Converting Video Format";
+"此壁纸使用 macOS 无法直接解码的编码，正在转换为 H.264。转换只需进行一次。" = "This wallpaper uses a codec macOS cannot decode directly. It is being converted to H.264. This happens only once.";
+"显示器 %d" = "Display %d";

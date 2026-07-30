@@ -50,18 +50,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The renderer keeps a black window up when it cannot decode, so this
         // alert is the only thing that tells the user why.
-        wallpaperViewModel.renderer.onVideoError = { [weak self] _, wallpaper, message in
+        wallpaperViewModel.renderer.onVideoError = { [weak self] screen, wallpaper, message in
+            VideoTranscodeProgressModel.shared.finish(screen: screen)
             self?.contentViewModel.screenSaverFeedback = ScreenSaverFeedback(
                 title: L("视频无法播放"),
                 message: L("“%@”无法播放：%@", wallpaper.project.title, message)
             )
         }
 
-        wallpaperViewModel.renderer.onVideoTranscodeProgress = { _, wallpaper, progress, done in
+        wallpaperViewModel.renderer.onVideoTranscodeProgress = { screen, wallpaper, progress, done in
+            let model = VideoTranscodeProgressModel.shared
             if done {
+                model.finish(screen: screen)
                 NSLog("[Mirage] 视频转码结束: \(wallpaper.project.title)")
             } else {
-                NSLog("[Mirage] 视频转码中 \(Int(progress * 100))%: \(wallpaper.project.title)")
+                model.update(screen: screen,
+                             title: wallpaper.project.title,
+                             progress: progress)
             }
         }
     }

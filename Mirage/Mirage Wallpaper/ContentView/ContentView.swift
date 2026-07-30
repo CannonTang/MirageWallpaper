@@ -186,6 +186,12 @@ struct ContentView: View {
             SettingsView()
                 .environmentObject(globalSettingsViewModel)
         }
+        // Applied outside the sheets so the card also floats over an open sheet,
+        // and after them so it is the topmost layer in the window.
+        .overlay(alignment: .bottomTrailing) {
+            VideoTranscodeOverlay()
+                .allowsHitTesting(false)
+        }
         .environment(\.locale, localization.locale)
     }
 }

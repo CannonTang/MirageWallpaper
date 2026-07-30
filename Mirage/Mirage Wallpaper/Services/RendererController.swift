@@ -763,7 +763,13 @@ final class RendererController {
                     let abnormal = status != 0 && !handle.isTerminated
                     SystemAudioSpectrumService.shared.setEnabled(
                         self.hasSpectrumConsumersLocked())
-                    DispatchQueue.main.async { self.onProcessExit?(screenIndex, abnormal) }
+                    DispatchQueue.main.async {
+                        // Only this handle's own exit clears the row. A renderer
+                        // replaced by a newer one is no longer `wasActive`, so a
+                        // late exit cannot wipe the progress of its successor.
+                        VideoTranscodeProgressModel.shared.finish(screen: screenIndex)
+                        self.onProcessExit?(screenIndex, abnormal)
+                    }
                 }
             }
         }
