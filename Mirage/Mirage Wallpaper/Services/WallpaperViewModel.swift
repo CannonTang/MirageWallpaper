@@ -47,14 +47,22 @@ class WallpaperViewModel: ObservableObject {
                         ?? URL(fileURLWithPath: "/dev/null"))
     }
 
-    @Published var nextCurrentWallpaper: WEWallpaper = WallpaperViewModel.invalidWallpaper {
-        willSet {
-            if newValue.kind == .web, !isTrusted(newValue) {
-                AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(which: newValue)
-            } else {
-                self.currentWallpaper = newValue
-            }
+    /// Entry point for "user picked this wallpaper in the UI". Web wallpapers
+    /// run untrusted third-party JS, so an unconfirmed one is routed to the
+    /// trust sheet instead of being applied.
+    ///
+    /// This used to be a `@Published var nextCurrentWallpaper` whose `willSet`
+    /// either presented the sheet or assigned `currentWallpaper`. Mutating one
+    /// published property from inside another's `willSet` is exactly what
+    /// triggers SwiftUI's "Publishing changes from within view updates", and
+    /// the sheet read the new value back before `willSet` had committed it.
+    func requestApply(_ wallpaper: WEWallpaper) {
+        guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
+        if wallpaper.kind == .web, !isTrusted(wallpaper) {
+            AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(which: wallpaper)
+            return
         }
+        currentWallpaper = wallpaper
     }
 
     @Published var currentWallpaper: WEWallpaper {
@@ -109,12 +117,11 @@ class WallpaperViewModel: ObservableObject {
         } else {
             currentWallpaper = WallpaperViewModel.invalidWallpaper
         }
-        // Silent backstop. The nextCurrentWallpaper willSet above remains the
-        // thing that prompts the user; this makes sure an unconfirmed web
-        // wallpaper can never be spawned by one of the many paths that assign
-        // currentWallpaper directly (playlist rotation, per-screen apply,
-        // launch restore). Deliberately a context-free closure, so the renderer
-        // holds nothing of `self`.
+        // Silent backstop. `requestApply` above remains the thing that prompts
+        // the user; this makes sure an unconfirmed web wallpaper can never be
+        // spawned by one of the many paths that assign currentWallpaper directly
+        // (playlist rotation, per-screen apply, launch restore). Deliberately a
+        // context-free closure, so the renderer holds nothing of `self`.
         renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
         NotificationCenter.default.addObserver(
             self, selector: #selector(displayTopologyChanged),
@@ -145,12 +152,39 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 信任（网页壁纸安全确认）
 
+    /// Wallpapers the user confirmed in the trust sheet without ticking "don't
+    /// ask again". Without this, "继续" had nowhere to record the user's consent:
+    /// `RendererController`'s trust backstop consults the persisted list only,
+    /// so a one-shot confirmation was vetoed by that backstop and the wallpaper
+    /// silently never launched. Session-scoped on purpose — consent lasts until
+    /// Mirage quits, whereas the checkbox persists it across launches.
+    ///
+    /// `static` to match `isWallpaperTrusted` below: the closure handed to
+    /// `RendererController` stays context-free and retains nothing.
+    private static let sessionTrustLock = NSLock()
+    nonisolated(unsafe) private static var sessionTrusted: Set<String> = []
+
+    static func trustForSession(_ w: WEWallpaper) {
+        sessionTrustLock.lock()
+        sessionTrusted.insert(w.id)
+        sessionTrustLock.unlock()
+    }
+
+    static func clearSessionTrust() {
+        sessionTrustLock.lock()
+        sessionTrusted.removeAll()
+        sessionTrustLock.unlock()
+    }
+
     /// The trust store is plain UserDefaults state, so it is exposed as a type
     /// method: `RendererController` consults it through an injected closure and
     /// never needs (or retains) a reference to the view model.
     static func isWallpaperTrusted(_ w: WEWallpaper) -> Bool {
         let list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
-        return list.contains(w.id)
+        if list.contains(w.id) { return true }
+        sessionTrustLock.lock()
+        defer { sessionTrustLock.unlock() }
+        return sessionTrusted.contains(w.id)
     }
 
     func isTrusted(_ w: WEWallpaper) -> Bool {

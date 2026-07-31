@@ -8,20 +8,22 @@ import SwiftUI
 
 struct UnsafeWallpaper: View {
     @Environment(\.dismiss) var dismiss
-    
-    var wallpaper: WEWallpaper
-    
+
+    let request: ContentViewModel.PendingTrustRequest
+
+    private var wallpaper: WEWallpaper { request.wallpaper }
+
     @State var seconds: Int = 5
     @State var isIgnored = false
-    
+
     var typeStringDict: [String : String] =
     [
         "web": "网页",
         "application": "应用程序"
     ]
 
-    init(wallpaper: WEWallpaper) {
-        self.wallpaper = wallpaper
+    init(request: ContentViewModel.PendingTrustRequest) {
+        self.request = request
     }
 
     var body: some View {
@@ -53,18 +55,28 @@ struct UnsafeWallpaper: View {
             Divider()
             HStack {
                 Button {
-                    AppDelegate.shared.wallpaperViewModel.currentWallpaper =
-                    AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper
-                    
+                    let vm = AppDelegate.shared.wallpaperViewModel
+
+                    // Trust MUST be recorded before the wallpaper is applied.
+                    // Applying assigns `currentWallpaper`, whose `didSet` walks
+                    // straight through to `RendererController.render`, which
+                    // vetoes any web wallpaper that is not trusted *at that
+                    // moment*. Recording consent afterwards meant the launch the
+                    // user just authorized was silently blocked by Mirage's own
+                    // backstop — the wallpaper appeared to do nothing on click.
                     if isIgnored {
-                        var trustedWallpapers =
-                        UserDefaults.standard.array(forKey: "TrustedWallpapers") as? [String] ?? [String]()
-                        
-                        trustedWallpapers.append(AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper.wallpaperDirectory.path(percentEncoded: false))
-                        
-                        UserDefaults.standard.set(trustedWallpapers, forKey: "TrustedWallpapers")
+                        vm.trust(wallpaper)
+                    } else {
+                        WallpaperViewModel.trustForSession(wallpaper)
                     }
-                    
+
+                    switch request.action {
+                    case .applyToCurrent:
+                        vm.currentWallpaper = wallpaper
+                    case .applyOnScreen(let screen):
+                        vm.applyOnScreen(wallpaper, screen: screen)
+                    }
+
                     dismiss()
                 } label: {
                     Text("继续")

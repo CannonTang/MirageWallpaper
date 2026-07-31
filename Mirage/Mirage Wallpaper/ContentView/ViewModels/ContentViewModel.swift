@@ -51,8 +51,24 @@ class ContentViewModel: ObservableObject, DropDelegate {
         didSet { scheduleRecomputePage() }
     }
     
-    @Published var isUnsafeWallpaperWarningPresented = false
-    
+    /// The wallpaper the trust sheet is currently asking about, together with
+    /// what to do once the user confirms. Carrying both here is what keeps the
+    /// sheet honest: it used to read `nextCurrentWallpaper` at render time,
+    /// which is written *after* the `willSet` that presents the sheet, so the
+    /// dialog could name the previously selected wallpaper while authorizing
+    /// this one. Per-screen requests also need the screen index preserved.
+    struct PendingTrustRequest: Identifiable {
+        enum Action {
+            case applyToCurrent
+            case applyOnScreen(Int)
+        }
+        let id = UUID()
+        let wallpaper: WEWallpaper
+        let action: Action
+    }
+
+    @Published var pendingTrustRequest: PendingTrustRequest?
+
     @Published var hoveredWallpaper: WEWallpaper?
     
     @Published var isUnsubscribeConfirming = false
@@ -369,8 +385,9 @@ class ContentViewModel: ObservableObject, DropDelegate {
         self.importAlertPresented = true
     }
     
-    func warningUnsafeWallpaperModal(which wallpaper: WEWallpaper) {
-        self.isUnsafeWallpaperWarningPresented = true
+    func warningUnsafeWallpaperModal(which wallpaper: WEWallpaper,
+                                     action: PendingTrustRequest.Action = .applyToCurrent) {
+        self.pendingTrustRequest = PendingTrustRequest(wallpaper: wallpaper, action: action)
     }
     
     func dropUpdated(info: DropInfo) -> DropProposal? {

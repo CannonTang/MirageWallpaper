@@ -208,16 +208,25 @@ final class PlaylistRotator {
         let library = WallpaperLibrary.shared.loadAll()
         let items = playlist.items
         guard !items.isEmpty else { return nil }
+        // Unconfirmed web wallpapers are skipped rather than selected: rotation
+        // is automatic, so it must not raise a modal, and the renderer's trust
+        // backstop would refuse to launch one anyway — parking the rotation on
+        // whatever was showing until the next tick.
+        let playable = library.filter { $0.kind != .web || vm.isTrusted($0) }
         let ids = items.map(\.wallpaperID)
-        let byID = Dictionary(uniqueKeysWithValues: library.map { ($0.id, $0) })
+        let byID = Dictionary(uniqueKeysWithValues: playable.map { ($0.id, $0) })
         let resolved = ids.compactMap { byID[$0] }
         guard !resolved.isEmpty else { return nil }
         let currentID = vm.currentByScreen[screen]?.id ?? lastPlayedID
         switch playlist.settings.order {
         case .sorted:
             if let currentID, let idx = ids.firstIndex(of: currentID) {
-                let target = ids[(idx + 1) % ids.count]
-                return byID[target] ?? resolved.first
+                // Walk forward to the next *playable* entry, so a skipped
+                // wallpaper does not fall back to the head of the list.
+                for offset in 1...ids.count {
+                    if let next = byID[ids[(idx + offset) % ids.count]] { return next }
+                }
+                return resolved.first
             }
             return resolved.first
         case .random:

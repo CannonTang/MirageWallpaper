@@ -356,7 +356,7 @@ class WorkshopViewModel: ObservableObject {
             selectedItem = item
             requestPresetDependency(for: wallpaper)
         } else if let wallpaper = installed, wallpaper.isValid {
-            AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
+            AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
             showCustomization = true
             selectedItem = nil
         } else {
@@ -466,7 +466,7 @@ class WorkshopViewModel: ObservableObject {
         if wallpaper.needsPresetDependency {
             requestPresetDependency(for: wallpaper)
         } else if wallpaper.isValid {
-            AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
+            AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
             showCustomization = true
             selectedItem = nil
         }

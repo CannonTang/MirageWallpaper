@@ -68,7 +68,10 @@ struct PlaylistStrip: View {
         selectedItemID = item.wallpaperID
         guard let wallpaper = libraryByID[item.wallpaperID], wallpaper.isValid else { return }
         if screen == 0 {
-            wallpaperViewModel.currentWallpaper = wallpaper
+            // Via requestApply so an unconfirmed web wallpaper gets the trust
+            // sheet. Assigning currentWallpaper directly just hit the renderer's
+            // trust backstop and did nothing.
+            wallpaperViewModel.requestApply(wallpaper)
         } else {
             wallpaperViewModel.applyOnScreen(wallpaper, screen: screen)
         }
