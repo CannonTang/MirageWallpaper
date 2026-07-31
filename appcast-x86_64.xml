@@ -7,6 +7,33 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Fri, 31 Jul 2026 19:20:02 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>216</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 0b0676d103bfd507ed8e4420c4ab4deae54e4fc4
+Channel: beta
+
+feat(settings): add the override-wallpaper toggle to the appearance section
+
+Exposes the desktop override as "覆盖壁纸" under 通用 › 外观, which until now
+had no user-facing control at all — its predecessor was gated on
+adjustMenuBarTint, a setting no view bound. Off is the default and keeps the
+previous behaviour of overriding only while Mirage runs, for menu bar and Dock
+tint consistency; on keeps the override after quitting, the way Wallpaper
+Engine's option of the same name does.
+
+Both strings are translated in all three tables rather than left equal to
+their Simplified Chinese keys, which would have read as Simplified in the
+English and Traditional locales without failing visibly (see 8cfc493).
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-216-0b0676d103bf-macOS-x86_64.zip" length="197894797" type="application/octet-stream" sparkle:edSignature="ldaJlELbobzy4kSHLyoMd3fhLc6NTEfNZqwxwbakmzEDmUOlpNTn0SRFUYdfAwtpcXhdhFQ3MBx+p8aoVjhHAw=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Fri, 31 Jul 2026 15:27:45 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -129,39 +156,9 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-203-0377b0c706a0-macOS-x86_64.zip" length="197801303" type="application/octet-stream" sparkle:edSignature="B2upipQhVemSvlRQnBW/1js0eBnolIu0EFSIO468CZ6BWy3zZiS182XzmDKqw5lNpPKd4RVxaKuJGocifl6IBQ=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 26 Jul 2026 07:20:29 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>190</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 761a9103099994d95598b3d753b1232c035b385b
-Channel: beta
-
-fix(scene): apply container visibility gates to the render graph
-
-Container layers hid themselves through SceneNode::SetVisible alone, but
-graph build only reads the elision set, so a user property gating a whole
-group (weekday component, language variant) never reached the renderer.
-The load-time binding pass then re-lit each child on its own font-variant
-binding, leaving both language groups drawn until the user toggled the
-property once. Mark user-gated containers elidable, and let SetNodeVisible
-queue same-value calls whenever the elision set disagrees with the node
-flag so a parse-time hide can still be picked up.
-
-Also route text layers through EnsureScriptScene so engine.userProperties
-and the bone resolvers are seeded when a text layer is the first object to
-need a JS runtime, resolve effect visibility bindings for text objects,
-and write a visible-bound script's return value back to layer visibility.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-190-761a91030999-macOS-x86_64.zip" length="197702578" type="application/octet-stream" sparkle:edSignature="ac76x4tUmFB6wwkAp5QrLii+6zuKXoFWhLHjtXNMkXqjmqKLvnnzUpMwgWJ2mUH/e6gEFDieL4EYfHMS8sOiDw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: zvvZMb0y765CLtRCHEzgWB0zp0bqBKwAZpVMwqZAoJKRlEFsd8YU36PoTzOPxnSusgpZC6Ip2+ad8Mg/v7JnBA==
-length: 9259
+edSignature: ezHrPSvh46nKS+UPyKdvNGcUbeT/bcYNKaSftvRM8hfTToxAQYsLncahOAqCeeKN4tDkDal4Yyx4UxmFalSsCg==
+length: 9057
 -->
