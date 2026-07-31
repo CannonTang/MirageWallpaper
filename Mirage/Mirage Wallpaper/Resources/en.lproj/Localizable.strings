@@ -510,6 +510,8 @@
 "若继续登录，密码仅通过本机的 Valve SteamCMD 安全终端提交，不会写入命令行或 Mirage 日志。SteamCMD 会在本机保存会话以便下载；您可随时在创意工坊页面“退出登录”清除它。" = "若继续登录，密码仅通过本机的 Valve SteamCMD 安全终端提交，不会写入命令行或 Mirage 日志。SteamCMD 会在本机保存会话以便下载；您可随时在创意工坊页面“退出登录”清除它。";
 "表情包" = "表情包";
 "覆盖到所有显示器" = "覆盖到所有显示器";
+"覆盖壁纸" = "Override wallpaper";
+"Mirage 会用当前壁纸的画面替换系统桌面图片，让菜单栏与程序坞的取色与壁纸一致。开启后将持续覆盖，退出 Mirage 后依然保留；关闭时仅在 Mirage 运行期间覆盖，退出会自动还原你原本的桌面图片。" = "Mirage replaces the system desktop picture with a still of the current wallpaper, so the menu bar and Dock tint match what is on screen. When on, the override persists and is kept after you quit Mirage; when off, it applies only while Mirage is running and your original desktop picture is restored on quit.";
 "视图" = "视图";
 "视频" = "视频";
 "视频、网页和场景壁纸由 Mirage 自己的屏保宿主加载，不要求 Mirage 主程序保持运行。网页屏保不会获得网络导航权限，音频响应在屏保环境中保持静音。" = "视频、网页和场景壁纸由 Mirage 自己的屏保宿主加载，不要求 Mirage 主程序保持运行。网页屏保不会获得网络导航权限，音频响应在屏保环境中保持静音。";
