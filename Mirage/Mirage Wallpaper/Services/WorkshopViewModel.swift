@@ -463,10 +463,14 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Auto Apply
 
     func openInstalledWallpaper(_ wallpaper: WEWallpaper) {
-        if wallpaper.needsPresetDependency {
-            requestPresetDependency(for: wallpaper)
-        } else if wallpaper.isValid {
-            AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
+        // Re-resolve first: a stale `.missingDependency` would otherwise send
+        // the user to the "download the base wallpaper" prompt for a base that
+        // is already installed, leaving the preset permanently unclickable.
+        let fresh = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
+        if fresh.needsPresetDependency {
+            requestPresetDependency(for: fresh)
+        } else if fresh.isValid {
+            AppDelegate.shared.wallpaperViewModel.requestApply(fresh)
             showCustomization = true
             selectedItem = nil
         }
