@@ -448,6 +448,23 @@ int main(int argc, char *argv[]) {
                     } else if ([name isEqualToString:@"audioSpectrum"]) {
                         NSArray *data = [cmd[@"data"] isKindOfClass:[NSArray class]] ? cmd[@"data"] : nil;
                         if (data.count == 128) [eng pushAudioSpectrum:data];
+                    } else if ([name isEqualToString:@"snapshot"]) {
+                        // Mirage.app wants a still of the live page for the
+                        // system desktop picture. Always answer, success or
+                        // not, or the requester waits out its whole timeout.
+                        NSString *path = [cmd[@"path"] isKindOfClass:[NSString class]]
+                            ? cmd[@"path"] : nil;
+                        NSString *token = [cmd[@"token"] isKindOfClass:[NSString class]]
+                            ? cmd[@"token"] : @"";
+                        if (path == nil) {
+                            MirageEmitEvent(@{ @"event": @"snapshot-done",
+                                               @"token": token, @"ok": @NO });
+                        } else {
+                            [eng takeSnapshotToPath:path completion:^(BOOL ok) {
+                                MirageEmitEvent(@{ @"event": @"snapshot-done",
+                                                   @"token": token, @"ok": @(ok) });
+                            }];
+                        }
                     }
                 }
                 onEOF:^{

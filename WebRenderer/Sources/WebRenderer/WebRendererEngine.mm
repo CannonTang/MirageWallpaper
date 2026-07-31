@@ -4,6 +4,28 @@
 #import "WRURLSchemeHandler.h"
 
 #import <WebKit/WebKit.h>
+#import <ImageIO/ImageIO.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+
+// HEIC keeps a 5K still in the low hundreds of KB. Macs without an HEVC encoder
+// return a null destination, so fall back to JPEG rather than writing nothing.
+static BOOL WRWriteImage(CGImageRef image, NSString *path, CFStringRef type) {
+    NSURL *url = [NSURL fileURLWithPath:path];
+    CGImageDestinationRef dest =
+        CGImageDestinationCreateWithURL((__bridge CFURLRef)url, type, 1, NULL);
+    if (dest == NULL) return NO;
+    NSDictionary *options = @{ (id)kCGImageDestinationLossyCompressionQuality: @0.9 };
+    CGImageDestinationAddImage(dest, image, (__bridge CFDictionaryRef)options);
+    const BOOL ok = CGImageDestinationFinalize(dest);
+    CFRelease(dest);
+    return ok;
+}
+
+static BOOL WREncodeSnapshot(CGImageRef image, NSString *path) {
+    if (image == NULL) return NO;
+    if (WRWriteImage(image, path, (__bridge CFStringRef)UTTypeHEIC.identifier)) return YES;
+    return WRWriteImage(image, path, (__bridge CFStringRef)UTTypeJPEG.identifier);
+}
 
 // WE JS API shim, installed at document-start (≈ CEF OnContextCreated).
 // Engine entrypoints (called via evaluateJavaScript):
@@ -899,6 +921,40 @@ static NSString *WRStringValue(id value) {
                           inFrame:nil
                    inContentWorld:WKContentWorld.pageWorld
                 completionHandler:nil];
+}
+
+#pragma mark - Snapshot
+
+- (void)takeSnapshotToPath:(NSString *)path
+                completion:(void (^)(BOOL ok))completion {
+    if (path.length == 0) {
+        if (completion) completion(NO);
+        return;
+    }
+    // A page that has not finished loading would snapshot as blank, which is a
+    // worse desktop picture than leaving the previous one alone.
+    if (!_didFinishLoad) {
+        if (completion) completion(NO);
+        return;
+    }
+    WKSnapshotConfiguration *config = [[WKSnapshotConfiguration alloc] init];
+    // nil rect means the whole visible bounds; afterScreenUpdates keeps the
+    // still in step with what the compositor last showed.
+    config.afterScreenUpdates = YES;
+    [_webView takeSnapshotWithConfiguration:config
+                         completionHandler:^(NSImage *image, NSError *error) {
+        if (image == nil || error != nil) {
+            if (error != nil) {
+                fprintf(stderr, "WebRenderer: snapshot failed: %s\n",
+                        error.localizedDescription.UTF8String ?: "unknown");
+            }
+            if (completion) completion(NO);
+            return;
+        }
+        CGImageRef cgImage = [image CGImageForProposedRect:NULL context:nil hints:nil];
+        const BOOL ok = WREncodeSnapshot(cgImage, path);
+        if (completion) completion(ok);
+    }];
 }
 
 #pragma mark - WKNavigationDelegate

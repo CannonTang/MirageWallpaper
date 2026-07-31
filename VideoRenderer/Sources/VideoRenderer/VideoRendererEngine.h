@@ -38,6 +38,23 @@ typedef struct {
 - (void)setMuted:(BOOL)muted;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
 
+// Writes a still of the frame currently on screen to `path` (HEIC, falling back
+// to JPEG where no HEVC encoder exists). Mirage.app installs it as the system
+// desktop picture so the menu bar and Dock tint match the wallpaper.
+//
+// AVPlayerLayer is a protected compositing path and cannot be read back, so the
+// frame comes from an AVPlayerItemVideoOutput attached to the current item —
+// which also means it reflects whatever transcode or in-memory loading the
+// played asset went through, unlike re-decoding the source file.
+//
+// Asynchronous because attaching that output only makes the decoder start
+// vending pixel buffers a frame or two later; the first attempt after attach
+// legitimately has nothing yet, so this retries briefly before giving up.
+// `completion` runs on the main thread exactly once; NO means no frame was
+// available (still starting up, or paused before the first frame).
+- (void)takeSnapshotToPath:(NSString *)path
+                completion:(void (^)(BOOL ok))completion;
+
 @property (nonatomic, copy, nullable) void (^videoDidEndBlock)(void);
 
 // Called on the main thread the first time playback of the current wallpaper

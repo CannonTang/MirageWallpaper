@@ -1,5 +1,6 @@
 #include "../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.h"
 #include "ControlChannel.h"
+#include "SceneSnapshot.h"
 
 #define VK_USE_PLATFORM_METAL_EXT
 #include <vulkan/vulkan.h>
@@ -177,6 +178,23 @@ void EmitAudioDemand(bool needed) {
     std::lock_guard lock(LifecycleOutputMutex());
     std::cout << "{\"event\":\"audio-demand\",\"needed\":"
               << (needed ? "true" : "false") << "}\n" << std::flush;
+}
+
+/// Answers a {"cmd":"snapshot"} request. The token is echoed verbatim so the app
+/// can match the reply; it is a UUID the app generated, but quote-escape it
+/// anyway rather than trusting the shape of an inbound string.
+void EmitSnapshotDone(const std::string& token, bool ok) {
+    std::string escaped;
+    escaped.reserve(token.size());
+    for (const char c : token) {
+        if (c == '"' || c == '\\') escaped.push_back('\\');
+        // Control characters would produce invalid JSON; a UUID has none.
+        if (static_cast<unsigned char>(c) < 0x20) continue;
+        escaped.push_back(c);
+    }
+    std::lock_guard lock(LifecycleOutputMutex());
+    std::cout << "{\"event\":\"snapshot-done\",\"token\":\"" << escaped
+              << "\",\"ok\":" << (ok ? "true" : "false") << "}\n" << std::flush;
 }
 
 void PrintUsage(const char* argv0) {
@@ -577,7 +595,11 @@ int main(int argc, char** argv) {
         control.emplace(
             wallpaper,
             [desktop]() { SceneRendererMacDesktopStop(desktop); },
-            [desktop]() { SceneRendererMacDesktopActivate(desktop); });
+            [desktop]() { SceneRendererMacDesktopActivate(desktop); },
+            [](const std::string& path, const std::string& token) {
+                const bool ok = ! path.empty() && mirage::WriteSceneSnapshot(path);
+                EmitSnapshotDone(token, ok);
+            });
         control->start();
     }
 

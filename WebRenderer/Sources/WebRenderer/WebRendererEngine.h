@@ -77,6 +77,13 @@ typedef struct {
 - (void)stopAudioSpectrum;
 - (void)pushAudioSpectrum:(NSArray<NSNumber *> *)spectrum;
 
+// Writes a still of what the page currently shows to `path` (HEIC, falling back
+// to JPEG where no HEVC encoder exists). Mirage.app installs it as the system
+// desktop picture so the menu bar and Dock tint match the wallpaper.
+// `completion` runs on the main thread exactly once.
+- (void)takeSnapshotToPath:(NSString *)path
+                completion:(void (^)(BOOL ok))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

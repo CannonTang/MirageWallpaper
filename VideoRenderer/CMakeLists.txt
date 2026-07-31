@@ -30,6 +30,10 @@ find_library(UNIFORMTYPEIDENTIFIERS_FRAMEWORK UniformTypeIdentifiers REQUIRED)
 find_library(COREMEDIA_FRAMEWORK    CoreMedia    REQUIRED)
 find_library(COREVIDEO_FRAMEWORK    CoreVideo    REQUIRED)
 find_library(AUDIOTOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
+# Desktop-picture stills: ImageIO encodes HEIC/JPEG, CoreImage converts the
+# decoded pixel buffer that AVPlayerItemVideoOutput hands back.
+find_library(IMAGEIO_FRAMEWORK      ImageIO      REQUIRED)
+find_library(COREIMAGE_FRAMEWORK    CoreImage    REQUIRED)
 
 # libav* decodes what AVFoundation cannot (VP9, AV1, VP8, Matroska), so an
 # undecodable wallpaper can be rewritten to H.264 instead of showing black.
@@ -50,6 +54,7 @@ set(VR_FRAMEWORKS
 list(APPEND VR_FRAMEWORKS ${UNIFORMTYPEIDENTIFIERS_FRAMEWORK})
 list(APPEND VR_FRAMEWORKS ${COREMEDIA_FRAMEWORK} ${COREVIDEO_FRAMEWORK}
                           ${AUDIOTOOLBOX_FRAMEWORK})
+list(APPEND VR_FRAMEWORKS ${IMAGEIO_FRAMEWORK} ${COREIMAGE_FRAMEWORK})
 
 set(VR_FFMPEG_LIBS
     PkgConfig::VR_AVFORMAT

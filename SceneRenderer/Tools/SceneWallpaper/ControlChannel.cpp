@@ -149,6 +149,22 @@ void SceneControlChannel::dispatchLine(const char* line) {
             ++index;
         }
         m_wallpaper.setAudioSpectrum(std::move(left), std::move(right));
+    } else if (cmd == "snapshot") {
+        // Mirage.app wants a still of the live frame for the system desktop
+        // picture. The outcome must always be reported, or the requester waits
+        // out its whole timeout.
+        if (! m_on_snapshot) return;
+        auto path = msg.get("path");
+        auto token = msg.get("token");
+        const std::string token_text =
+            (token.is_some() && (*token)->is_string())
+                ? rstd::cppstd::to_string(*(*token)->as_str())
+                : std::string {};
+        const std::string path_text =
+            (path.is_some() && (*path)->is_string())
+                ? rstd::cppstd::to_string(*(*path)->as_str())
+                : std::string {};
+        m_on_snapshot(path_text, token_text);
     } else if (cmd == "activate") {
         if (m_on_activate) m_on_activate();
     } else if (cmd == "quit") {

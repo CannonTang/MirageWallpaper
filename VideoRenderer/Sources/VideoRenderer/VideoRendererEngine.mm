@@ -3,6 +3,10 @@
 #import "VRTranscoder.h"
 
 #import <QuartzCore/QuartzCore.h>
+#import <CoreImage/CoreImage.h>
+#import <CoreVideo/CoreVideo.h>
+#import <ImageIO/ImageIO.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 NSString *const VRVideoEngineErrorDomain = @"VideoRenderer.Engine";
 
@@ -35,6 +39,12 @@ static const CFTimeInterval kVRMinItemEndInterval = 0.5;
 // passed still renders nothing — report it instead of showing black forever.
 static const NSTimeInterval kVRFirstFrameTimeout = 10.0;
 
+// A snapshot attempt fails benignly until the decoder starts vending into the
+// output that the first attempt attaches. Bounded well inside the app-side
+// 8 s snapshot timeout.
+static const NSInteger kVRSnapshotAttempts = 6;
+static const NSTimeInterval kVRSnapshotRetryDelay = 0.2;
+
 static NSError *VRVideoEngineError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:VRVideoEngineErrorDomain
                                code:code
@@ -57,6 +67,26 @@ static float VRClampVolume(float value) {
     return value;
 }
 
+// HEIC keeps a 5K still in the low hundreds of KB. Macs without an HEVC encoder
+// return a null destination, so fall back to JPEG rather than writing nothing.
+static BOOL VRWriteImage(CGImageRef image, NSString *path, CFStringRef type) {
+    NSURL *url = [NSURL fileURLWithPath:path];
+    CGImageDestinationRef dest =
+        CGImageDestinationCreateWithURL((__bridge CFURLRef)url, type, 1, NULL);
+    if (dest == NULL) return NO;
+    NSDictionary *options = @{ (id)kCGImageDestinationLossyCompressionQuality: @0.9 };
+    CGImageDestinationAddImage(dest, image, (__bridge CFDictionaryRef)options);
+    const BOOL ok = CGImageDestinationFinalize(dest);
+    CFRelease(dest);
+    return ok;
+}
+
+static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
+    if (image == NULL) return NO;
+    if (VRWriteImage(image, path, (__bridge CFStringRef)UTTypeHEIC.identifier)) return YES;
+    return VRWriteImage(image, path, (__bridge CFStringRef)UTTypeJPEG.identifier);
+}
+
 @interface VRVideoRendererEngine ()
 @property (nonatomic, strong) AVQueuePlayer *player;
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
@@ -74,6 +104,10 @@ static float VRClampVolume(float value) {
 @property (nonatomic, assign) BOOL failureReported;
 @property (nonatomic, assign) CFTimeInterval lastItemEndReport;
 @property (nonatomic, strong) AVPlayerItemVideoOutput *frameProbe;
+/// Kept alive across snapshots: attaching an output makes the decoder start
+/// vending pixel buffers, which does not take effect until a frame or two later.
+/// A per-call output would therefore fail the first time every time.
+@property (nonatomic, strong) AVPlayerItemVideoOutput *snapshotOutput;
 @property (nonatomic, assign) uint64_t openGeneration;
 @property (nonatomic, strong) dispatch_queue_t transcodeQueue;
 - (void)detachLooperObserver;
@@ -492,6 +526,75 @@ static float VRClampVolume(float value) {
 - (void)setMuted:(BOOL)muted {
     _muted = muted;
     self.player.muted = muted;
+}
+
+- (void)takeSnapshotToPath:(NSString *)path
+                completion:(void (^)(BOOL ok))completion {
+    if (path.length == 0) {
+        if (completion) completion(NO);
+        return;
+    }
+    [self attemptSnapshotToPath:path attemptsLeft:kVRSnapshotAttempts
+                     completion:completion];
+}
+
+- (void)attemptSnapshotToPath:(NSString *)path
+                 attemptsLeft:(NSInteger)attemptsLeft
+                   completion:(void (^)(BOOL ok))completion {
+    if ([self copySnapshotToPath:path]) {
+        if (completion) completion(YES);
+        return;
+    }
+    if (attemptsLeft <= 1) {
+        if (completion) completion(NO);
+        return;
+    }
+    __weak __typeof__(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(kVRSnapshotRetryDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            if (completion) completion(NO);
+            return;
+        }
+        [strongSelf attemptSnapshotToPath:path
+                            attemptsLeft:attemptsLeft - 1
+                              completion:completion];
+    });
+}
+
+/// One attempt. Attaching the output is itself an attempt that cannot succeed:
+/// the decoder needs a frame or two before it vends into a new output.
+- (BOOL)copySnapshotToPath:(NSString *)path {
+    AVPlayerItem *item = self.player.currentItem;
+    if (item == nil || item.status != AVPlayerItemStatusReadyToPlay) return NO;
+
+    AVPlayerItemVideoOutput *output = self.snapshotOutput;
+    if (output == nil || ![item.outputs containsObject:output]) {
+        output = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:@{
+            (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        }];
+        self.snapshotOutput = output;
+        [item addOutput:output];
+        return NO;
+    }
+
+    const CMTime now = item.currentTime;
+    if (!CMTIME_IS_VALID(now)) return NO;
+    CVPixelBufferRef buffer =
+        [output copyPixelBufferForItemTime:now itemTimeForDisplay:NULL];
+    if (buffer == NULL) return NO;
+
+    CIImage *ciImage = [CIImage imageWithCVPixelBuffer:buffer];
+    CIContext *context = [CIContext contextWithOptions:nil];
+    CGImageRef cgImage = [context createCGImage:ciImage fromRect:ciImage.extent];
+    CVPixelBufferRelease(buffer);
+    if (cgImage == NULL) return NO;
+
+    const BOOL ok = VREncodeSnapshot(cgImage, path);
+    CGImageRelease(cgImage);
+    return ok;
 }
 
 - (void)setFillMode:(VRVideoFillMode)fillMode {

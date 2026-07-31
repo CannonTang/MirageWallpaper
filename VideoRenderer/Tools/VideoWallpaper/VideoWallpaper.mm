@@ -408,6 +408,23 @@ int main(int argc, char *argv[]) {
                             VRVideoFillMode mode;
                             if (ParseFillMode([value UTF8String], mode)) [eng setFillMode:mode];
                         }
+                    } else if ([name isEqualToString:@"snapshot"]) {
+                        // Mirage.app wants a still of the live frame for the
+                        // system desktop picture. Always answer, success or
+                        // not, or the requester waits out its whole timeout.
+                        NSString *path = [cmd[@"path"] isKindOfClass:[NSString class]]
+                            ? cmd[@"path"] : nil;
+                        NSString *token = [cmd[@"token"] isKindOfClass:[NSString class]]
+                            ? cmd[@"token"] : @"";
+                        if (path == nil) {
+                            MirageEmitEvent(@{ @"event": @"snapshot-done",
+                                               @"token": token, @"ok": @NO });
+                        } else {
+                            [eng takeSnapshotToPath:path completion:^(BOOL ok) {
+                                MirageEmitEvent(@{ @"event": @"snapshot-done",
+                                                   @"token": token, @"ok": @(ok) });
+                            }];
+                        }
                     }
                     // setProperty: video wallpapers have no live shader props; ignored.
                 }
