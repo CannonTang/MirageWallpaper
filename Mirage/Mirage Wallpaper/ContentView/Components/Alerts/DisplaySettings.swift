@@ -103,7 +103,7 @@ struct DisplaySettings: SubviewOfContentView {
         let w = vm.currentWallpaper
         guard w.isValid, w.kind != .unsupported else { return }
         if w.kind == .web, !vm.isTrusted(w) {
-            viewModel.warningUnsafeWallpaperModal(which: w)
+            viewModel.warningUnsafeWallpaperModal(which: w, action: .applyOnScreen(screenIndex))
             return
         }
         vm.applyOnScreen(w, screen: screenIndex)
