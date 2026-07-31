@@ -491,10 +491,49 @@ final class RendererController {
     /// model so the controller keeps no reference back to its owner.
     var isWallpaperTrusted: ((WEWallpaper) -> Bool)?
 
+    /// In-flight `snapshot` requests, keyed by the token echoed back in the
+    /// renderer's `snapshot-done` event.
+    private var snapshotPending: [String: (Bool) -> Void] = [:]
+    /// A renderer that never answers must not leak its completion handler, and
+    /// the desktop-override caller must not wait forever for its still.
+    private static let snapshotTimeout: TimeInterval = 8
+
     init() {
         SystemAudioSpectrumService.shared.onSpectrum = { [weak self] spectrum in
             self?.setAudioSpectrum(spectrum)
         }
+    }
+
+    /// Asks the renderer on `screenIndex` to write a still of its own current
+    /// frame to `path`. The renderer owns the pixels — no screen-recording
+    /// permission is involved. `completion` runs on the main queue exactly once.
+    func snapshot(on screenIndex: Int, path: String,
+                  completion: @escaping (Bool) -> Void) {
+        let token = UUID().uuidString
+        queue.async { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            guard let handle = self.running[screenIndex] else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            self.snapshotPending[token] = completion
+            handle.send(["cmd": "snapshot", "path": path, "token": token])
+            self.queue.asyncAfter(deadline: .now() + Self.snapshotTimeout) { [weak self] in
+                guard let self, let pending = self.snapshotPending.removeValue(forKey: token)
+                else { return }
+                NSLog("[Mirage] 壁纸截图超时 (屏幕=\(screenIndex))")
+                DispatchQueue.main.async { pending(false) }
+            }
+        }
+    }
+
+    /// Must be called on `queue`.
+    private func completeSnapshot(token: String, ok: Bool) {
+        guard let pending = snapshotPending.removeValue(forKey: token) else { return }
+        DispatchQueue.main.async { pending(ok) }
     }
 
     // MARK: Binary and resource resolution
@@ -834,6 +873,19 @@ final class RendererController {
                       self.candidates[handle.screenIndex] === handle else { return }
                 handle.spectrumDemanded = (message["needed"] as? NSNumber)?.boolValue ?? false
                 SystemAudioSpectrumService.shared.setEnabled(self.hasSpectrumConsumersLocked())
+                return
+            }
+
+            // Answers a snapshot request. Handled ahead of the candidate gate
+            // below for the same reason the video events are: video and web
+            // renderers are never candidates, so their replies would otherwise
+            // be dropped. The token is matched rather than the handle, so a
+            // reply that arrives after the wallpaper was replaced simply finds
+            // no pending entry.
+            if event == "snapshot-done" {
+                guard let token = message["token"] as? String else { return }
+                let ok = (message["ok"] as? NSNumber)?.boolValue ?? false
+                self.completeSnapshot(token: token, ok: ok)
                 return
             }
 

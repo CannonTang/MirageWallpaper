@@ -117,8 +117,14 @@ struct GlobalSettings: Codable, Equatable {
     var language = GSLocalization.followSystem
     
     // MARK: macOS
-    var adjustMenuBarTint = true
-    
+    // Optional solely for backwards-compatible decoding of settings written
+    // before the desktop-override section existed.
+    var overrideWallpaper: Bool? = false
+
+    var shouldOverrideWallpaper: Bool {
+        overrideWallpaper ?? false
+    }
+
     // MARK: Appearance
     var appearance = GSAppearance.followSystem
     
@@ -177,7 +183,7 @@ class GlobalSettingsViewModel: ObservableObject {
     var didFinishLaunchingNotificationCancellable: Cancellable?
     var didCurrentWallpaperChangeCancellable: Cancellable?
     var didAddToLoginItemCancellable: Cancellable?
-    var didChangeAdjustMenuBarTintCancellable: Cancellable?
+    var didChangeOverrideWallpaperCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
     // In-memory snapshot of what is persisted, so the settings UI can tell
@@ -208,7 +214,7 @@ class GlobalSettingsViewModel: ObservableObject {
         didFinishLaunchingNotificationCancellable?.cancel()
         didCurrentWallpaperChangeCancellable?.cancel()
         didAddToLoginItemCancellable?.cancel()
-        didChangeAdjustMenuBarTintCancellable?.cancel()
+        didChangeOverrideWallpaperCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
         settlingEvalWorkItems.forEach { $0.cancel() }
@@ -232,11 +238,11 @@ class GlobalSettingsViewModel: ObservableObject {
             .map { $0.autoStart }
             .sink { [weak self] in self?.didAddToLoginItem($0) }
         
-        self.didChangeAdjustMenuBarTintCancellable =
+        self.didChangeOverrideWallpaperCancellable =
         self.$settings
-            .removeDuplicates { $0.adjustMenuBarTint == $1.adjustMenuBarTint }
-            .map { $0.adjustMenuBarTint }
-            .sink { [weak self] in self?.didChangeAdjustMenuBarTint($0) }
+            .removeDuplicates { $0.shouldOverrideWallpaper == $1.shouldOverrideWallpaper }
+            .map { $0.shouldOverrideWallpaper }
+            .sink { DesktopOverrideService.shared.didChangeEnabled($0) }
 
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(displayDidSleep),
@@ -504,22 +510,8 @@ class GlobalSettingsViewModel: ObservableObject {
         }
     }
     
-    func didChangeAdjustMenuBarTint(_ newValue: Bool) {
-        if newValue != true {
-            // NSScreen.main can be nil while displays are asleep or being
-            // reconfigured — exactly when this handler runs — so guard it.
-            if let wallpaper = UserDefaults.standard.url(forKey: "OSWallpaper"),
-               let screen = NSScreen.main {
-                try? NSWorkspace.shared.setDesktopImageURL(wallpaper, for: screen)
-            }
-        } else {
-            AppDelegate.shared.setPlaceholderWallpaper(
-                with: AppDelegate.shared.wallpaperViewModel.currentWallpaper)
-        }
-    }
-    
     func didCurrentWallpaperChange(_ newValue: WEWallpaper) {
-        AppDelegate.shared.setPlaceholderWallpaper(with: newValue)
+        DesktopOverrideService.shared.scheduleCapture(for: 0, wallpaper: newValue)
         if playbackPolicySettingsCancellable != nil {
             DispatchQueue.main.async { [weak self] in self?.configurePlaybackMonitoring() }
         }

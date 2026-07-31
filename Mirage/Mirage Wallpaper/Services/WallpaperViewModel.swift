@@ -378,7 +378,7 @@ class WallpaperViewModel: ObservableObject {
     }
 
     @objc private func displayTopologyChanged() {
-        AppDelegate.shared.setPlaceholderWallpaper(with: currentWallpaper)
+        DesktopOverrideService.shared.scheduleCaptureForAllScreens()
         let oldAssignments = screenAssignments.values
         var remapped: [Int: ScreenAssignment] = [:]
         for assignment in oldAssignments {
@@ -422,7 +422,7 @@ class WallpaperViewModel: ObservableObject {
             renderer.render(w, on: 0, options: opts)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
-        AppDelegate.shared.setPlaceholderWallpaper(with: w)
+        DesktopOverrideService.shared.scheduleCapture(for: 0, wallpaper: w)
     }
 
     func reapplyCurrent() {
@@ -459,6 +459,7 @@ class WallpaperViewModel: ObservableObject {
             if currentPlaybackPolicy != .stop {
                 renderer.render(w, on: screen, options: opts)
             }
+            DesktopOverrideService.shared.scheduleCapture(for: screen, wallpaper: w)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
@@ -488,6 +489,7 @@ class WallpaperViewModel: ObservableObject {
             }
             applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: screen)
             currentByScreen[screen] = w
+            DesktopOverrideService.shared.scheduleCapture(for: screen, wallpaper: w)
         }
     }
 
