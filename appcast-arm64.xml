@@ -7,6 +7,29 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Fri, 31 Jul 2026 15:27:54 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>213</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: e4f81afc8c8357034a196841485c7d7055705e07
+Channel: beta
+
+fix(app): apply the confirmed wallpaper to the display that asked
+
+Assigning a web wallpaper to a secondary display raised the trust sheet,
+whose confirm button applied nextCurrentWallpaper to the main display.
+This path never set that property, so confirming put an unrelated
+wallpaper on the wrong screen. The pending request now carries the target
+screen through the sheet.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-213-e4f81afc8c83-macOS-arm64.zip" length="192924854" type="application/octet-stream" sparkle:edSignature="+Su1BJmzNTU8A4KUiu65RHHY5VNUmXYCaAgQtK0v85p0A2296Tw+fLGtwBNSsE4oxR0tgLwqWKg5fkXLDI1zBg=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Thu, 30 Jul 2026 18:01:42 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -142,27 +165,9 @@ and write a visible-bound script's return value back to layer visibility.
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-190-761a91030999-macOS-arm64.zip" length="192676400" type="application/octet-stream" sparkle:edSignature="4g9lHrA82kisS6Fd65T1CeZyPYGP9HV6dofA1cCDMFAMbj8pyE5z7yhVs8LBsO+GOS0ZFt1tecME6xbvNUOODQ=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 26 Jul 2026 05:16:17 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>189</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 992b1849f1e73a4762762c83dfd3f27da8a74198
-Channel: beta
-
-test(scene): cover text geometry regressions
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-189-992b1849f1e7-macOS-arm64.zip" length="192674857" type="application/octet-stream" sparkle:edSignature="0dKQV6OH/FGCu6+j4HMKJAphJgNOXB0DcHV73lDl/nsNQ6uqsUnojg0uo1JOrbt2b3FIIjb1OkLHVu0CWOE7AA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: xT4YJs9SrhD20nw9L8Iwkhm/adHajYAcxyNacjUGJqvNWmxyEbeAH+rbs2+dsdEBNbbLxk15HjXJ8/KyVaepAQ==
-length: 9396
+edSignature: 1JYSB0to1Kj4SLzUhFtrt/6Wuh4WI+uxVuO23Z9CLrvYqhLtARSTc03hYrErUXPTKLdd1OYZea9fu4FXqd7qAQ==
+length: 9727
 -->
