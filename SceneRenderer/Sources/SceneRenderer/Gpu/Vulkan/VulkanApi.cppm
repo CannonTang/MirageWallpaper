@@ -389,7 +389,7 @@ public:
 
     std::optional<VmaImageParameters> CreateRenderTargetTex(uint32_t width, uint32_t height,
                                                             VkFormat);
-    ImageSlotsRef                    CreateTex(Image&);
+    ImageSlotsRef                    CreateTex(Image&, std::shared_ptr<VideoPlaybackState> = {});
 
     std::optional<ImageParameters> Query(std::string_view key, TextureKey content_hash,
                                          bool persist = false);
@@ -426,7 +426,7 @@ private:
     /* VIDEO-typed Image branch of CreateTex: registers a wavsen
      * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
-    ImageSlotsRef       CreateVideoTex(Image&);
+    ImageSlotsRef       CreateVideoTex(Image&, std::shared_ptr<VideoPlaybackState>);
     const Device&                m_device;
     Map<std::string, ImageSlots> m_tex_map;
     VideoDecodeOptions           m_video_decode_options;

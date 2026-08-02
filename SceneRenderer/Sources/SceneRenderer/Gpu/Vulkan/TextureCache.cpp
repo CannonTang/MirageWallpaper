@@ -372,13 +372,14 @@ TextureCache::CreateRenderTargetTex(uint32_t width, uint32_t height, VkFormat fo
                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 }
 
-ImageSlotsRef TextureCache::CreateTex(Image& image) {
+ImageSlotsRef TextureCache::CreateTex(Image& image,
+                                      std::shared_ptr<VideoPlaybackState> playback) {
     if (exists(m_tex_map, image.key)) {
         return m_tex_map.at(image.key);
     }
 
     if (image.header.type == ImageType::VIDEO) {
-        return CreateVideoTex(image);
+        return CreateVideoTex(image, std::move(playback));
     }
 
     ImageSlots img_slots;
@@ -756,6 +757,7 @@ struct TextureCache::VideoRegistry {
          * during CreateVideoTex). Pump retrieves it via lookup so the
          * single owner stays in the cache. */
         VmaImageParameters                           image; /* moved into m_tex_map */
+        std::shared_ptr<VideoPlaybackState>           playback;
         std::unique_ptr<wavsen::video::VideoDecoder> decoder;
         wavsen::video::Nv12Frame                     nv12_scratch;
         wavsen::video::MetalFrameView                metal_scratch;
@@ -767,7 +769,9 @@ struct TextureCache::VideoRegistry {
         double                                       pts_origin {
             std::numeric_limits<double>::quiet_NaN()
         };
+        double                                       pts_offset { 0.0 };
         double                                       frame_interval { 1.0 / 30.0 };
+        u64                                          applied_seek_sequence { 0 };
         uint64_t                                     active_epoch { 0 };
         bool                                         have_frame { false };
         // VideoToolboxVk: latest zero-copy frame view, and a sticky flag that
@@ -816,7 +820,8 @@ struct TextureCache::VideoRegistry {
     }
 };
 
-ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
+ImageSlotsRef TextureCache::CreateVideoTex(Image& image,
+                                           std::shared_ptr<VideoPlaybackState> playback) {
     if (image.slots.empty() || image.slots[0].mipmaps.empty()) return {};
     auto& mip = image.slots[0].mipmaps[0];
     if (! mip.videoStream || mip.videoSize <= 0 || mip.width <= 0 || mip.height <= 0) {
@@ -837,6 +842,7 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
 
     auto slot = std::make_unique<VideoRegistry::Slot>();
     slot->key = image.key;
+    slot->playback = std::move(playback);
     /* NV12 chroma is 4:2:0 → both dimensions must be even. Keep the source
      * dimensions: video decode must not be used as a quality/performance
      * trade-off. */
@@ -923,6 +929,7 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
         return {};
     }
     slot->decoder = std::move(dec_r).unwrap();
+    if (slot->playback) slot->playback->PublishTime(0.0, slot->decoder->duration());
     const double frame_interval = slot->decoder->frame_duration_seconds();
     if (std::isfinite(frame_interval) && frame_interval > 0.0 && frame_interval < 1.0) {
         slot->frame_interval = frame_interval;
@@ -963,7 +970,7 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
         double next_pts = -1.0;
         if (std::isfinite(raw_pts) && raw_pts >= 0.0) {
             if (! std::isfinite(s.pts_origin)) s.pts_origin = raw_pts;
-            const double normalized = raw_pts - s.pts_origin;
+            const double normalized = raw_pts - s.pts_origin + s.pts_offset;
             if (std::isfinite(normalized) && normalized >= 0.0 &&
                 (s.last_pts < 0.0 || normalized > s.last_pts)) {
                 next_pts = normalized;
@@ -978,7 +985,33 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
     for (auto& up : m_video_registry->slots) {
         auto& s = *up;
         if (s.active_epoch != m_video_activity_epoch) continue;
-        s.pts_acc += dt_seconds;
+
+        double advance_seconds = dt_seconds;
+        if (s.playback) {
+            const auto state = s.playback->Snapshot();
+            if (state.seek_sequence != s.applied_seek_sequence) {
+                auto seeked              = s.decoder->seek(state.seek_seconds);
+                s.applied_seek_sequence  = state.seek_sequence;
+                if (seeked.is_err()) {
+                    rstd_error("PumpVideoTextures[{}]: seek: {}",
+                               s.key,
+                               std::move(seeked).unwrap_err().message);
+                } else {
+                    s.pts_acc    = state.seek_seconds;
+                    s.last_pts   = -1.0;
+                    s.pts_origin = std::numeric_limits<double>::quiet_NaN();
+                    s.pts_offset = state.seek_seconds;
+                    s.have_frame = false;
+                }
+            }
+            if (! state.playing) {
+                s.playback->PublishTime(s.pts_acc, s.decoder->duration());
+                continue;
+            }
+            advance_seconds *= state.rate;
+        }
+        s.pts_acc += advance_seconds;
+        if (s.playback) s.playback->PublishTime(s.pts_acc, s.decoder->duration());
 
         auto it = m_tex_map.find(s.key);
         if (it == m_tex_map.end() || it->second.slots.empty()) continue;
@@ -1046,12 +1079,14 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                 s.pts_acc    = 0.0;
                 s.last_pts   = -1.0;
                 s.pts_origin = std::numeric_limits<double>::quiet_NaN();
+                s.pts_offset = 0.0;
                 break;
             }
             const bool decoder_looped = kind == wavsen::video::NextFrame::Looped;
             if (decoder_looped) {
                 s.pts_origin = std::numeric_limits<double>::quiet_NaN();
                 s.last_pts   = -1.0;
+                s.pts_offset = 0.0;
             }
             double frame_pts = discarded_pts;
             if (! discard) {

@@ -18,6 +18,7 @@ CustomShaderPass::CustomShaderPass(const Desc& desc) {
     m_desc.node                = desc.node;
     m_desc.draw_item           = desc.draw_item;
     m_desc.render_item         = desc.render_item;
+    m_desc.render_view         = desc.render_view;
     m_desc.submesh_index       = desc.submesh_index;
     m_desc.texture_bindings    = desc.texture_bindings;
     m_desc.output              = desc.output;
@@ -367,7 +368,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         rstd_assert(IsSpecTex(tex_name));
         rstd_assert(scene.renderTargets.count(tex_name) > 0);
         auto& rt        = scene.renderTargets.at(tex_name);
-        out_force_clear = rt.force_clear;
+        out_force_clear = rt.force_clear && ! m_desc.preserve_output;
         auto request = m_desc.output_request.value_or(MakeRenderTargetTextureRequest(tex_name, rt));
         if (auto opt = resources.EnsureTexture(request); opt.has_value()) {
             m_desc.vk_output          = opt.value();
@@ -513,6 +514,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     {
         VkPipelineColorBlendAttachmentState color_blend {};
         VkAttachmentLoadOp                  loadOp { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
+        const auto                          blendmode = material_ref.blenmode;
         {
             VkColorComponentFlags colorMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
@@ -522,7 +524,6 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             if (writes_alpha) colorMask |= VK_COLOR_COMPONENT_A_BIT;
             color_blend.colorWriteMask = colorMask;
 
-            auto blendmode = material_ref.blenmode;
             SetBlend(blendmode, color_blend);
             SetAlphaBlendWritePolicy(color_blend, writes_alpha);
             m_desc.blending = color_blend.blendEnable;
@@ -540,6 +541,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         GraphicsPipeline pipeline_state;
         pipeline_state.toDefault();
         pipeline_state.setSampleCount(m_desc.samples);
+        SetAlphaToCoverage(blendmode, pipeline_state.multisample);
         if (has_depth_attachment) SetDepthState(material_ref, pipeline_state.depth);
         SetCullMode(material_ref.cull_mode, pipeline_state.raster);
         const bool          has_index = m_desc.draw_buffers.hasIndex();
@@ -667,6 +669,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         auto* bufref = &m_desc.ubo_buf;
 
         auto* node           = m_desc.node;
+        auto  render_view    = m_desc.render_view;
         auto* shader_updater = scene.shaderValueUpdater.get();
         auto& sprites        = m_desc.sprites_map;
         auto& vk_textures    = m_desc.vk_textures;
@@ -676,6 +679,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                             buf,
                             bufref,
                             node,
+                            render_view,
                             &sprites,
                             &vk_textures,
                             update_dyn_buf_op,
@@ -693,7 +697,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                                                         sr::ShaderValue value) {
                 UpdateUniform(buf, *bufref, blocks, name, value);
             };
-            shader_updater->UpdateUniforms(node, sprites, update_unf_op);
+            shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view);
             // update image slot for sprites
             {
                 for (auto& [i, sp] : sprites) {
@@ -796,6 +800,12 @@ void CustomShaderPass::prepareFrameData(RenderingResources&) {
         m_desc.clear_value.color.float32[2] = sc[2];
         m_desc.clear_value.color.float32[3] = 1.0f;
     }
+}
+
+void CustomShaderPass::completeFrameData() {
+    if (! m_desc.draw_buffers.dynamic || m_desc.node == nullptr || m_desc.node->Mesh() == nullptr)
+        return;
+    (void)m_desc.node->Mesh()->ConsumeDirtyFlags(SceneMeshDirtyData);
 }
 
 void CustomShaderPass::prepareRenderScopeDraw(RenderingResources& rr) {

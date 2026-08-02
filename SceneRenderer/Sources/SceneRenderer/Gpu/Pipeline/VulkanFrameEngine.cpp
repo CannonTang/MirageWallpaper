@@ -311,6 +311,7 @@ struct RenderProgram {
     }
 
     void finalizeRenderTargetSizes(sr::Scene& scene, VkExtent2D extent,
+                                   VkExtent2D max_framebuffer_extent,
                                    VkSampleCountFlagBits msaa_samples) {
         for (auto& item : scene.renderTargets) {
             auto& rt = item.second;
@@ -332,12 +333,33 @@ struct RenderProgram {
         }
         for (auto& item : scene.renderTargets) {
             auto& rt = item.second;
-            if (! item.first.empty() && (rt.width * rt.height <= 4)) {
+            if (! item.first.empty() && (rt.width <= 0 || rt.height <= 0)) {
                 rstd_error("wrong size for render target: {}", item.first);
-            } else if (rt.has_mipmap) {
+            }
+
+            const auto physical_width = static_cast<sr::i32>(std::clamp<sr::u32>(
+                static_cast<sr::u32>(std::max(rt.width, 1)), 1, max_framebuffer_extent.width));
+            const auto physical_height = static_cast<sr::i32>(std::clamp<sr::u32>(
+                static_cast<sr::u32>(std::max(rt.height, 1)), 1, max_framebuffer_extent.height));
+            const bool physical_size_changed = rt.physical_width != physical_width ||
+                                               rt.physical_height != physical_height;
+            rt.physical_width  = physical_width;
+            rt.physical_height = physical_height;
+            if (physical_size_changed &&
+                (rt.physical_width != rt.width || rt.physical_height != rt.height)) {
+                rstd_warn("clamp render target {} from {}x{} to {}x{}",
+                          item.first,
+                          rt.width,
+                          rt.height,
+                          rt.physical_width,
+                          rt.physical_height);
+            }
+
+            if (rt.has_mipmap) {
                 rt.mipmap_level = std::max(3u,
                                            static_cast<unsigned>(std::floor(
-                                               std::log2(std::min(rt.width, rt.height))))) -
+                                               std::log2(std::min(rt.physical_width,
+                                                                  rt.physical_height))))) -
                                   2u;
             }
         }
@@ -464,6 +486,10 @@ struct RenderProgram {
         for (auto& record : pass_records) {
             if (record.pass != nullptr && record.pass->prepared())
                 record.pass->prepareFrameData(rr);
+        }
+        for (auto& record : pass_records) {
+            if (record.pass != nullptr && record.pass->prepared())
+                record.pass->completeFrameData();
         }
     }
 
@@ -1376,7 +1402,8 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
     auto height = m_device->out_extent().height;
 
     if (width == 0) return;
-    double sw = scene.ortho[0], sh = scene.ortho[1];
+    const auto projection_extent = scene.OrthographicProjectionExtent();
+    double     sw = projection_extent[0], sh = projection_extent[1];
     double fboAspect = width / (double)height, sAspect = sw / sh;
     auto&  gCam    = *scene.cameras.at("global");
     auto&  gPerCam = *scene.cameras.at("global_perspective");
@@ -1452,7 +1479,13 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     m_program.buildFromGraph(rg);
     m_program.injectFramePasses(*m_prepass, *m_finpass);
 
-    m_program.finalizeRenderTargetSizes(scene, m_device->out_extent(), m_msaa_samples);
+    const auto limits = m_device->gpu().GetProperties().limits;
+    const VkExtent2D max_framebuffer_extent {
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferWidth),
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferHeight),
+    };
+    m_program.finalizeRenderTargetSizes(
+        scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
     m_device->tex_cache().BeginVideoTextureActivity();
@@ -1471,7 +1504,13 @@ void VulkanRender::Impl::refreshPreparedResources(Scene&                     sce
                                                   const RenderSceneSnapshot& render_scene) {
     if (! m_inited || m_program.pass_records.empty()) return;
 
-    m_program.finalizeRenderTargetSizes(scene, m_device->out_extent(), m_msaa_samples);
+    const auto limits = m_device->gpu().GetProperties().limits;
+    const VkExtent2D max_framebuffer_extent {
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferWidth),
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferHeight),
+    };
+    m_program.finalizeRenderTargetSizes(
+        scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
     m_device->tex_cache().BeginVideoTextureActivity();

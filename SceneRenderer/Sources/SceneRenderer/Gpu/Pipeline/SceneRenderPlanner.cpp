@@ -244,7 +244,9 @@ static rg::TextureNodeRef AddMipFramebufferCopy(ExtraInfo& extra, rg::RenderGrap
     return snapshot;
 }
 
-static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, ExtraInfo& extra) {
+static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, ExtraInfo& extra,
+                        bool defer_effect = false,
+                        SceneRenderViewKind render_view = SceneRenderViewKind::Primary) {
     auto& rgraph = *extra.rgraph;
     auto& scene  = *extra.scene;
 
@@ -276,7 +278,7 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
     const auto& slots = mesh->MaterialSlots();
 
     SceneImageEffectLayer* imgeff = nullptr;
-    if (! node->Camera().empty()) {
+    if (! defer_effect && ! node->Camera().empty()) {
         auto& cam = scene.cameras.at(node->Camera());
         if (cam->HasImgEffect()) {
             auto* effect = cam->GetImgEffect().get();
@@ -299,7 +301,8 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
         }
     }
 
-    for (uint32_t smi = 0; smi < mesh->Submeshes().size(); smi++) {
+    const bool draw_source = imgeff == nullptr || imgeff->RequiresSourceDraw();
+    for (uint32_t smi = 0; draw_source && smi < mesh->Submeshes().size(); smi++) {
         const auto& submesh = mesh->Submeshes()[smi];
         if (submesh.material_slot >= slots.size() || ! slots[submesh.material_slot]) continue;
         SceneMaterial* material = slots[submesh.material_slot].get();
@@ -312,11 +315,13 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
         rgraph.addPass<vulkan::CustomShaderPass>(
             passName,
             rg::PassNode::Type::CustomShader,
-            [material, node, smi, pass_output, &output, &imgId, &rgraph, &scene, &extra](
+            [material, node, smi, pass_output, preserve_output = submesh.preserve_output,
+             render_view, &output, &imgId, &rgraph, &scene, &extra](
                 rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 const auto& pass    = builder.workPassNode();
                 pdesc.node          = node;
                 pdesc.submesh_index = smi;
+                pdesc.render_view   = render_view;
                 if (auto node_id = scene.ResourceIndex().nodeId(*node)) {
                     if (auto draw_item = scene.ResourceIndex().drawItemFor(*node_id, smi)) {
                         pdesc.draw_item = *draw_item;
@@ -391,8 +396,10 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                 }
                 pdesc.transparent_clear = first_output_write && output_rt.clear_on_first_write;
                 pdesc.clear_output =
-                    (first_output_write && output_rt.bind.screen) || pdesc.transparent_clear;
-                pdesc.preserve_output = output_state->version > 0 && output_rt.preserve_on_write;
+                    ! preserve_output &&
+                    ((first_output_write && output_rt.bind.screen) || pdesc.transparent_clear);
+                pdesc.preserve_output =
+                    output_state->version > 0 && (output_rt.preserve_on_write || preserve_output);
                 const bool uses_depth =
                     output_rt.withDepth && vulkan::UsesDepthAttachment(*material);
                 pdesc.has_depth_attachment = uses_depth;
@@ -459,6 +466,34 @@ static bool ShouldSkipNoRuntimeEffect(SceneNode* node, Scene& scene) {
            effect_layer->EffectCount() > 0 && ! effect_layer->HasRuntimeVisibleEffect();
 }
 
+static bool SamplesPlanarReflection(SceneNode& node) {
+    auto* mesh = node.Mesh();
+    if (mesh == nullptr) return false;
+    for (const auto& material : mesh->MaterialSlots()) {
+        if (! material) continue;
+        for (const auto& texture : material->textures) {
+            if (sstart_with(texture, WE_REFLECTION_PREFIX)) return true;
+        }
+    }
+    return false;
+}
+
+static void EmitPlanarReflectionNode(SceneNode* node, ExtraInfo& extra,
+                                     const Set<const SceneNode*>& emit_skip_subtrees) {
+    if (node == nullptr || emit_skip_subtrees.count(node) != 0) return;
+    if (node->Reflected() && ! SamplesPlanarReflection(*node)) {
+        ToGraphPass(node,
+                    WE_REFLECTION_PREFIX,
+                    node->ID(),
+                    extra,
+                    true,
+                    SceneRenderViewKind::Reflection);
+    }
+    for (auto& child : node->GetChildren()) {
+        EmitPlanarReflectionNode(child.as_ptr(), extra, emit_skip_subtrees);
+    }
+}
+
 std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene&                     scene,
                                                          const RenderSceneSnapshot& render_scene) {
     std::unique_ptr<rg::RenderGraph> rgraph = std::make_unique<rg::RenderGraph>();
@@ -475,6 +510,10 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene&                  
     // the skip set lets the emit walk short-circuit without mutating the tree.
     Set<const SceneNode*> emit_skip_subtrees;
     CollectEmitSkipSubtrees(scene.sceneGraph.as_ptr(), scene, linked_ids, emit_skip_subtrees);
+
+    if (scene.PlanarReflectionEnabled()) {
+        EmitPlanarReflectionNode(scene.sceneGraph.as_ptr(), extra, emit_skip_subtrees);
+    }
 
     // Pass B: emit passes. For elidable layers with a link consumer, route
     // into a private `_rt_link_<id>` RT instead of `_rt_default`; elidable
