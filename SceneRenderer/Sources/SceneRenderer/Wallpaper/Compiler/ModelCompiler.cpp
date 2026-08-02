@@ -190,13 +190,14 @@ bool UsesUint32Indices(const WPMdlHeader& header, uint32_t vertex_num) {
 }
 
 // hexpat Mesh<MdlV, TopFlag, SinglePuppet>:
-//   CStr mat_json + u32 flag_a + (if flag_a==2: u32) + (if MdlV>=17: aabb)
+//   CStr mat_json × skin_count + u32 flag_a + (if flag_a==2: u32) + (if MdlV>=17: aabb)
 //   + (if MdlV>14: u32 mesh_flag) + u32 vertex_size + Vertex[]
 //   + u32 indices_size + Triangle[] + (if MdlV>=21: Parts) + (if MdlV>21: Masks)
 bool ParseMesh(fs::MemBinaryStream& f, const WPMdlHeader& header, WPMdl::Mesh& mesh,
                std::string_view path) {
-    mesh.mat_json_file = f.ReadStr();
-    mesh.flag_a        = f.ReadUint32();
+    mesh.mat_json_files.resize(header.skin_count);
+    for (auto& material : mesh.mat_json_files) material = f.ReadStr();
+    mesh.flag_a = f.ReadUint32();
     if (mesh.flag_a == 2) {
         mesh.has_flag_a2_one = (f.ReadUint32() == 1);
     }
@@ -1027,14 +1028,15 @@ void ApplyMDLS3CentroidPivot(WPMdl& mdl) {
     }
 }
 
-// hexpat Header: VersionTag mdlv + u32 mdl_flag + s32 always_one(==1) + u32 mesh_count.
+// hexpat Header: VersionTag mdlv + u32 mdl_flag + u32 skin_count + u32 mesh_count.
 bool ReadHeaderFromStream(fs::MemBinaryStream& f, WPMdlHeader& h, std::string_view path_for_log) {
     h.mdlv       = ReadMdlVersion(f);
     h.mdl_flag   = f.ReadUint32();
-    h.unk_a      = f.ReadUint32();
+    h.skin_count = f.ReadUint32();
     h.mesh_count = f.ReadUint32();
-    if (h.unk_a != 1) {
-        rstd_info("mdl '{}' header always_one={} (expected 1)", std::string(path_for_log), h.unk_a);
+    if (h.skin_count == 0) {
+        rstd_error("mdl '{}' header has no material skins", std::string(path_for_log));
+        return false;
     }
     return true;
 }
@@ -1143,7 +1145,7 @@ bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
 
 std::optional<wpscene::Material> WPMdlParser::ParseMaterial(std::string_view ref, fs::VFS& vfs) {
     const auto path   = ResolveMdlMaterialPath(ref);
-    auto       parsed = sr::ParseJson(fs::GetFileContent(vfs, path));
+    auto       parsed = sr::ParseJson(fs::GetFileContent(vfs, path), { .allow_comments = true });
     if (parsed.is_err()) {
         rstd_error("load mdl material '{}' failed: {}", path, parsed.unwrap_err());
         return std::nullopt;
@@ -1162,9 +1164,19 @@ std::optional<wpscene::Material> WPMdlParser::ParseMaterial(std::string_view ref
     return material;
 }
 
+std::optional<std::size_t> WPMdlParser::FindMeshByMaterial(const WPMdl& mdl,
+                                                            std::string_view material_ref) {
+    const auto wanted = ResolveMdlMaterialPath(material_ref);
+    for (std::size_t mesh_index = 0; mesh_index < mdl.meshes.size(); ++mesh_index) {
+        for (const auto& candidate : mdl.meshes[mesh_index].mat_json_files) {
+            if (ResolveMdlMaterialPath(candidate) == wanted) return mesh_index;
+        }
+    }
+    return std::nullopt;
+}
+
 void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
-                                 std::array<float, 2> texcoord_scale,
-                                 Eigen::Vector3f      position_offset) {
+                                 std::array<float, 2> texcoord_scale) {
     const size_t vert_num = src.positions.size();
     if (vert_num == 0) return;
     if (! src.part_uv2.empty() || ! src.parts.empty()) {
@@ -1179,10 +1191,10 @@ void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh&
 
     // Position is always present (the parser would have failed otherwise).
     specs.push_back(VAttr::Position);
-    packers.push_back([&src, position_offset](size_t i, float* dst) {
-        dst[0] = src.positions[i][0] + position_offset.x();
-        dst[1] = src.positions[i][1] + position_offset.y();
-        dst[2] = src.positions[i][2] + position_offset.z();
+    packers.push_back([&src](size_t i, float* dst) {
+        dst[0] = src.positions[i][0];
+        dst[1] = src.positions[i][1];
+        dst[2] = src.positions[i][2];
     });
     if (! src.normals.empty()) {
         specs.push_back(VAttr::Normal);
@@ -1277,9 +1289,8 @@ void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh&
 
 void WPMdlParser::GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
                                         std::span<const uint32_t> clip_part_indices,
-                                        std::array<float, 2>      texcoord_scale,
-                                        Eigen::Vector3f           position_offset) {
-    GenMeshFromMdl(submesh, src, texcoord_scale, position_offset);
+                                        std::array<float, 2>      texcoord_scale) {
+    GenMeshFromMdl(submesh, src, texcoord_scale);
     // `clip_part_indices` are positions in src.parts[] (0-based), not `part.id`.
     std::vector<SceneMesh::DrawRange> ranges;
     for (uint32_t idx : clip_part_indices) {

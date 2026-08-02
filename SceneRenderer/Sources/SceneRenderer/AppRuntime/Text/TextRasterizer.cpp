@@ -347,6 +347,14 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
     for (std::uint32_t codepoint : codepoints) {
         if (impl.glyphs.find(codepoint) != impl.glyphs.end()) continue;
 
+        // WE ignores horizontal tabs completely. FreeType otherwise resolves
+        // the control code through glyph 0 and produces a visible tofu box or
+        // an unintended advance, depending on the selected font.
+        if (codepoint == '\t') {
+            impl.glyphs.emplace(codepoint, GlyphInfo {});
+            continue;
+        }
+
         FT_Face render_face = impl.face;
         FT_UInt glyph_index = FT_Get_Char_Index(render_face, codepoint);
         if (glyph_index == 0 && ! IsLayoutWhitespace(codepoint)) {
@@ -1005,7 +1013,7 @@ void TextLayouter::SetText(std::string_view utf8) {
         }
         lines.back().glyphs.push_back(gi);
         lines.back().width += gi->advance_x;
-        ++total_glyph_quads;
+        if (gi->pixel_w != 0 && gi->pixel_h != 0) ++total_glyph_quads;
     }
 
     bool        has_bg      = im.style.opaquebackground;
@@ -1163,7 +1171,6 @@ void TextLayouter::SetText(std::string_view utf8) {
             if (q >= im.peak_quads) break;
             if (gi->pixel_w == 0 || gi->pixel_h == 0) {
                 pen_x += gi->advance_x;
-                ++emitted_glyphs;
                 continue;
             }
             float left   = pen_x + gi->bearing_x;

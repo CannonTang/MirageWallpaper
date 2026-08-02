@@ -101,6 +101,23 @@ void WPPuppet::prepared() {
         }
         b.inv_bind = b.world_bind.inverse();
     }
+    for (auto& attachment : attachments) {
+        attachment.bind_xform = attachment.local_xform;
+        if (attachment.bone_index >= bones.size()) continue;
+
+        std::vector<uint32_t> chain;
+        uint32_t              bone_index = attachment.bone_index;
+        while (bone_index != NO_PARENT && bone_index < bones.size()) {
+            chain.push_back(bone_index);
+            bone_index = bones[bone_index].file_parent;
+        }
+
+        Eigen::Affine3f bone_bind = Eigen::Affine3f::Identity();
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            bone_bind = bone_bind * bones[*it].local_bind;
+        }
+        attachment.bind_xform = bone_bind * attachment.local_xform;
+    }
     for (auto& anim : anims) {
         anim.frame_time = 1.0f / anim.fps;
         anim.max_time   = anim.length / anim.fps;
@@ -112,6 +129,19 @@ void WPPuppet::prepared() {
     }
 
     m_final_affines.resize(bones.size());
+}
+
+std::optional<std::size_t> WPPuppet::attachmentIndex(std::string_view name) const noexcept {
+    for (std::size_t i = 0; i < attachments.size(); ++i) {
+        if (attachments[i].name == name) return i;
+    }
+    return std::nullopt;
+}
+
+std::optional<Eigen::Affine3f>
+WPPuppet::attachmentBindTransform(std::size_t index) const noexcept {
+    if (index >= attachments.size()) return std::nullopt;
+    return attachments[index].bind_xform;
 }
 
 std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
@@ -351,6 +381,16 @@ std::optional<Eigen::Affine3f> WPPuppetLayer::boneTransform(uint32_t index, doub
     auto frame = genFrame(time);
     if (zero_based >= frame.size()) return std::nullopt;
     return frame[zero_based] * m_puppet->bones[zero_based].world_bind;
+}
+
+std::optional<Eigen::Affine3f> WPPuppetLayer::attachmentTransform(std::size_t index,
+                                                                  double time) noexcept {
+    if (! m_puppet || index >= m_puppet->attachments.size()) return std::nullopt;
+    const auto& attachment = m_puppet->attachments[index];
+    if (attachment.bone_index >= m_puppet->bones.size()) return std::nullopt;
+    auto frame = genFrame(time);
+    if (attachment.bone_index >= frame.size()) return std::nullopt;
+    return frame[attachment.bone_index] * attachment.bind_xform;
 }
 
 void WPPuppetLayer::updateInterpolation(double elapsed) noexcept {

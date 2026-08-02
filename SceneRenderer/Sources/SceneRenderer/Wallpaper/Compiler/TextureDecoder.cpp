@@ -26,7 +26,8 @@ enum class WPTexFlagEnum : uint32_t
 
     compo1 = 20,
     compo2 = 21,
-    compo3 = 22
+    compo3 = 22,
+    compo4 = 23
 };
 using WPTexFlags = BitFlags<WPTexFlagEnum>;
 
@@ -169,6 +170,7 @@ WPTexFormatVersion LoadHeader(fs::IBinaryStream& file, ImageHeader& header) {
         header.extraHeader["compo1"].val = flags[WPTexFlagEnum::compo1];
         header.extraHeader["compo2"].val = flags[WPTexFlagEnum::compo2];
         header.extraHeader["compo3"].val = flags[WPTexFlagEnum::compo3];
+        header.extraHeader["compo4"].val = flags[WPTexFlagEnum::compo4];
     }
 
     /*
@@ -543,6 +545,10 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
         std::vector<std::vector<float>> imageDatas(image_count);
         for (usize i_image = 0; i_image < image_count; i_image++) {
             int mipmap_count = file.ReadInt32();
+            if (mipmap_count < 0) {
+                rstd_error("TextureAssetDecoder: negative sprite mip count for {}", name);
+                return header;
+            }
             for (int32_t i_mipmap = 0; i_mipmap < mipmap_count; i_mipmap++) {
                 int32_t width  = file.ReadInt32();
                 int32_t height = file.ReadInt32();
@@ -556,8 +562,11 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
                     (void)LZ4_compressed;
                     (void)decompressed_size;
                 }
-                long src_size = file.ReadInt32();
-                file.SeekCur(src_size);
+                i32 src_size = file.ReadInt32();
+                if (src_size < 0 || ! file.SeekCur(src_size)) {
+                    rstd_error("TextureAssetDecoder: invalid sprite mip body for {}", name);
+                    return header;
+                }
             }
         }
         // sprite pos
@@ -576,6 +585,10 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
             return header;
         }
         int32_t framecount = file.ReadInt32();
+        if (framecount <= 0) {
+            rstd_error("TextureAssetDecoder: no sprite frames for {}", name);
+            return header;
+        }
         if (ver.sprite_has_atlas_size()) {
             i32 width  = file.ReadInt32();
             i32 height = file.ReadInt32();
@@ -636,6 +649,10 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
             sf.yAxis[1] /= spriteHeight;
             sf.rate = sf.height / sf.width;
             header.spriteAnim.AppendFrame(sf);
+        }
+        if (header.spriteAnim.numFrames() == 0) {
+            rstd_error("TextureAssetDecoder: no valid sprite frames for {}", name);
+            return header;
         }
     } else {
         i32 mipmap_count = file.ReadInt32();

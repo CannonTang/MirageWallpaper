@@ -86,6 +86,7 @@ public:
         uint16_t        bone_index { 0 }; // hexpat MDAT Attachment.unk
         std::string     name;
         Eigen::Affine3f local_xform { Eigen::Affine3f::Identity() };
+        Eigen::Affine3f bind_xform { Eigen::Affine3f::Identity() };
     };
     struct BoneFrame {
         Eigen::Vector3f position;
@@ -220,6 +221,8 @@ public:
 
     std::span<const Eigen::Affine3f> genFrame(WPPuppetLayer&, double time) noexcept;
     void                             prepared();
+    std::optional<std::size_t>       attachmentIndex(std::string_view name) const noexcept;
+    std::optional<Eigen::Affine3f>   attachmentBindTransform(std::size_t index) const noexcept;
 
 private:
     std::vector<Eigen::Affine3f> m_final_affines;
@@ -256,6 +259,8 @@ public:
     std::span<const Eigen::Affine3f> genFrame(double time) noexcept;
     uint32_t                         boneIndex(std::string_view name) const noexcept;
     std::optional<Eigen::Affine3f>   boneTransform(uint32_t index, double time) noexcept;
+    std::optional<Eigen::Affine3f>   attachmentTransform(std::size_t index,
+                                                         double time) noexcept;
 
     void updateInterpolation(double time) noexcept;
 
