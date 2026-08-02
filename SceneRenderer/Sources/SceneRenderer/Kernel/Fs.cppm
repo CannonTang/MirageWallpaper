@@ -21,6 +21,35 @@ inline std::string ToStdString(RstdPath path) {
     return std::string(reinterpret_cast<const char*>(path.data()), path.len());
 }
 
+// Authored asset references are relative to /assets, but some packages use
+// ".." to step out of a nested authoring folder. Normalize those references
+// while clamping parent traversal at the asset root. PhysicalFs still performs
+// its independent lexical and symlink containment checks before touching disk.
+inline std::string ResolveAssetPath(std::string_view path) {
+    std::vector<std::string_view> components;
+    usize                         begin = 0;
+    while (begin <= path.size()) {
+        const usize end = path.find('/', begin);
+        const auto  part = path.substr(begin, end == std::string_view::npos
+                                                   ? path.size() - begin
+                                                   : end - begin);
+        if (part == "..") {
+            if (! components.empty()) components.pop_back();
+        } else if (! part.empty() && part != ".") {
+            components.push_back(part);
+        }
+        if (end == std::string_view::npos) break;
+        begin = end + 1;
+    }
+
+    std::string resolved = "/assets";
+    for (const auto component : components) {
+        resolved.push_back('/');
+        resolved.append(component);
+    }
+    return resolved;
+}
+
 // -- Bswap -----------------------------------------------------------------
 
 template<typename T>
@@ -443,7 +472,7 @@ public:
         return SeekInPos(pos);
     }
     virtual bool SeekEnd(idx offset) {
-        idx pos = Size() - 1 - offset;
+        idx pos = Size() + offset;
         return SeekInPos(pos);
     }
     virtual isize Size() const { return m_end - m_start; }
