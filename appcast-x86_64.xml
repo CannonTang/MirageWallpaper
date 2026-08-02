@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 02 Aug 2026 10:46:06 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>222</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: ba50eaf317c3fe5b0574e9d4c0aff7976ccebd62
+Channel: beta
+
+Add runtime and scripting compatibility regression tests
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-222-ba50eaf317c3-macOS-x86_64.zip" length="198077909" type="application/octet-stream" sparkle:edSignature="/qGB4bnhDTZ+Es1KstNlyEN1/KC2Nlrw6LfXtd3TAb7GjUexTxAy+ZLYawV0cZbRVbOXGNjRSalsGcuSo9mAAQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Fri, 31 Jul 2026 19:20:02 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -112,53 +129,9 @@ fix(render): avoid empty optional dereference after m_tx.reset()
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-204-b8cdd391b53d-macOS-x86_64.zip" length="197796867" type="application/octet-stream" sparkle:edSignature="wYyjJ6nNOZVUdcvPezmIQKlAS1XqyQYLbxCoHzEqE1uFMYIhcMp8crASSp/GNC/eQFmp2h+F0Cjx92YgSfWfAA=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 26 Jul 2026 10:58:36 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>203</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 0377b0c706a01e75bc1ef69013da31a9740fe605
-Channel: beta
-
-perf(ui): render rich labels natively, debounce search, cap GIF decode
-
-Every rich Wallpaper Engine property label instantiated a WKWebView, and
-therefore a WebKit content process. A property panel with fifteen such
-labels spawned fifteen processes.
-
-Render them with NSAttributedString instead - but not unconditionally.
-That importer resolves referenced resources synchronously on the calling
-thread, so swapping it in wholesale would trade process overhead for a
-main-thread network stall. Only labels referencing a remote image, frame
-or video still use a web view; everything else is native, which in
-practice means none. Imported fonts and colours are stripped so the
-SwiftUI environment styles the text and it stays legible in dark mode, and
-parsed results are memoised since SwiftUI re-evaluates bodies freely.
-
-Debounce the library search by 250 ms. The pipeline already runs off the
-main thread, but typing "landscape" still queued nine complete
-search/filter/sort passes over the whole library of which only the last
-mattered. The Workshop search already debounced.
-
-Animated hover previews decoded at full resolution: a 1920x1080 GIF with
-80 frames decodes to roughly 660 MB, once per cell swept. Play the
-animation only when its decoded footprint is sane, otherwise fall back to
-the downsampled still the cell already shows unhovered.
-
-The frame-rate slider now routes through the playback policy rather than
-pushing the raw value, which would bypass a thermal or low-power cap.
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-203-0377b0c706a0-macOS-x86_64.zip" length="197801303" type="application/octet-stream" sparkle:edSignature="B2upipQhVemSvlRQnBW/1js0eBnolIu0EFSIO468CZ6BWy3zZiS182XzmDKqw5lNpPKd4RVxaKuJGocifl6IBQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ezHrPSvh46nKS+UPyKdvNGcUbeT/bcYNKaSftvRM8hfTToxAQYsLncahOAqCeeKN4tDkDal4Yyx4UxmFalSsCg==
-length: 9057
+edSignature: Hbpo/kQjakt2IrHeBpeM5EagO+jiUWYO89ZMG2UkHD+dTr9nOqtdj3+4r50ns8YNB1bkxxm3NqDweAk0yD+hCg==
+length: 7555
 -->
