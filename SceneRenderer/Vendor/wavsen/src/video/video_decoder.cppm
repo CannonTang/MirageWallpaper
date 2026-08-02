@@ -219,6 +219,8 @@ public:
     auto next_vk_frame(VkFrameView& out) -> rstd::Result<NextFrame, Error>;
     auto next_drm_frame(DrmFrameView& out) -> rstd::Result<NextFrame, Error>;
     auto next_metal_frame(MetalFrameView& out) -> rstd::Result<NextFrame, Error>;
+    auto seek(double seconds) -> rstd::Result<rstd::empty, Error>;
+    auto duration() const -> std::optional<double>;
 
     std::uint32_t width() const  { return target_w_; }
     std::uint32_t height() const { return target_h_; }

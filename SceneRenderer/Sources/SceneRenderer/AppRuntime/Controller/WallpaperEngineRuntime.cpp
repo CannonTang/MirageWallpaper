@@ -711,9 +711,10 @@ void ApplyUserPropertyToParticles(Scene& scene, const std::string& key, const Js
     auto write_scalar = [&](float& dst) {
         if (coerced.value.size() >= 1) dst = coerced.value[0];
     };
-    auto write_vec3 = [&](std::array<float, 3>& dst, float scale) {
-        if (coerced.value.size() < 3) return;
+    auto write_vec3 = [&](std::array<float, 3>& dst, float scale) -> bool {
+        if (coerced.value.size() < 3) return false;
         dst = { coerced.value[0] * scale, coerced.value[1] * scale, coerced.value[2] * scale };
+        return true;
     };
 
     for (auto& b : it->second) {
@@ -747,7 +748,10 @@ void ApplyUserPropertyToParticles(Scene& scene, const std::string& key, const Js
                 idx = std::stoi(f.substr(std::string_view("controlpoint").size()));
             } catch (...) {
             }
-            if (idx >= 0 && idx < 8) write_vec3(st->controlpoint[idx], 1.0f);
+            if (idx >= 0 && idx < 8) {
+                std::array<float, 3> point {};
+                if (write_vec3(point, 1.0f)) st->controlpoint[idx] = point;
+            }
         } else if (f.starts_with("controlpointangle")) {
             int idx = -1;
             try {
@@ -780,7 +784,13 @@ void ApplyUserPropertyToCameraParallax(Scene& scene, const std::string& key, con
 
     float value = coerced.value[0];
     for (const auto& field : it->second) {
-        if (field == "cameraparallaxmouseinfluence")
+        if (field == "cameraparallax")
+            scene.shaderValueUpdater->SetCameraParallaxEnabled(value >= 0.5f);
+        else if (field == "cameraparallaxamount")
+            scene.shaderValueUpdater->SetCameraParallaxAmount(value);
+        else if (field == "cameraparallaxdelay")
+            scene.shaderValueUpdater->SetCameraParallaxDelay(value);
+        else if (field == "cameraparallaxmouseinfluence")
             scene.shaderValueUpdater->SetCameraParallaxMouseInfluence(value);
     }
 }
