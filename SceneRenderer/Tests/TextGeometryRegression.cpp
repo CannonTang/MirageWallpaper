@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <string_view>
@@ -16,6 +17,32 @@ bool Near(float actual, float expected, float epsilon = 0.001f) {
 } // namespace
 
 int main() {
+    bool ok = true;
+
+    // Tabs in WE text are formatting artifacts and consume neither atlas
+    // space nor layout width.
+    auto font = sr::text::FontCache::ResolveSystemFont("systemfont_monospace");
+    if (! font.bytes) {
+        std::cerr << "failed to resolve a system font for tab regression\n";
+        ok = false;
+    } else {
+        sr::text::FontCache cache;
+        auto*               face = cache.GetFace(font.bytes, 64);
+        const std::array<std::uint32_t, 1> tabs { '\t' };
+        if (face == nullptr) {
+            std::cerr << "failed to load system font for tab regression\n";
+            ok = false;
+        } else {
+            face->Populate(tabs);
+            const auto* tab = face->Lookup('\t');
+            if (tab == nullptr || tab->pixel_w != 0 || tab->pixel_h != 0 ||
+                ! Near(tab->advance_x, 0.0f)) {
+                std::cerr << "tab unexpectedly produced a glyph or layout advance\n";
+                ok = false;
+            }
+        }
+    }
+
     // Workshop 3610728777: the dynamic clock has a 58 px logical frame but
     // only 35 px of visible ink. Bottom alignment must use 58; tight cropping
     // remains a separate compose concern.
@@ -40,7 +67,7 @@ int main() {
     const auto clock_anchor = sr::text::ResolveTextAnchorPosition(
         "center", "bottom", 0.0f, -46.78589f, 104.0f, 58.0f, 0.75f, 0.75f);
 
-    bool ok = Near(clock_geometry.draw_height, 35.0f);
+    ok &= Near(clock_geometry.draw_height, 35.0f);
     ok &= Near(clock_geometry.draw_offset_y, 1.0f);
     ok &= Near(clock_anchor[1], -25.03589f);
 
