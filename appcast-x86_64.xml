@@ -7,6 +7,57 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 02 Aug 2026 15:47:24 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>223</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: de266a7ead06539809dba42fd78c396b1f46be34
+Channel: beta
+
+fix(scene): read puppet bone curves as opacity, not pose blend weights
+
+Eyelids stopped covering the pupil for the few frames of a blink. The
+MDLA block's `blend_curves` were being multiplied into the pose blend
+weight, so a curve dipping to 0 zeroed that bone's animation delta and
+snapped it back to its bind pose mid-blink - lid and lash jumped out from
+over the iris, which then showed through.
+
+They are not blend weights. WE's image shaders declare
+`uniform float g_BonesAlpha[BONECOUNT]` under SKINNING_ALPHA and multiply
+the LBS-weighted sample into the vertex alpha; the curve is a per-bone
+opacity envelope on the timeline. Two facts in the corpus settle it. In
+3396722575's eye puppets, five of the bones whose curve drops to 0 hold
+their TRS completely still through the dip, so under a pose-blend reading
+the curve is a mathematical no-op and could not do anything at all. And
+2910422008's single-bone rigid sprites ramp 0 -> 1 while travelling 300
+units, where a pose-blend reading pins the sprite at its bind pose for the
+whole animation instead of fading it in.
+
+So route the curves to a per-bone alpha computed alongside the pose in
+genFrame, upload it as g_BonesAlpha, and leave pose blending to the
+layer's own blend amount. The alpha is deliberately flat per bone with no
+parent inheritance, matching the shader's g_BonesAlpha[a_BlendIndices.*]
+lookup - the bones that matter here have no authored motion to inherit.
+Layer blend scales the envelope toward opaque rather than toward zero, so
+a layer dialled out contributes no fade instead of darkening the sprite.
+
+SKINNING_ALPHA is set only when a puppet ships a curve that actually
+leaves 1.0. Of the 38 installed scene wallpapers carrying puppets, four
+do; the other 34 keep their existing shader permutation and upload path
+untouched.
+
+std140 gives each element of a scalar array its own 16-byte register, so
+the upload packs one alpha into .x per register. Writing them contiguously
+instead leaves every bone past the first quarter reading padding, which
+renders as fully transparent - during development that erased everything
+but the pupil.
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-223-de266a7ead06-macOS-x86_64.zip" length="198079646" type="application/octet-stream" sparkle:edSignature="6arIpxoJj/mHf3wnDLsgggRGZTW6YLo+gp2BMWuPfNvhefI93X9mwWaXnLHeBX7gZsCwjVxAUiiD5biwlr/RBg=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 02 Aug 2026 10:46:06 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -112,26 +163,9 @@ fix(render): handle frequency range shader summaries
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-206-55ebda623209-macOS-x86_64.zip" length="197795758" type="application/octet-stream" sparkle:edSignature="LforiDvHEK52DZtMKVmbBEF6yAr7LD8DSztP/z7CiXayIIn4luo+2BIgputkquoa8U343xVQG02mk0c5Hw8FAg=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 26 Jul 2026 16:07:02 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>204</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: b8cdd391b53d6bab2aebd6cad8373d80f434d265
-Channel: beta
-
-fix(render): avoid empty optional dereference after m_tx.reset()
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-204-b8cdd391b53d-macOS-x86_64.zip" length="197796867" type="application/octet-stream" sparkle:edSignature="wYyjJ6nNOZVUdcvPezmIQKlAS1XqyQYLbxCoHzEqE1uFMYIhcMp8crASSp/GNC/eQFmp2h+F0Cjx92YgSfWfAA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: Hbpo/kQjakt2IrHeBpeM5EagO+jiUWYO89ZMG2UkHD+dTr9nOqtdj3+4r50ns8YNB1bkxxm3NqDweAk0yD+hCg==
-length: 7555
+edSignature: 0vER/Z3rw8ti2MCmaan6RvOzXrdSlHHjRV9rMI03bndInbyiznf/qu/sQ0vkG4QKcVJBUfar+z/06C/sEImTAg==
+length: 9606
 -->
