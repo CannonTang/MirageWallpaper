@@ -28,6 +28,7 @@ struct SceneUniformInfo {
     bool has_VP { false };
 
     bool has_BONES { false };
+    bool has_BONESALPHA { false };
     bool has_TIME { false };
     bool has_FRAMETIME { false };
     bool has_DAYTIME { false };
@@ -165,6 +166,12 @@ private:
     // the widest case is 64 bands * 4 = 256 floats. Kept as a member to avoid
     // heap-allocating a fresh std::vector on every band, every frame.
     std::array<float, 64 * 4> m_audio_pack_scratch {};
+
+    // Same std140 story for `uniform float g_BonesAlpha[BONECOUNT]`: a scalar
+    // array still burns a full 16-byte register per element, so each bone's
+    // opacity goes in .x of its own vec4. Sized on demand (bone counts vary per
+    // puppet) but reused across frames.
+    std::vector<float> m_bone_alpha_pack_scratch;
 
     Map<void*, SceneUniformNodeData> m_nodeDataMap;
     Map<void*, SceneUniformInfo>     m_nodeUniformInfoMap;

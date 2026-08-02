@@ -134,6 +134,7 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
     info.has_VP = existsOp(G_VP);
 
     info.has_BONES               = existsOp(G_BONES);
+    info.has_BONESALPHA          = existsOp(G_BONESALPHA);
     info.has_TIME                = existsOp(G_TIME);
     info.has_FRAMETIME           = existsOp(G_FRAMETIME);
     info.has_DAYTIME             = existsOp(G_DAYTIME);
@@ -220,9 +221,28 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 updateOp(WE_GLTEX_MIPMAPINFO_NAMES[el.first], (float)rt.mipmap_level);
             }
         }
-        if (nodeData.puppet_layer && nodeData.puppet_layer->hasPuppet() && info.has_BONES) {
+        if (nodeData.puppet_layer && nodeData.puppet_layer->hasPuppet() &&
+            (info.has_BONES || info.has_BONESALPHA)) {
             auto data = nodeData.puppet_layer->genFrame(m_scene->elapsingTime);
-            updateOp(G_BONES, std::span<const float> { data[0].data(), data.size() * 16 });
+            if (info.has_BONES) {
+                updateOp(G_BONES, std::span<const float> { data[0].data(), data.size() * 16 });
+            }
+            // Per-bone opacity envelope for the same frame. genFrame() above
+            // refreshed it; reading it here costs nothing and must not advance
+            // the animation clock a second time. std140 gives each scalar array
+            // element its own 16-byte register, so pack into .x and zero .yzw —
+            // uploading them contiguously would leave every bone past the first
+            // quarter reading padding (i.e. fully transparent).
+            if (info.has_BONESALPHA) {
+                auto alphas = nodeData.puppet_layer->boneAlphas();
+                if (! alphas.empty()) {
+                    m_bone_alpha_pack_scratch.assign(alphas.size() * 4, 0.0f);
+                    for (std::size_t i = 0; i < alphas.size(); ++i) {
+                        m_bone_alpha_pack_scratch[i * 4] = alphas[i];
+                    }
+                    updateOp(G_BONESALPHA, std::span<const float>(m_bone_alpha_pack_scratch));
+                }
+            }
         }
     }
 

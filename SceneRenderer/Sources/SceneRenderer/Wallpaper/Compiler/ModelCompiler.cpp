@@ -1305,10 +1305,20 @@ void WPMdlParser::GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl
 void WPMdlParser::AddPuppetShaderInfo(WPShaderInfo& info, const WPMdl& mdl) {
     info.combos[std::string(WE_CB_SKINNING)]  = "1";
     info.combos[std::string(WE_CB_BONECOUNT)] = std::to_string(mdl.puppet->bones.size());
+    // Only when the puppet ships a real opacity envelope: the WE shaders gate
+    // the g_BonesAlpha uniform on `#ifdef SKINNING_ALPHA`, so defining it at
+    // all (even as 0) would declare an array we then have to feed. Puppets with
+    // flat 1.0 curves keep their existing permutation.
+    if (mdl.puppet->hasAlphaCurves()) {
+        info.combos[std::string(WE_CB_SKINNING_ALPHA)] = "1";
+    }
 }
 
 void WPMdlParser::AddPuppetMatInfo(wpscene::Material& mat, const WPMdl& mdl) {
     mat.combos[std::string(WE_CB_SKINNING)]  = 1;
     mat.combos[std::string(WE_CB_BONECOUNT)] = (i32)mdl.puppet->bones.size();
+    if (mdl.puppet->hasAlphaCurves()) {
+        mat.combos[std::string(WE_CB_SKINNING_ALPHA)] = 1;
+    }
     mat.use_puppet                           = true;
 }

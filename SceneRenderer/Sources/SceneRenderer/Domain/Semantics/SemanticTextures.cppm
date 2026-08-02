@@ -83,6 +83,11 @@ inline constexpr std::string_view WE_CB_REFLECTION { "REFLECTION" };
 inline constexpr std::string_view WE_CB_NORMALMAP { "NORMALMAP" };
 inline constexpr std::string_view WE_CB_MORPHING { "MORPHING" };
 inline constexpr std::string_view WE_CB_SKINNING { "SKINNING" };
+// Gates `uniform float g_BonesAlpha[BONECOUNT]` plus the per-vertex alpha
+// multiply in the WE image shaders. Only set when the puppet actually ships a
+// non-trivial per-bone opacity envelope, so puppets without one keep their
+// current shader permutation.
+inline constexpr std::string_view WE_CB_SKINNING_ALPHA { "SKINNING_ALPHA" };
 inline constexpr std::string_view WE_CB_POINTEMITTER { "POINTEMITTER" };
 inline constexpr std::string_view WE_CB_LINEEMITTER { "LINEEMITTER" };
 inline constexpr std::string_view WE_PRENDER_ROPE { "PRENDER_ROPE" };

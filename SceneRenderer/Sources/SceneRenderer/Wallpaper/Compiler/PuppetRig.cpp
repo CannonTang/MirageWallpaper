@@ -29,9 +29,27 @@ static double SampleBoneCurve(const std::vector<WPPuppet::BoneFrameCurve>&  curv
 static double LayerBoneBlend(const WPPuppet::Animation& anim, unsigned bone_index,
                              const WPPuppet::Animation::InterpolationInfo& info,
                              double                                        layer_blend) {
-    double blend = layer_blend * SampleBoneCurve(anim.blend_curves, bone_index, info);
+    // blend_curves are WE per-bone *opacity* envelopes, not pose blend
+    // weights — the pose math must not see them. Pose blending is driven by
+    // the layer's own blend amount only. See BoneFrameCurve's comment.
+    double blend = layer_blend;
     blend *= SampleBoneCurve(anim.scalar_curves, bone_index, info);
     return std::max(0.0, blend);
+}
+
+// Per-bone opacity contribution of one animation layer, in 0..1.
+//
+// `layer_blend` fades the layer's envelope toward "fully opaque" so a layer
+// that is dialled out cannot darken the sprite: blend 1 yields the raw curve,
+// blend 0 yields 1.0. Layers then multiply together, which is exact for the
+// single-layer case every puppet in the corpus actually uses and stays
+// monotonic and in-range for stacks.
+static double LayerBoneAlpha(const WPPuppet::Animation& anim, unsigned bone_index,
+                             const WPPuppet::Animation::InterpolationInfo& info,
+                             double                                        layer_blend) {
+    const double curve = SampleBoneCurve(anim.blend_curves, bone_index, info);
+    const double w     = std::clamp(layer_blend, 0.0, 1.0);
+    return std::clamp(1.0 + w * (curve - 1.0), 0.0, 1.0);
 }
 
 static bool HasAuthoredTrack(const WPPuppet::BoneTrack& track) {
@@ -129,6 +147,22 @@ void WPPuppet::prepared() {
     }
 
     m_final_affines.resize(bones.size());
+    m_final_alphas.assign(bones.size(), 1.0f);
+}
+
+// A curve that never leaves 1.0 is indistinguishable from "no curve", so it
+// must not switch the shader permutation on. Anything that dips below opaque
+// (blink envelopes, fade-ins) does.
+bool WPPuppet::hasAlphaCurves() const noexcept {
+    constexpr float opaque_eps = 1e-4f;
+    for (const auto& anim : anims) {
+        for (const auto& curve : anim.blend_curves) {
+            for (float v : curve.values) {
+                if (v < 1.0f - opaque_eps) return true;
+            }
+        }
+    }
+    return false;
 }
 
 std::optional<std::size_t> WPPuppet::attachmentIndex(std::string_view name) const noexcept {
@@ -235,6 +269,18 @@ std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
                 scale += blend * (scale_a_delta * one_t + scale_b_delta * t);
             }
         }
+        // Per-bone opacity. Deliberately independent of the pose loop above:
+        // the envelope is a property of the curve, not of the track, and the
+        // bones that matter most here (a lid held still while it fades) have
+        // no authored motion at all. Flat per bone with no parent inheritance,
+        // matching the shader's `g_BonesAlpha[a_BlendIndices.*]` lookup.
+        double alpha = 1.0;
+        for (const auto& layer : puppet_layer.m_layers) {
+            if (layer.anim == nullptr || ! layer.anim_layer.visible) continue;
+            alpha *= LayerBoneAlpha(*layer.anim, i, layer.interp_info, layer.anim_layer.blend);
+        }
+        m_final_alphas[i] = static_cast<float>(std::clamp(alpha, 0.0, 1.0));
+
         if (bone.noBindParent() && world_anchored_bones) {
             trans += bone.vertex_centroid_offset;
         }
@@ -364,6 +410,11 @@ void WPPuppetLayer::prepared(std::span<AnimationLayer> alayers) {
 
 std::span<const Eigen::Affine3f> WPPuppetLayer::genFrame(double time) noexcept {
     return m_puppet->genFrame(*this, time);
+}
+
+std::span<const float> WPPuppetLayer::boneAlphas() const noexcept {
+    if (! m_puppet) return {};
+    return m_puppet->boneAlphas();
 }
 
 uint32_t WPPuppetLayer::boneIndex(std::string_view name) const noexcept {
