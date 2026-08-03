@@ -27,6 +27,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private var activeLoginProcess: Process?
     private var activeLoginMasterFD: Int32?
     private var activeLoginWaitingForGuard = false
+    private var activeLoginGuardType: SteamGuardType?
+    private var activeLoginSubmittedGuardType: SteamGuardType?
     private var activeLoginCancelled = false
     private var installationInProgress = false
     private var installationCancelled = false
@@ -475,7 +477,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                         promptBuffer = ""
                         if !passwordSent { process.terminate() }
                     }
-                    if let type = self.guardType(for: promptBuffer), self.markWaitingForGuard(process: process) {
+                    if !successPublished, let type = self.guardType(for: promptBuffer),
+                       self.markWaitingForGuard(process: process, type: type) {
                         promptBuffer = ""
                         DispatchQueue.main.async { onResult(.waitingForGuard(type)) }
                     }
@@ -490,7 +493,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                     let safeLine = self.redact(line, secrets: [username, password])
                     self.record(.authentication, domain: "Steam 登录服务", safeLine)
                     DispatchQueue.main.async { onLog(safeLine) }
-                    if let type = self.guardType(for: line), self.markWaitingForGuard(process: process) {
+                    if !successPublished, let type = self.guardType(for: line),
+                       self.markWaitingForGuard(process: process, type: type) {
                         DispatchQueue.main.async { onResult(.waitingForGuard(type)) }
                     }
                 })
@@ -540,11 +544,22 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         let process = activeLoginProcess
         let masterFD = activeLoginMasterFD
         let canSubmit = activeLoginWaitingForGuard && process?.isRunning == true && masterFD != nil
-        if canSubmit { activeLoginWaitingForGuard = false }
+        if canSubmit {
+            activeLoginWaitingForGuard = false
+            activeLoginSubmittedGuardType = activeLoginGuardType
+        }
         processLock.unlock()
         guard canSubmit, let masterFD else { return false }
 
         let sent = writeToPTY(code + "\n", masterFD: masterFD)
+        if !sent {
+            processLock.lock()
+            if activeLoginProcess === process {
+                activeLoginWaitingForGuard = true
+                activeLoginSubmittedGuardType = nil
+            }
+            processLock.unlock()
+        }
         record(.authentication, domain: "Steam 登录服务", sent ? "已安全提交 Steam Guard 验证码" : "提交 Steam Guard 验证码失败")
         return sent
     }
@@ -980,6 +995,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         guard activeLoginProcess == nil, !installationInProgress, downloadProcesses.isEmpty,
               workshopSession?.process.isRunning != true, !workshopSessionStarting else { return false }
         activeLoginWaitingForGuard = false
+        activeLoginGuardType = nil
+        activeLoginSubmittedGuardType = nil
         activeLoginCancelled = false
         activeLoginProcess = Process()
         return true
@@ -1001,17 +1018,22 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             activeLoginProcess = nil
             activeLoginMasterFD = nil
             activeLoginWaitingForGuard = false
+            activeLoginGuardType = nil
+            activeLoginSubmittedGuardType = nil
             activeLoginCancelled = false
         }
         processLock.unlock()
         return wasCancelled
     }
 
-    private func markWaitingForGuard(process: Process) -> Bool {
+    private func markWaitingForGuard(process: Process, type: SteamGuardType) -> Bool {
         processLock.lock()
         defer { processLock.unlock() }
-        guard activeLoginProcess === process, !activeLoginWaitingForGuard else { return false }
+        guard activeLoginProcess === process,
+              !activeLoginWaitingForGuard,
+              activeLoginSubmittedGuardType == nil else { return false }
         activeLoginWaitingForGuard = true
+        activeLoginGuardType = type
         return true
     }
 

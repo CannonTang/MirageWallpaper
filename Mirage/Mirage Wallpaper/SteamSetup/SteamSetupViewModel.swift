@@ -119,6 +119,7 @@ class SteamSetupViewModel: ObservableObject {
             }
         ) { [weak self] state in
             guard let self else { return }
+            if self.loginState == .success, state != .success { return }
             self.loginState = state
             if case .waitingForGuard(.mobileConfirm) = state {
                 self.startGuardWaitUpdates()
