@@ -7,6 +7,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Mon, 03 Aug 2026 11:58:51 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>233</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: fba45590a56f7873b56249f40f86d20ccfb82040
+Channel: stable
+
+fix(ci): publish stable releases on Bash 3.2
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.0/Mirage-233-fba45590a56f-macOS-x86_64.zip" length="198294807" type="application/octet-stream" sparkle:edSignature="B9wnx2KmM1644BPbHOOaly/fnboQUEAfBGOr0ASo1hlXpI448DcpycmGjFTzesXFeceHih/lEIonzYXZ+kTODQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Mon, 03 Aug 2026 08:36:04 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -22,128 +38,9 @@ fix(app): sync wallpaper state and browsing controls
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-229-bbddacf00f76-macOS-x86_64.zip" length="198153886" type="application/octet-stream" sparkle:edSignature="No/qTlnLWoCqv2KZoXhusTWySXQbsJDwLSyth/nu0a90dTfKjVEjepO1mN/qdJRWQNDjW4WqYzp8hh+wNeyhBw=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Mon, 03 Aug 2026 08:10:28 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>228</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: cb0f43ed1cb1d43b16b4903872cfe6e72e091e1d
-Channel: beta
-
-fix(workshop): correct select-all tag filtering
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-228-cb0f43ed1cb1-macOS-x86_64.zip" length="198135506" type="application/octet-stream" sparkle:edSignature="ISvqonREAoXUqJ1gShqz47WrygizqvpNsnp+utkigAUmCFyJdoZXd0Qv/MJY+cph7Z+MfDQq6nQCxRJeFkK4CA=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Mon, 03 Aug 2026 07:42:22 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>227</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 2ed07eec5df04e8512b0efa9c1a677798e5514a2
-Channel: beta
-
-fix(workshop): restore animated square previews
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-227-2ed07eec5df0-macOS-x86_64.zip" length="198137251" type="application/octet-stream" sparkle:edSignature="MdTiHZ3s5gPiaTeFg0KnWpPHWZfrUI0uaOq4YwS5QTheVKymcEisc/vSL5ZsDgHf3/bAjcDO7MBrwBme2285AA=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Mon, 03 Aug 2026 06:47:22 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>226</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 82e7d216b51f2867647bfccaaf532d732fd9e2ec
-Channel: beta
-
-feat(workshop): filter browsing by age rating
-
-The Workshop browser had no rating filter because the rating never made it
-past the parser. `toWorkshopItem` stripped `Everyone`, `Questionable` and
-`Mature` from the tag list alongside the bookkeeping tags like `Approved`
-and `Wallpaper`, and `WorkshopItem` had no field to hold one, so the grid
-could not filter on something it never saw. The local library has filtered
-on `project.json`'s `contentrating` all along, so the two halves of the app
-disagreed about whether rating was a thing you could filter on.
-
-So read the rating off the raw tags before they are stripped, and carry it
-on `WorkshopItem` as a `WorkshopAgeRating` whose raw values match
-`contentrating` - a Workshop item and an installed wallpaper now name the
-same rating the same way.
-
-Narrowing has to happen server-side: at ~3.1M published files and 30 per
-page, filtering the page after it arrives would leave the pager reporting
-counts it cannot deliver. The three ratings are mutually exclusive, so
-listing several in `requiredtags` ANDs to zero rows, and `match_all_tags`
-is a query-wide switch that would turn the type and genre filters into ORs
-too. `excludedtags` is the one mechanism that composes: it is orthogonal to
-`requiredtags`, so the unchecked ratings drop out while type and genre keep
-their AND semantics. Verified against the live API - `Scene`+`Anime` with
-the other two ratings excluded returns 30/30 `Everyone` `Scene` rows.
-
-Two edges are deliberate. A cleared filter stops narrowing instead of
-excluding all three, which would ask Steam for an empty set and read as a
-broken browser; the sidebar says so. And a handful of published files carry
-no rating tag at all, which `excludedtags` cannot exclude - those pass
-through, matching how the local library treats a missing `contentrating`.
-
-The filter defaults to all-ages and persists, so adult content stays
-opt-in. Discover's shelves take the same filter as the grid, or a wallpaper
-filtered out of one would resurface in the other. Cards badge only the
-restricted ratings, since badging every all-ages wallpaper would mark
-almost the whole grid.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-226-82e7d216b51f-macOS-x86_64.zip" length="198123451" type="application/octet-stream" sparkle:edSignature="n3vBKAfrTDTb79rbkobg6shTO30zpH5B30OyCJlzxyCgyiQmOUMo2ate8wTeBpp2vyq1bL7R5R4T6RATYzlsAg=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Mon, 03 Aug 2026 05:30:46 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>225</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: d958c342356d89a971c06918df4cf2cfa1364a73
-Channel: beta
-
-feat(app): full support for traditional chinese and english
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-225-d958c342356d-macOS-x86_64.zip" length="198106009" type="application/octet-stream" sparkle:edSignature="BSPscYh//fyl/nYEGSd5B91D6Y8VmOlZsQ4b1Sr5KAyNJhCbsmuMiWVBkXpo01A7/P6DUlUyHTYpjLTV+esVDQ=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 02 Aug 2026 16:40:18 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>224</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: aa83404bda539662fa36086222c5e009ed7efe0a
-Channel: beta
-
-chore(app): adjust wallpaper library paging control
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-224-aa83404bda53-macOS-x86_64.zip" length="198094559" type="application/octet-stream" sparkle:edSignature="us67Mdv+bXbdCe+o/YOOLp4tmc/x39z1tv49xY017Lqihie1XXQ7/IaW69rEbR2KAmkIAu/g2tRC12aN58yLAA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: BaMNuiI2+iV0jdnEKrYJqVdjzqi1s2ndA72m1QptTxed8vuaAJLr+k7wzlPsIgqF9GaSt4L7zef9QvYGct8TCQ==
-length: 8261
+edSignature: J9SN+6Cj5+Etjby29iYqhFD81KRiwIjA0KmQsEqRlxHVetpMjM23qe5PvbCkr+WUCIUaipipTAQ0MPzrK/eLAA==
+length: 2284
 -->
