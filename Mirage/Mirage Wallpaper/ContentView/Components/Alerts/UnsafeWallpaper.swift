@@ -73,8 +73,8 @@ struct UnsafeWallpaper: View {
                     switch request.action {
                     case .applyToCurrent:
                         vm.currentWallpaper = wallpaper
-                    case .applyOnScreen(let screen):
-                        vm.applyOnScreen(wallpaper, screen: screen)
+                    case .applyOnDisplay(let displayID):
+                        vm.applyOnDisplay(wallpaper, displayID: displayID)
                     }
 
                     dismiss()

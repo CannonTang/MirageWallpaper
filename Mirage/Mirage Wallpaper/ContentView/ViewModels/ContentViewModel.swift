@@ -7,6 +7,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
+import CoreGraphics
 
 struct ScreenSaverFeedback: Identifiable {
     let id = UUID()
@@ -60,7 +61,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     struct PendingTrustRequest: Identifiable {
         enum Action {
             case applyToCurrent
-            case applyOnScreen(Int)
+            case applyOnDisplay(CGDirectDisplayID)
         }
         let id = UUID()
         let wallpaper: WEWallpaper

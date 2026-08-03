@@ -5,15 +5,28 @@
 //
 
 import SwiftUI
+import CoreGraphics
 
 struct DisplaySettings: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
+
+    private struct DisplayTarget: Identifiable {
+        let id: CGDirectDisplayID
+        let screen: NSScreen
+    }
 
     init(viewModel: ContentViewModel) {
         self.viewModel = viewModel
     }
 
-    private var screens: [NSScreen] { NSScreen.screens }
+    private var displays: [DisplayTarget] {
+        NSScreen.screens.compactMap { screen in
+            guard let number = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? NSNumber else { return nil }
+            return DisplayTarget(id: number.uint32Value, screen: screen)
+        }
+    }
 
     private var currentWallpaper: WEWallpaper {
         AppDelegate.shared.wallpaperViewModel.currentWallpaper
@@ -41,8 +54,8 @@ struct DisplaySettings: SubviewOfContentView {
 
             ScrollView {
                 VStack(spacing: 14) {
-                    ForEach(Array(screens.enumerated()), id: \.offset) { index, screen in
-                        screenRow(index: index, screen: screen)
+                    ForEach(displays) { target in
+                        screenRow(target)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -58,11 +71,12 @@ struct DisplaySettings: SubviewOfContentView {
         .padding()
     }
 
-    private func screenRow(index: Int, screen: NSScreen) -> some View {
+    private func screenRow(_ target: DisplayTarget) -> some View {
         let renderer = AppDelegate.shared.wallpaperViewModel.renderer
-        let isRunning = renderer.isRendering(on: index)
-        let name = screen.localizedName
-        let size = screen.frame.size
+        let isRunning = renderer.isRendering(onDisplay: target.id)
+        let isMain = CGMainDisplayID() == target.id
+        let name = target.screen.localizedName
+        let size = target.screen.frame.size
         return HStack(spacing: 14) {
             Image(systemName: "display")
                 .font(.system(size: 32))
@@ -70,9 +84,9 @@ struct DisplaySettings: SubviewOfContentView {
                 .frame(width: 56)
             VStack(alignment: .leading, spacing: 4) {
                 Text(name).font(.headline)
-                Text("\(Int(size.width)) × \(Int(size.height))\(index == 0 ? L(" · 主屏") : "")")
+                Text("\(Int(size.width)) × \(Int(size.height))\(isMain ? L(" · 主屏") : "")")
                     .font(.caption).foregroundStyle(.secondary)
-                if let w = renderer.currentWallpaper(on: index) {
+                if let w = renderer.currentWallpaper(onDisplay: target.id) {
                     Text("正在渲染：\(w.project.title)")
                         .font(.caption2).foregroundStyle(.tint).lineLimit(1)
                 } else {
@@ -82,12 +96,12 @@ struct DisplaySettings: SubviewOfContentView {
             Spacer()
             VStack(spacing: 6) {
                 Button("应用到此屏") {
-                    applyCurrent(to: index)
+                    applyCurrent(to: target.id)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!currentWallpaper.isValid)
                 if isRunning {
-                    Button("停止") { renderer.stop(on: index) }
+                    Button("停止") { renderer.stop(displayID: target.id) }
                         .buttonStyle(.bordered)
                 }
             }
@@ -98,14 +112,14 @@ struct DisplaySettings: SubviewOfContentView {
             .strokeBorder(isRunning ? Color.accentColor : .clear, lineWidth: 2))
     }
 
-    private func applyCurrent(to screenIndex: Int) {
+    private func applyCurrent(to displayID: CGDirectDisplayID) {
         let vm = AppDelegate.shared.wallpaperViewModel
         let w = vm.currentWallpaper
         guard w.isValid, w.kind != .unsupported else { return }
         if w.kind == .web, !vm.isTrusted(w) {
-            viewModel.warningUnsafeWallpaperModal(which: w, action: .applyOnScreen(screenIndex))
+            viewModel.warningUnsafeWallpaperModal(which: w, action: .applyOnDisplay(displayID))
             return
         }
-        vm.applyOnScreen(w, screen: screenIndex)
+        vm.applyOnDisplay(w, displayID: displayID)
     }
 }
