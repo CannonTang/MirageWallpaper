@@ -309,9 +309,9 @@ enum SteamServiceState: Equatable {
         switch self {
         case .unknown: return L("尚未检测")
         case .checking: return L("检测中")
-        case .available(let detail): return detail
-        case .needsAction(let detail): return detail
-        case .unavailable(let detail): return detail
+        case .available(let detail): return L(detail)
+        case .needsAction(let detail): return L(detail)
+        case .unavailable(let detail): return L(detail)
         }
     }
 }

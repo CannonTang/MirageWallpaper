@@ -258,8 +258,8 @@ struct SteamSetupView: View {
 struct FeatureRow: View {
     var icon: String
     var color: Color
-    var title: String
-    var text: String
+    var title: LocalizedStringKey
+    var text: LocalizedStringKey
 
     var body: some View {
         HStack(spacing: 12) {

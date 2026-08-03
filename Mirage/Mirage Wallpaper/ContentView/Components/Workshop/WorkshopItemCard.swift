@@ -99,7 +99,7 @@ struct WorkshopItemCard: View {
             HStack(spacing: 3) {
                 Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark")
                     .font(.caption2).bold()
-                Text(presetNeedsDependency ? "缺少基础壁纸" : "已下载")
+                Text(LocalizedStringKey(presetNeedsDependency ? "缺少基础壁纸" : "已下载"))
                     .font(.caption2)
             }
             .padding(.horizontal, 7)

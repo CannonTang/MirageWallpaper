@@ -70,7 +70,7 @@ struct DisplaySettings: SubviewOfContentView {
                 .frame(width: 56)
             VStack(alignment: .leading, spacing: 4) {
                 Text(name).font(.headline)
-                Text("\(Int(size.width)) × \(Int(size.height))\(index == 0 ? " · 主屏" : "")")
+                Text("\(Int(size.width)) × \(Int(size.height))\(index == 0 ? L(" · 主屏") : "")")
                     .font(.caption).foregroundStyle(.secondary)
                 if let w = renderer.currentWallpaper(on: index) {
                     Text("正在渲染：\(w.project.title)")

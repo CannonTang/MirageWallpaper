@@ -47,7 +47,7 @@ struct TopTabBar: SubviewOfContentView {
     // A single segmented pill. The selected segment gets an accent-filled
     // capsule; hover gets a soft translucent capsule. No hard rectangles.
     @ViewBuilder
-    private func tab(index: Int, title: String, systemImage: String, badge: Int = 0) -> some View {
+    private func tab(index: Int, title: LocalizedStringKey, systemImage: String, badge: Int = 0) -> some View {
         let isSelected = viewModel.topTabBarSelection == index
         let isHovering = viewModel.topTabBarHoverSelection == index
 
@@ -86,7 +86,7 @@ struct TopTabBar: SubviewOfContentView {
     }
 
     @ViewBuilder
-    private func chromeButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func chromeButton(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         ChromeButton(title: title, systemImage: systemImage, action: action)
     }
 }
@@ -94,7 +94,7 @@ struct TopTabBar: SubviewOfContentView {
 // A borderless chrome button with a subtle rounded hover highlight, replacing
 // the old hard `Divider`-separated plain buttons.
 private struct ChromeButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let systemImage: String
     let action: () -> Void
 

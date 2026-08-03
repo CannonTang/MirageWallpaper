@@ -238,7 +238,7 @@ struct GeneralPage: SettingsPage {
                                 .font(.title2)
                                 .foregroundStyle(.orange)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(apiKeyIsEmpty ? "请设置您自己的 Steam Web API Key" : "Steam Web API Key 格式无效")
+                                Text(LocalizedStringKey(apiKeyIsEmpty ? "请设置您自己的 Steam Web API Key" : "Steam Web API Key 格式无效"))
                                     .font(.callout)
                                     .bold()
                                 Text(apiKeyIsEmpty

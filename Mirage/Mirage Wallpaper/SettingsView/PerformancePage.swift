@@ -120,7 +120,7 @@ struct PerformancePage: SettingsPage {
 // one-shot action (it mutates several settings at once), so this stays a button
 // with hover feedback rather than a persistent selection.
 private struct QualityPresetButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let action: () -> Void
 
     @State private var hovering = false

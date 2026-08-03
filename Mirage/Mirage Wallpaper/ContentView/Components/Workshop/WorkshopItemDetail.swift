@@ -182,7 +182,7 @@ struct WorkshopItemDetail: View {
             }
         } else if !hasDownloadTask, installed?.isValid == true {
             Button { } label: {
-                Label(item.isPreset ? "预设已安装" : "已下载", systemImage: "checkmark.circle.fill")
+                Label(LocalizedStringKey(item.isPreset ? "预设已安装" : "已下载"), systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -214,7 +214,7 @@ struct WorkshopItemDetail: View {
                     } else {
                         ProgressView(value: 0)
                     }
-                    Text(percent.map { "\(Int($0 * 100))% 下载中…" } ?? "正在连接 Steam…")
+                    Text(percent.map { L("%d%% 下载中…", Int($0 * 100)) } ?? L("正在连接 Steam…"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -272,7 +272,7 @@ struct WorkshopItemDetail: View {
             Button {
                 workshopViewModel.downloadItem(item)
             } label: {
-                Label(item.isPreset ? "下载预设" : "下载壁纸", systemImage: "arrow.down.circle.fill")
+                Label(LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"), systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -309,7 +309,7 @@ struct WorkshopItemDetail: View {
         }
     }
 
-    func sectionHeader(_ title: String) -> some View {
+    func sectionHeader(_ title: LocalizedStringKey) -> some View {
         HStack(spacing: 3) {
             Text(title)
             VStack {
@@ -322,7 +322,7 @@ struct WorkshopItemDetail: View {
 struct StatView: View {
     var icon: String
     var value: String
-    var label: String
+    var label: LocalizedStringKey
 
     var body: some View {
         VStack(spacing: 2) {

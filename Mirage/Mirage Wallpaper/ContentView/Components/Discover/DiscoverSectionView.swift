@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct DiscoverSectionView: View {
-    var title: String
+    var title: LocalizedStringKey
     var icon: String
     var iconColor: Color
     var items: [WorkshopItem]

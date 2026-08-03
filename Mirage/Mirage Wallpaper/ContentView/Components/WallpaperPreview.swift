@@ -62,7 +62,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                         isEditingId = ""
                                     }
                             } else {
-                                Text(wallpaperViewModel.currentWallpaper.project.title.isEmpty ? "未命名" : wallpaperViewModel.currentWallpaper.project.title)
+                                Text(wallpaperViewModel.currentWallpaper.project.title.isEmpty ? L("未命名") : wallpaperViewModel.currentWallpaper.project.title)
                                     .frame(minWidth: 50)
                                     .id("title")
                                     .lineLimit(1)
@@ -80,7 +80,7 @@ struct WallpaperPreview: SubviewOfContentView {
                             .resizable()
                             .frame(width: 32, height: 32)
                             .foregroundStyle(.secondary)
-                        Text(wallpaperViewModel.currentWallpaper.project.resolvedAuthor ?? "佚名作者")
+                        Text(wallpaperViewModel.currentWallpaper.project.resolvedAuthor ?? L("佚名作者"))
                             .lineLimit(1)
                     }
                     HStack {
@@ -292,7 +292,7 @@ struct WallpaperPreview: SubviewOfContentView {
         }
     }
     
-    func sectionHeader(_ title: String) -> some View {
+    func sectionHeader(_ title: LocalizedStringKey) -> some View {
         HStack(spacing: 3) {
             Text(title)
             VStack {

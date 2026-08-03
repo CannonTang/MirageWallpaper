@@ -88,7 +88,7 @@ struct FilterResults: View {
                                     HStack(spacing: 2) {
                                         Image(systemName: image)
                                             .foregroundStyle(color)
-                                        Text(option)
+                                        Text(LocalizedStringKey(option))
                                     }
                                 }
                                 .toggleStyle(.checkbox)
@@ -119,7 +119,7 @@ struct FilterResults: View {
                     VStack(spacing: 15) {
                         FilterSection("类型", alignment: .leading) {
                             ForEach(Array(zip(FRType.allOptions.indices, FRType.allOptions)), id: \.0) { (i, option) in
-                                Toggle(option, isOn: Binding<Bool>(get: {
+                                Toggle(LocalizedStringKey(option), isOn: Binding<Bool>(get: {
                                     viewModel.type.contains(FRType(rawValue: 1 << i))
                                 }, set: {
                                     if $0 {
@@ -133,7 +133,7 @@ struct FilterResults: View {
                         }
                         FilterSection("分级", alignment: .leading) {
                             ForEach(Array(zip(FRAgeRating.allOptions.indices, FRAgeRating.allOptions)), id: \.0) { (i, option) in
-                                Toggle(option, isOn: Binding<Bool>(get: {
+                                Toggle(LocalizedStringKey(option), isOn: Binding<Bool>(get: {
                                     viewModel.ageRating.contains(FRAgeRating(rawValue: 1 << i))
                                 }, set: {
                                     if $0 {
@@ -150,7 +150,7 @@ struct FilterResults: View {
                                 ForEach(Array(zip(FRSource.allOptions.indices, FRSource.allOptions)), id: \.0) { (i, option) in
                                     // 仅工坊 / 我的壁纸 两项有意义
                                     if i == 1 || i == 2 {
-                                        Toggle(option, isOn: Binding<Bool>(get: {
+                                        Toggle(LocalizedStringKey(option), isOn: Binding<Bool>(get: {
                                             viewModel.source.contains(FRSource(rawValue: 1 << i))
                                         }, set: {
                                             if $0 {
@@ -176,7 +176,7 @@ struct FilterResults: View {
                             .buttonStyle(.link)
                             Group {
                                 ForEach(Array(zip(FRTag.allOptions.indices, FRTag.allOptions)), id: \.0) { (i, option) in
-                                    Toggle(option, isOn: Binding<Bool>(get: {
+                                    Toggle(LocalizedStringKey(option), isOn: Binding<Bool>(get: {
                                         viewModel.tag.contains(FRTag(rawValue: 1 << i))
                                     }, set: {
                                         if $0 {

@@ -462,7 +462,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                         }
                         self.isLoggedIn = true
                         self.savedUsername = username
-                        self.authenticationState = .available("已登录 \(username)")
+                        self.authenticationState = .available(L("已登录 %@", username))
                         onResult(.success)
                     }
                 }

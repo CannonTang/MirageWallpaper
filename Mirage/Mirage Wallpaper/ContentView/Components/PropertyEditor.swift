@@ -226,7 +226,7 @@ struct PropertyRow: View {
         VStack(alignment: .leading, spacing: 4) {
             labelView(lineLimit: 2)
             HStack {
-                Text(displayPath.isEmpty ? "未选择" : displayPath)
+                Text(displayPath.isEmpty ? L("未选择") : displayPath)
                     .font(.caption)
                     .foregroundStyle(displayPath.isEmpty ? .secondary : .primary)
                     .lineLimit(1)

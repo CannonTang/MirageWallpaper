@@ -96,7 +96,7 @@ struct DownloadPopover: View {
         )) {
             Button("好", role: .cancel) { revealError = nil }
         } message: {
-            Text(revealError ?? "未知错误")
+            Text(revealError ?? L("未知错误"))
         }
     }
 
@@ -176,7 +176,7 @@ struct DownloadRow: View {
                         ProgressView(value: 0)
                     }
                     HStack {
-                        Text(percent.map { "\(Int($0 * 100))%" } ?? "正在连接 Steam…")
+                        Text(percent.map { "\(Int($0 * 100))%" } ?? L("正在连接 Steam…"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()

@@ -28,7 +28,7 @@ struct UnsafeWallpaper: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("正在打开\(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知")类壁纸")
+            Text(L("正在打开%@类壁纸", L(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知")))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .font(.title2)
@@ -42,7 +42,7 @@ struct UnsafeWallpaper: View {
                     .shadow(radius: 6)
                     .frame(maxWidth: 100)
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("你即将把以下\(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知来源")类文件作为壁纸运行：")
+                    Text(L("你即将把以下%@类文件作为壁纸运行：", L(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知来源")))
                     Text(wallpaper.resolvedEntryURL.path(percentEncoded: false)).bold()
                     Text("Mirage 无法控制该文件的行为，网页壁纸可能包含可执行脚本。请确认它来自可信来源后再继续。")
                     Text(seconds > 0 ? "请等待 \(seconds) 秒。" : "请注意潜在的恶意代码风险。")
