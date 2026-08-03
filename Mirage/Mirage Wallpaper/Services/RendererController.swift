@@ -38,7 +38,7 @@ final class RendererProcess {
     let stdoutPipe: Pipe?
     let stderrPipe: Pipe
     let wallpaper: WEWallpaper
-    let screenIndex: Int
+    let displayID: CGDirectDisplayID
     let generation: UInt64
     var desiredVolume: Float
     var desiredMuted: Bool
@@ -90,14 +90,14 @@ final class RendererProcess {
     var tempFiles: [URL] = []
 
     init(process: Process, stdinPipe: Pipe, stdoutPipe: Pipe?, stderrPipe: Pipe,
-         wallpaper: WEWallpaper, screenIndex: Int, generation: UInt64,
+         wallpaper: WEWallpaper, displayID: CGDirectDisplayID, generation: UInt64,
          desiredVolume: Float, desiredMuted: Bool, spectrumEnabled: Bool) {
         self.process = process
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
         self.wallpaper = wallpaper
-        self.screenIndex = screenIndex
+        self.displayID = displayID
         self.generation = generation
         self.desiredVolume = desiredVolume
         self.desiredMuted = desiredMuted
@@ -191,7 +191,7 @@ final class RendererProcess {
         }
         outboundLock.unlock()
         if overflowed {
-            NSLog("[Mirage] 控制指令队列已满，丢弃最旧指令 (屏幕=\(screenIndex))")
+            NSLog("[Mirage] 控制指令队列已满，丢弃最旧指令 (显示器=\(displayID))")
         }
     }
 
@@ -274,7 +274,7 @@ final class RendererProcess {
                     return
                 }
                 if failure != EPIPE {
-                    NSLog("[Mirage] 控制管道写入失败 (屏幕=\(screenIndex)): errno=\(failure)")
+                    NSLog("[Mirage] 控制管道写入失败 (显示器=\(displayID)): errno=\(failure)")
                 }
                 // EPIPE / EBADF: the renderer is gone. Drop the queue instead
                 // of spinning on a dead descriptor.
@@ -285,7 +285,7 @@ final class RendererProcess {
                 // A pipe never accepts zero bytes of a non-empty write. Bail
                 // out rather than spin: the source is level-triggered and
                 // would fire again immediately.
-                NSLog("[Mirage] 控制管道写入 0 字节，关闭通道 (屏幕=\(screenIndex))")
+                NSLog("[Mirage] 控制管道写入 0 字节，关闭通道 (显示器=\(displayID))")
                 closeWriter()
                 return
             }
@@ -395,7 +395,7 @@ final class RendererProcess {
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         kill(pid, SIGKILL)
-        NSLog("[Mirage] 渲染器未响应退出请求，已强制结束 (屏幕=\(screenIndex))")
+        NSLog("[Mirage] 渲染器未响应退出请求，已强制结束 (显示器=\(displayID))")
     }
 
     func startReadingOutput(onEvent: @escaping ([String: Any]) -> Void) {
@@ -462,9 +462,9 @@ struct RenderOptions {
 
 // Subprocess control: the renderer receives JSON-line commands via stdin.
 final class RendererController {
-    private var running: [Int: RendererProcess] = [:]
-    private var candidates: [Int: RendererProcess] = [:]
-    private var generations: [Int: UInt64] = [:]
+    private var running: [CGDirectDisplayID: RendererProcess] = [:]
+    private var candidates: [CGDirectDisplayID: RendererProcess] = [:]
+    private var generations: [CGDirectDisplayID: UInt64] = [:]
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.renderer")
     // The renderer's Vulkan and scene-load guards are 30 seconds each. Keep
     // the old wallpaper alive slightly longer so a slow-but-valid cold start
@@ -504,10 +504,33 @@ final class RendererController {
         }
     }
 
+    func displayID(for screenIndex: Int) -> CGDirectDisplayID? {
+        guard NSScreen.screens.indices.contains(screenIndex),
+              let number = NSScreen.screens[screenIndex].deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+        return number.uint32Value
+    }
+
+    func screenIndex(for displayID: CGDirectDisplayID) -> Int? {
+        NSScreen.screens.firstIndex {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                .uint32Value == displayID
+        }
+    }
+
     /// Asks the renderer on `screenIndex` to write a still of its own current
     /// frame to `path`. The renderer owns the pixels — no screen-recording
     /// permission is involved. `completion` runs on the main queue exactly once.
     func snapshot(on screenIndex: Int, path: String,
+                  completion: @escaping (Bool) -> Void) {
+        guard let displayID = displayID(for: screenIndex) else {
+            completion(false)
+            return
+        }
+        snapshot(onDisplay: displayID, path: path, completion: completion)
+    }
+
+    func snapshot(onDisplay displayID: CGDirectDisplayID, path: String,
                   completion: @escaping (Bool) -> Void) {
         let token = UUID().uuidString
         queue.async { [weak self] in
@@ -515,7 +538,7 @@ final class RendererController {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
-            guard let handle = self.running[screenIndex] else {
+            guard let handle = self.running[displayID] else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
@@ -524,7 +547,7 @@ final class RendererController {
             self.queue.asyncAfter(deadline: .now() + Self.snapshotTimeout) { [weak self] in
                 guard let self, let pending = self.snapshotPending.removeValue(forKey: token)
                 else { return }
-                NSLog("[Mirage] 壁纸截图超时 (屏幕=\(screenIndex))")
+                NSLog("[Mirage] 壁纸截图超时 (显示器=\(displayID))")
                 DispatchQueue.main.async { pending(false) }
             }
         }
@@ -635,18 +658,25 @@ final class RendererController {
 
     @discardableResult
     func render(_ wallpaper: WEWallpaper, on screenIndex: Int = 0, options: RenderOptions) -> Bool {
+        guard let displayID = displayID(for: screenIndex) else { return false }
+        return render(wallpaper, onDisplay: displayID, options: options)
+    }
+
+    @discardableResult
+    func render(_ wallpaper: WEWallpaper, onDisplay displayID: CGDirectDisplayID,
+                options: RenderOptions) -> Bool {
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return false }
         // Web wallpapers execute untrusted third-party HTML/JS. Never spawn one
         // the user has not explicitly confirmed, whatever code path led here.
         if wallpaper.kind == .web, let isTrusted = isWallpaperTrusted, !isTrusted(wallpaper) {
-            NSLog("[Mirage] 已阻止未确认的网页壁纸启动 (屏幕=\(screenIndex)): \(wallpaper.id)")
+            NSLog("[Mirage] 已阻止未确认的网页壁纸启动 (显示器=\(displayID)): \(wallpaper.id)")
             return false
         }
         guard let binary = binaryURL(for: wallpaper.kind) else {
             NSLog("[Mirage] 找不到 \(wallpaper.kind) 渲染器二进制")
             return false
         }
-        NSLog("[Mirage] 启动渲染器: \(binary.path) 屏幕=\(screenIndex)")
+        NSLog("[Mirage] 启动渲染器: \(binary.path) 显示器=\(displayID)")
 
         // Scene wallpapers have a real first-frame protocol. Keep the active
         // renderer alive while its transparent candidate prepares. Other
@@ -655,11 +685,11 @@ final class RendererController {
         var supersededCandidate: RendererProcess?
         var replacedActive: RendererProcess?
         let generation: UInt64 = queue.sync {
-            let next = (generations[screenIndex] ?? 0) &+ 1
-            generations[screenIndex] = next
-            supersededCandidate = candidates.removeValue(forKey: screenIndex)
+            let next = (generations[displayID] ?? 0) &+ 1
+            generations[displayID] = next
+            supersededCandidate = candidates.removeValue(forKey: displayID)
             if !deferredScene {
-                replacedActive = running.removeValue(forKey: screenIndex)
+                replacedActive = running.removeValue(forKey: displayID)
             }
             return next
         }
@@ -682,7 +712,7 @@ final class RendererController {
             args += ["--render-scale", String(format: "%.3f", options.renderScale)]
             args += ["--msaa", String(options.msaaSamples)]
             if options.loadFromMemory { args += ["--load-from-memory"] }
-            args += ["--screen", String(screenIndex)]
+            args += ["--display-id", String(displayID)]
             // Candidates stay transparent and silent until Metal confirms a
             // presented frame and Mirage explicitly activates them.
             args += ["--control-stdin", "--deferred-show", "--muted"]
@@ -709,7 +739,7 @@ final class RendererController {
             args += ["--fps", String(options.fps)]
             if options.loadFromMemory { args += ["--load-from-memory"] }
             args += ["--volume", String(format: "%.3f", options.muted ? 0 : options.volume)]
-            args += ["--screen", String(screenIndex)]
+            args += ["--display-id", String(displayID)]
             if options.enableSpectrum {
                 args += ["--external-spectrum"]
             } else {
@@ -719,7 +749,7 @@ final class RendererController {
 
         case .video:
             args += [wallpaper.renderDirectory.path]
-            args += ["--screen", String(screenIndex)]
+            args += ["--display-id", String(displayID)]
             args += ["--volume", String(format: "%.3f", options.volume)]
             args += ["--fill", options.fillMode.rawValue]
             if options.loadFromMemory { args += ["--load-from-memory"] }
@@ -747,7 +777,7 @@ final class RendererController {
             stdoutPipe: stdoutPipe,
             stderrPipe: stderrPipe,
             wallpaper: wallpaper,
-            screenIndex: screenIndex,
+            displayID: displayID,
             generation: generation,
             desiredVolume: options.volume,
             desiredMuted: options.muted,
@@ -785,18 +815,18 @@ final class RendererController {
                 case 13: sigName = "SIGPIPE(13)"
                 default: sigName = "SIGNAL(\(signalNum))"
                 }
-                NSLog("[Mirage] 渲染器信号退出: \(sigName) core=\(coreDumped) 屏幕=\(screenIndex)")
+                NSLog("[Mirage] 渲染器信号退出: \(sigName) core=\(coreDumped) 显示器=\(displayID)")
             }
-            NSLog("[Mirage] 渲染器退出 (屏幕=\(screenIndex), 状态=\(status), 原因=\(reason.rawValue))")
+            NSLog("[Mirage] 渲染器退出 (显示器=\(displayID), 状态=\(status), 原因=\(reason.rawValue))")
             guard let self else { return }
             self.queue.async {
-                let wasActive = self.running[screenIndex] === handle
-                let wasCandidate = self.candidates[screenIndex] === handle
+                let wasActive = self.running[displayID] === handle
+                let wasCandidate = self.candidates[displayID] === handle
                 if wasActive {
-                    self.running[screenIndex] = nil
+                    self.running[displayID] = nil
                 }
                 if wasCandidate {
-                    self.candidates[screenIndex] = nil
+                    self.candidates[displayID] = nil
                 }
                 if wasActive || wasCandidate {
                     let abnormal = status != 0 && !handle.isTerminated
@@ -806,8 +836,10 @@ final class RendererController {
                         // Only this handle's own exit clears the row. A renderer
                         // replaced by a newer one is no longer `wasActive`, so a
                         // late exit cannot wipe the progress of its successor.
-                        VideoTranscodeProgressModel.shared.finish(screen: screenIndex)
-                        self.onProcessExit?(screenIndex, abnormal)
+                        if let screen = self.screenIndex(for: displayID) {
+                            VideoTranscodeProgressModel.shared.finish(screen: screen)
+                            self.onProcessExit?(screen, abnormal)
+                        }
                     }
                 }
             }
@@ -826,11 +858,11 @@ final class RendererController {
             // A renderer can fail immediately after Process.run() succeeds.
             // Never register an already-dead handle after its termination
             // callback has raced past the controller queue.
-            guard generations[screenIndex] == generation, proc.isRunning else { return }
+            guard generations[displayID] == generation, proc.isRunning else { return }
             if deferredScene {
-                candidates[screenIndex] = handle
+                candidates[displayID] = handle
             } else {
-                running[screenIndex] = handle
+                running[displayID] = handle
             }
             accepted = true
         }
@@ -849,13 +881,17 @@ final class RendererController {
         if deferredScene {
             queue.asyncAfter(deadline: .now() + Self.sceneStartupTimeout) { [weak self, weak handle] in
                 guard let self, let handle,
-                      self.candidates[screenIndex] === handle else { return }
-                self.candidates[screenIndex] = nil
+                      self.candidates[displayID] === handle else { return }
+                self.candidates[displayID] = nil
                 handle.stop()
                 SystemAudioSpectrumService.shared.setEnabled(
                     self.hasSpectrumConsumersLocked())
-                NSLog("[Mirage] 场景首帧超时，保留旧壁纸 (屏幕=\(screenIndex), generation=\(generation))")
-                DispatchQueue.main.async { self.onProcessExit?(screenIndex, true) }
+                NSLog("[Mirage] 场景首帧超时，保留旧壁纸 (显示器=\(displayID), generation=\(generation))")
+                DispatchQueue.main.async {
+                    if let screen = self.screenIndex(for: displayID) {
+                        self.onProcessExit?(screen, true)
+                    }
+                }
             }
         }
         return true
@@ -866,11 +902,11 @@ final class RendererController {
         let elapsed = (message["elapsed_ms"] as? NSNumber)?.intValue
         queue.async { [weak self, weak handle] in
             guard let self, let handle,
-                  self.generations[handle.screenIndex] == handle.generation else { return }
+                  self.generations[handle.displayID] == handle.generation else { return }
 
             if event == "audio-demand" {
-                guard self.running[handle.screenIndex] === handle ||
-                      self.candidates[handle.screenIndex] === handle else { return }
+                guard self.running[handle.displayID] === handle ||
+                      self.candidates[handle.displayID] === handle else { return }
                 handle.spectrumDemanded = (message["needed"] as? NSNumber)?.boolValue ?? false
                 SystemAudioSpectrumService.shared.setEnabled(self.hasSpectrumConsumersLocked())
                 return
@@ -890,9 +926,10 @@ final class RendererController {
             }
 
             if event == "video-did-end" {
-                guard self.running[handle.screenIndex] === handle else { return }
-                let screen = handle.screenIndex
+                guard self.running[handle.displayID] === handle else { return }
+                let displayID = handle.displayID
                 DispatchQueue.main.async {
+                    guard let screen = self.screenIndex(for: displayID) else { return }
                     NotificationCenter.default.post(
                         name: .rendererVideoDidEnd,
                         object: nil,
@@ -906,24 +943,26 @@ final class RendererController {
             // deferred first-frame handshake — so their events have to be handled
             // ahead of the candidate gate below or they are silently dropped.
             if event == "video-transcoding" {
-                guard self.running[handle.screenIndex] === handle else { return }
-                let screen = handle.screenIndex
+                guard self.running[handle.displayID] === handle else { return }
+                let displayID = handle.displayID
                 let wallpaper = handle.wallpaper
                 let progress = (message["progress"] as? NSNumber)?.doubleValue ?? 0
                 let done = (message["done"] as? NSNumber)?.boolValue ?? false
                 DispatchQueue.main.async {
+                    guard let screen = self.screenIndex(for: displayID) else { return }
                     self.onVideoTranscodeProgress?(screen, wallpaper, progress, done)
                 }
                 return
             }
 
             if event == "video-error" {
-                guard self.running[handle.screenIndex] === handle else { return }
-                let screen = handle.screenIndex
+                guard self.running[handle.displayID] === handle else { return }
+                let displayID = handle.displayID
                 let wallpaper = handle.wallpaper
                 let text = (message["message"] as? String) ?? "unknown error"
-                NSLog("[Mirage] 视频壁纸无法播放 (屏幕=\(screen)): \(text)")
+                NSLog("[Mirage] 视频壁纸无法播放 (显示器=\(displayID)): \(text)")
                 DispatchQueue.main.async {
+                    guard let screen = self.screenIndex(for: displayID) else { return }
                     self.onVideoError?(screen, wallpaper, text)
                     // A playlist waits on end-of-video to advance, and a wallpaper
                     // that cannot decode never reaches an end. Nudge it so one
@@ -937,23 +976,23 @@ final class RendererController {
                 return
             }
 
-            guard self.candidates[handle.screenIndex] === handle else { return }
+            guard self.candidates[handle.displayID] === handle else { return }
 
             switch event {
             case "vulkan-ready", "scene-ready":
                 if let elapsed {
-                    NSLog("[Mirage] 场景启动阶段 \(event): \(elapsed)ms 屏幕=\(handle.screenIndex)")
+                    NSLog("[Mirage] 场景启动阶段 \(event): \(elapsed)ms 显示器=\(handle.displayID)")
                 }
 
             case "first-frame-presented":
                 if let elapsed {
-                    NSLog("[Mirage] 场景候选首帧已显示: \(elapsed)ms 屏幕=\(handle.screenIndex)")
+                    NSLog("[Mirage] 场景候选首帧已显示: \(elapsed)ms 显示器=\(handle.displayID)")
                 }
                 handle.send(["cmd": "activate"])
 
             case "activated":
-                let previous = self.running.updateValue(handle, forKey: handle.screenIndex)
-                self.candidates[handle.screenIndex] = nil
+                let previous = self.running.updateValue(handle, forKey: handle.displayID)
+                self.candidates[handle.displayID] = nil
                 // The candidate is visibly covering the old window before the
                 // old process is stopped, so switching never exposes desktop
                 // or a black placeholder. Unmute only after the old audio is
@@ -965,7 +1004,7 @@ final class RendererController {
                                               fps: handle.desiredPowerFps))
                 SystemAudioSpectrumService.shared.setEnabled(
                     self.hasSpectrumConsumersLocked())
-                NSLog("[Mirage] 场景切换完成 (屏幕=\(handle.screenIndex), generation=\(handle.generation))")
+                NSLog("[Mirage] 场景切换完成 (显示器=\(handle.displayID), generation=\(handle.generation))")
 
             default:
                 break
@@ -974,13 +1013,25 @@ final class RendererController {
     }
 
     func stop(on screenIndex: Int) {
+        guard let displayID = displayID(for: screenIndex) else { return }
+        stop(displayID: displayID)
+    }
+
+    func stop(displayID: CGDirectDisplayID) {
         let handles: [RendererProcess] = queue.sync {
-            generations[screenIndex] = (generations[screenIndex] ?? 0) &+ 1
-            return [running.removeValue(forKey: screenIndex),
-                    candidates.removeValue(forKey: screenIndex)].compactMap { $0 }
+            generations[displayID] = (generations[displayID] ?? 0) &+ 1
+            return [running.removeValue(forKey: displayID),
+                    candidates.removeValue(forKey: displayID)].compactMap { $0 }
         }
         handles.forEach { $0.stop() }
         refreshAudioSpectrumService()
+    }
+
+    func stopDisplays(except displayIDs: Set<CGDirectDisplayID>) {
+        let removed = queue.sync {
+            Set(running.keys).union(candidates.keys).subtracting(displayIDs)
+        }
+        removed.forEach { stop(displayID: $0) }
     }
 
     func stopAll() {
@@ -1048,14 +1099,29 @@ final class RendererController {
     }
 
     func isRendering(on screenIndex: Int) -> Bool {
-        queue.sync { running[screenIndex]?.process.isRunning ?? false }
+        guard let displayID = displayID(for: screenIndex) else { return false }
+        return isRendering(onDisplay: displayID)
+    }
+
+    func isRendering(onDisplay displayID: CGDirectDisplayID) -> Bool {
+        queue.sync { running[displayID]?.process.isRunning ?? false }
     }
 
     func currentWallpaper(on screenIndex: Int) -> WEWallpaper? {
-        queue.sync { running[screenIndex]?.wallpaper }
+        guard let displayID = displayID(for: screenIndex) else { return nil }
+        return currentWallpaper(onDisplay: displayID)
+    }
+
+    func currentWallpaper(onDisplay displayID: CGDirectDisplayID) -> WEWallpaper? {
+        queue.sync { running[displayID]?.wallpaper }
     }
 
     var activeScreens: [Int] {
+        let displayIDs = queue.sync { Array(running.keys) }
+        return displayIDs.compactMap(screenIndex(for:)).sorted()
+    }
+
+    var activeDisplayIDs: [CGDirectDisplayID] {
         queue.sync { Array(running.keys).sorted() }
     }
 
@@ -1070,11 +1136,11 @@ final class RendererController {
     // MARK: Live control (broadcast or per-screen)
 
     /// Callers must already be executing on `queue`.
-    private func targetsLocked(_ screenIndex: Int?, includeCandidates: Bool) -> [RendererProcess] {
+    private func targetsLocked(_ displayID: CGDirectDisplayID?, includeCandidates: Bool) -> [RendererProcess] {
         var result: [RendererProcess] = []
-        if let s = screenIndex {
-            if let p = running[s] { result.append(p) }
-            if includeCandidates, let p = candidates[s] { result.append(p) }
+        if let displayID {
+            if let p = running[displayID] { result.append(p) }
+            if includeCandidates, let p = candidates[displayID] { result.append(p) }
         } else {
             result.append(contentsOf: running.values)
             if includeCandidates {
@@ -1084,13 +1150,13 @@ final class RendererController {
         return result
     }
 
-    private func forEach(_ screenIndex: Int?, includeCandidates: Bool = true,
+    private func forEach(_ displayID: CGDirectDisplayID?, includeCandidates: Bool = true,
                          _ body: (RendererProcess) -> Void) {
         // Snapshot the targets under the controller queue, then run `body`
         // outside it. Bodies talk to renderer stdin, which must never happen
         // while the serial queue is held.
         let targets = queue.sync {
-            targetsLocked(screenIndex, includeCandidates: includeCandidates)
+            targetsLocked(displayID, includeCandidates: includeCandidates)
         }
         targets.forEach(body)
     }
@@ -1121,10 +1187,19 @@ final class RendererController {
     }
 
     func setVolume(_ volume: Float, on screenIndex: Int? = nil) {
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            setVolume(volume, onDisplay: displayID)
+            return
+        }
+        setVolume(volume, onDisplay: nil)
+    }
+
+    func setVolume(_ volume: Float, onDisplay displayID: CGDirectDisplayID?) {
         // The desired-state mutation stays on the controller queue; only the
         // stdin traffic happens outside it.
         let targets: [RendererProcess] = queue.sync {
-            let list = targetsLocked(screenIndex, includeCandidates: true)
+            let list = targetsLocked(displayID, includeCandidates: true)
             for handle in list { handle.desiredVolume = volume }
             return list
         }
@@ -1132,13 +1207,22 @@ final class RendererController {
     }
 
     func setMuted(_ muted: Bool, on screenIndex: Int? = nil) {
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            setMuted(muted, onDisplay: displayID)
+            return
+        }
+        setMuted(muted, onDisplay: nil)
+    }
+
+    func setMuted(_ muted: Bool, onDisplay displayID: CGDirectDisplayID?) {
         // A scene candidate must remain silent until activation. Remember the
         // latest policy for it, but only send the live mute command to active
         // renderers.
         let actives: [RendererProcess] = queue.sync { () -> [RendererProcess] in
-            if let screenIndex {
-                candidates[screenIndex]?.desiredMuted = muted
-                guard let active = running[screenIndex] else { return [] }
+            if let displayID {
+                candidates[displayID]?.desiredMuted = muted
+                guard let active = running[displayID] else { return [] }
                 active.desiredMuted = muted
                 return [active]
             }
@@ -1153,11 +1237,21 @@ final class RendererController {
     // `desiredPowerState` can never disagree with what the renderer was told.
     // Passing no fps leaves the renderer's current frame rate untouched.
     func pause(on screenIndex: Int? = nil) {
-        setPower(.pause, fps: nil, on: screenIndex)
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            setPower(.pause, fps: nil, onDisplay: displayID)
+        } else {
+            setPower(.pause, fps: nil, onDisplay: nil)
+        }
     }
 
     func resume(on screenIndex: Int? = nil) {
-        setPower(.run, fps: nil, on: screenIndex)
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            setPower(.run, fps: nil, onDisplay: displayID)
+        } else {
+            setPower(.run, fps: nil, onDisplay: nil)
+        }
     }
 
     /// Single authoritative power directive for the renderers.
@@ -1168,6 +1262,15 @@ final class RendererController {
     /// policy — occlusion, lock, sleep, battery, thermal — is decided here, and
     /// the renderer only ever learns the final state, never the reason.
     func setPower(_ state: MiragePowerState, fps: Int?, on screenIndex: Int? = nil) {
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            setPower(state, fps: fps, onDisplay: displayID)
+            return
+        }
+        setPower(state, fps: fps, onDisplay: nil)
+    }
+
+    func setPower(_ state: MiragePowerState, fps: Int?, onDisplay displayID: CGDirectDisplayID?) {
         let paused = state == .pause
         // Pausing a candidate before its first frame would prevent the
         // presentation handshake from ever completing, so candidates only
@@ -1178,9 +1281,9 @@ final class RendererController {
                 process.desiredPowerState = state
                 process.desiredPowerFps = fps
             }
-            if let screenIndex {
-                if let candidate = candidates[screenIndex] { record(candidate) }
-                guard let active = running[screenIndex] else { return [] }
+            if let displayID {
+                if let candidate = candidates[displayID] { record(candidate) }
+                guard let active = running[displayID] else { return [] }
                 record(active)
                 return [active]
             }
@@ -1200,19 +1303,45 @@ final class RendererController {
     }
 
     func setFps(_ fps: Int, on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "fps", "value": fps]) }
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            forEach(displayID) { $0.send(["cmd": "fps", "value": fps]) }
+        } else {
+            forEach(nil) { $0.send(["cmd": "fps", "value": fps]) }
+        }
     }
 
     func setSpeed(_ speed: Float, on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "speed", "value": speed]) }
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            setSpeed(speed, onDisplay: displayID)
+        } else {
+            setSpeed(speed, onDisplay: nil)
+        }
+    }
+
+    func setSpeed(_ speed: Float, onDisplay displayID: CGDirectDisplayID?) {
+        forEach(displayID) { $0.send(["cmd": "speed", "value": speed]) }
     }
 
     func setFillMode(_ mode: FillMode, on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
+        if let screenIndex {
+            guard let displayID = displayID(for: screenIndex) else { return }
+            forEach(displayID) { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
+        } else {
+            forEach(nil) { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
+        }
     }
 
     func setProperty(key: String, property: WEProjectProperty, on screenIndex: Int? = nil) {
-        forEach(screenIndex) { proc in
+        let displayID: CGDirectDisplayID?
+        if let screenIndex {
+            guard let resolved = self.displayID(for: screenIndex) else { return }
+            displayID = resolved
+        } else {
+            displayID = nil
+        }
+        forEach(displayID) { proc in
             proc.send(Self.propertyCommand(key: key, property: property))
         }
     }

@@ -141,6 +141,7 @@ struct Options {
     std::uint32_t             msaa { 1 };
     double                    render_scale { 1.0 };
     std::uint32_t             screen { 0 };
+    std::uint32_t             display_id { 0 };
     int                       run_seconds { 0 };
     bool                      valid_layer { false };
     bool                      graphviz { false };
@@ -213,6 +214,7 @@ void PrintUsage(const char* argv0) {
         << "      --mouse-position X,Y    Initial normalized mouse position\n"
         << "      --input-hz N            Desktop mouse polling rate (default 60)\n"
         << "      --screen N              Screen index to cover (default 0 = main)\n"
+        << "      --display-id N          Core Graphics display ID to cover\n"
         << "      --muted                 Start with audio muted\n"
         << "      --control-stdin         Accept live JSON control commands on stdin\n"
         << "      --deferred-show         Keep the window transparent until activated\n"
@@ -313,6 +315,9 @@ bool ParseArgs(int argc, char** argv, Options& out) {
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
+        } else if (arg == "--display-id") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr || ! ParseUInt(value, out.display_id) || out.display_id == 0) return false;
         } else if (arg == "-f" || arg == "--fps") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.fps)) return false;
@@ -455,6 +460,7 @@ int main(int argc, char** argv) {
         .title        = "SceneRenderer Wallpaper",
         .input_hz     = options.input_hz,
         .screen_index = options.screen,
+        .display_id   = options.display_id,
         .deferred_show = options.deferred_show,
     };
     SceneRendererMacDesktopCallbacks callbacks {

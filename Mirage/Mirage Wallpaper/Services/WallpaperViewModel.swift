@@ -21,7 +21,6 @@ class WallpaperViewModel: ObservableObject {
     private struct ScreenAssignment {
         let wallpaper: WEWallpaper
         let runtime: WallpaperRuntimeState
-        let displayID: CGDirectDisplayID
     }
 
     private struct AppliedPlaybackState: Equatable {
@@ -34,7 +33,7 @@ class WallpaperViewModel: ObservableObject {
     }
 
     private var lastAppliedPlaybackState: AppliedPlaybackState?
-    private var screenAssignments: [Int: ScreenAssignment] = [:]
+    private var screenAssignments: [CGDirectDisplayID: ScreenAssignment] = [:]
     private var stoppedByPlaybackPolicy = false
     private var runtimeSaveWorkItem: DispatchWorkItem?
     private var playbackCommandWorkItem: DispatchWorkItem?
@@ -222,8 +221,10 @@ class WallpaperViewModel: ObservableObject {
         guard currentWallpaper.isValid else { return }
         let normalized = normalizedRuntime(runtime, for: currentWallpaper)
         if normalized != runtime { runtime = normalized }
-        screenAssignments[0] = ScreenAssignment(
-            wallpaper: currentWallpaper, runtime: normalized, displayID: displayID(for: 0))
+        if let displayID = displayID(for: 0) {
+            screenAssignments[displayID] = ScreenAssignment(
+                wallpaper: currentWallpaper, runtime: normalized)
+        }
         persistRuntime(normalized, for: currentWallpaper)
     }
 
@@ -371,32 +372,43 @@ class WallpaperViewModel: ObservableObject {
         return opts
     }
 
-    private func displayID(for screenIndex: Int) -> CGDirectDisplayID {
-        guard NSScreen.screens.indices.contains(screenIndex) else { return 0 }
-        return (NSScreen.screens[screenIndex].deviceDescription[
-            NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    private func displayID(for screenIndex: Int) -> CGDirectDisplayID? {
+        renderer.displayID(for: screenIndex)
     }
 
     @objc private func displayTopologyChanged() {
+        let displayIDs = Set(NSScreen.screens.compactMap {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                .uint32Value
+        })
+        renderer.stopDisplays(except: displayIDs)
+        screenAssignments = screenAssignments.filter { displayIDs.contains($0.key) }
+
+        if let mainDisplayID = displayID(for: 0) {
+            let inherited = screenAssignments[mainDisplayID] ?? (currentWallpaper.isValid
+                ? ScreenAssignment(wallpaper: currentWallpaper, runtime: runtime)
+                : nil)
+            if let inherited {
+                for displayID in displayIDs where screenAssignments[displayID] == nil {
+                    screenAssignments[displayID] = inherited
+                    if !stoppedByPlaybackPolicy {
+                        renderer.render(inherited.wallpaper, onDisplay: displayID,
+                                        options: makeRenderOptions(for: inherited.wallpaper,
+                                                                   runtime: inherited.runtime))
+                    }
+                    DesktopOverrideService.shared.scheduleCapture(
+                        forDisplay: displayID, wallpaper: inherited.wallpaper)
+                }
+            }
+        }
+
+        currentByScreen = Dictionary(uniqueKeysWithValues: screenAssignments.compactMap { displayID, assignment in
+            renderer.screenIndex(for: displayID).map { ($0, assignment.wallpaper) }
+        })
         DesktopOverrideService.shared.scheduleCaptureForAllScreens()
-        let oldAssignments = screenAssignments.values
-        var remapped: [Int: ScreenAssignment] = [:]
-        for assignment in oldAssignments {
-            guard let newIndex = NSScreen.screens.firstIndex(where: {
-                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
-                    as? NSNumber)?.uint32Value == assignment.displayID
-            }) else { continue }
-            remapped[newIndex] = assignment
+        if !stoppedByPlaybackPolicy {
+            applyPlaybackPolicy(currentPlaybackPolicy, force: true)
         }
-        screenAssignments = remapped
-        renderer.stopAll()
-        guard !stoppedByPlaybackPolicy else { return }
-        for (screen, assignment) in remapped.sorted(by: { $0.key < $1.key }) {
-            renderer.render(assignment.wallpaper, on: screen,
-                            options: makeRenderOptions(for: assignment.wallpaper,
-                                                       runtime: assignment.runtime))
-        }
-        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
 
     // MARK: 应用壁纸
@@ -416,13 +428,13 @@ class WallpaperViewModel: ObservableObject {
         playRate = runtime.speed
         suppressPlaybackSideEffects = false
         let opts = makeRenderOptions(for: w)
-        screenAssignments[0] = ScreenAssignment(
-            wallpaper: w, runtime: runtime, displayID: displayID(for: 0))
+        guard let displayID = displayID(for: 0) else { return }
+        screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: runtime)
         if currentPlaybackPolicy != .stop {
-            renderer.render(w, on: 0, options: opts)
+            renderer.render(w, onDisplay: displayID, options: opts)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
-        DesktopOverrideService.shared.scheduleCapture(for: 0, wallpaper: w)
+        DesktopOverrideService.shared.scheduleCapture(forDisplay: displayID, wallpaper: w)
     }
 
     func reapplyCurrent() {
@@ -435,10 +447,10 @@ class WallpaperViewModel: ObservableObject {
         playVolume = runtime.volume
         playRate = runtime.speed
         suppressPlaybackSideEffects = false
-        screenAssignments[0] = ScreenAssignment(
-            wallpaper: w, runtime: runtime, displayID: displayID(for: 0))
+        guard let displayID = displayID(for: 0) else { return }
+        screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: runtime)
         if currentPlaybackPolicy != .stop {
-            renderer.render(w, on: 0, options: makeRenderOptions(for: w))
+            renderer.render(w, onDisplay: displayID, options: makeRenderOptions(for: w))
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
@@ -446,20 +458,20 @@ class WallpaperViewModel: ObservableObject {
     func applyToAllScreens() {
         let w = currentWallpaper
         guard w.isValid, w.kind != .unsupported else { return }
-        let count = NSScreen.screens.count
         currentWallpaper = w
-        for screen in 1..<max(count, 1) {
+        for screen in NSScreen.screens.indices.dropFirst() {
+            guard let displayID = displayID(for: screen) else { continue }
             var opts = makeRenderOptions(for: w)
             opts.volume = runtime.volume * Float(masterVolume)
             opts.muted = runtime.muted || globalMuted
             opts.speed = runtime.speed
             opts.fillMode = runtime.fillMode
-            screenAssignments[screen] = ScreenAssignment(
-                wallpaper: w, runtime: runtime, displayID: displayID(for: screen))
+            screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: runtime)
             if currentPlaybackPolicy != .stop {
-                renderer.render(w, on: screen, options: opts)
+                renderer.render(w, onDisplay: displayID, options: opts)
             }
-            DesktopOverrideService.shared.scheduleCapture(for: screen, wallpaper: w)
+            currentByScreen[screen] = w
+            DesktopOverrideService.shared.scheduleCapture(forDisplay: displayID, wallpaper: w)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
@@ -473,6 +485,7 @@ class WallpaperViewModel: ObservableObject {
 
     func applyOnScreen(_ w: WEWallpaper, screen: Int) {
         guard w.isValid, w.kind != .unsupported else { return }
+        guard let displayID = displayID(for: screen) else { return }
         if screen == 0 {
             currentWallpaper = w
         } else {
@@ -482,14 +495,13 @@ class WallpaperViewModel: ObservableObject {
             opts.muted = saved.muted || globalMuted
             opts.speed = saved.speed
             opts.fillMode = saved.fillMode
-            screenAssignments[screen] = ScreenAssignment(
-                wallpaper: w, runtime: saved, displayID: displayID(for: screen))
+            screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: saved)
             if currentPlaybackPolicy != .stop {
-                renderer.render(w, on: screen, options: opts)
+                renderer.render(w, onDisplay: displayID, options: opts)
             }
-            applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: screen)
+            applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: displayID)
             currentByScreen[screen] = w
-            DesktopOverrideService.shared.scheduleCapture(for: screen, wallpaper: w)
+            DesktopOverrideService.shared.scheduleCapture(forDisplay: displayID, wallpaper: w)
         }
     }
 
@@ -563,8 +575,8 @@ class WallpaperViewModel: ObservableObject {
 
         if stoppedByPlaybackPolicy {
             stoppedByPlaybackPolicy = false
-            for (screen, assignment) in screenAssignments.sorted(by: { $0.key < $1.key }) {
-                renderer.render(assignment.wallpaper, on: screen,
+            for (displayID, assignment) in screenAssignments.sorted(by: { $0.key < $1.key }) {
+                renderer.render(assignment.wallpaper, onDisplay: displayID,
                                 options: makeRenderOptions(for: assignment.wallpaper,
                                                            runtime: assignment.runtime))
             }
@@ -601,9 +613,10 @@ class WallpaperViewModel: ObservableObject {
         lastAppliedPlaybackState = state
     }
 
-    private func applyPlaybackPolicy(_ action: GSPlayback, runtime: WallpaperRuntimeState, on screen: Int) {
+    private func applyPlaybackPolicy(_ action: GSPlayback, runtime: WallpaperRuntimeState,
+                                     on displayID: CGDirectDisplayID) {
         if action == .stop {
-            renderer.stop(on: screen)
+            renderer.stop(displayID: displayID)
             return
         }
         let paused = runtime.speed == 0 || action == .pause
@@ -614,14 +627,14 @@ class WallpaperViewModel: ObservableObject {
             : (throttledFps < globalFps ? .throttle : .run)
 
         if paused {
-            renderer.setPower(powerState, fps: throttledFps, on: screen)
-            renderer.setVolume(volume, on: screen)
-            renderer.setMuted(muted, on: screen)
+            renderer.setPower(powerState, fps: throttledFps, onDisplay: displayID)
+            renderer.setVolume(volume, onDisplay: displayID)
+            renderer.setMuted(muted, onDisplay: displayID)
         } else {
-            renderer.setVolume(volume, on: screen)
-            renderer.setMuted(muted, on: screen)
-            renderer.setSpeed(runtime.speed, on: screen)
-            renderer.setPower(powerState, fps: throttledFps, on: screen)
+            renderer.setVolume(volume, onDisplay: displayID)
+            renderer.setMuted(muted, onDisplay: displayID)
+            renderer.setSpeed(runtime.speed, onDisplay: displayID)
+            renderer.setPower(powerState, fps: throttledFps, onDisplay: displayID)
         }
     }
 

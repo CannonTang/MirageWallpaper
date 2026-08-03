@@ -49,10 +49,10 @@ final class DesktopOverrideService {
     private let directory: URL
     private let defaults = UserDefaults.standard
     private let ioQueue = DispatchQueue(label: "cn.laobamac.Mirage.desktopOverride")
-    private var pendingCapture: [Int: DispatchWorkItem] = [:]
+    private var pendingCapture: [CGDirectDisplayID: DispatchWorkItem] = [:]
     /// What we put on each screen. Authoritative for pruning: reading it back
     /// from `desktopImageURL(for:)` races WallpaperAgent's own bookkeeping.
-    private var installedByScreen: [Int: URL] = [:]
+    private var installedByScreen: [CGDirectDisplayID: URL] = [:]
     /// Debounce: a playlist rotating quickly would otherwise ask every renderer
     /// for a snapshot on every hop.
     private static let captureDebounce: TimeInterval = 1.5
@@ -162,42 +162,55 @@ final class DesktopOverrideService {
     /// Requests a fresh still for `screenIndex` and installs it as that screen's
     /// desktop picture. Coalesced per screen.
     func scheduleCapture(for screenIndex: Int, wallpaper: WEWallpaper) {
+        guard let displayID = AppDelegate.shared.wallpaperViewModel.renderer
+            .displayID(for: screenIndex) else { return }
+        scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
+    }
+
+    func scheduleCapture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper) {
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
-        pendingCapture[screenIndex]?.cancel()
+        pendingCapture[displayID]?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.pendingCapture[screenIndex] = nil
-            self?.capture(for: screenIndex, wallpaper: wallpaper)
+            self?.pendingCapture[displayID] = nil
+            self?.capture(forDisplay: displayID, wallpaper: wallpaper)
         }
-        pendingCapture[screenIndex] = work
+        pendingCapture[displayID] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureDebounce, execute: work)
     }
 
     /// Re-takes the still for every screen that currently has a wallpaper.
     func scheduleCaptureForAllScreens() {
         let viewModel = AppDelegate.shared.wallpaperViewModel
-        for screen in NSScreen.screens.indices {
-            guard let wallpaper = viewModel.renderer.currentWallpaper(on: screen) else { continue }
-            scheduleCapture(for: screen, wallpaper: wallpaper)
+        for displayID in viewModel.renderer.activeDisplayIDs {
+            guard let wallpaper = viewModel.renderer.currentWallpaper(onDisplay: displayID) else { continue }
+            scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
         }
     }
 
-    private func capture(for screenIndex: Int, wallpaper: WEWallpaper, attempt: Int = 0) {
+    private func screen(for displayID: CGDirectDisplayID) -> NSScreen? {
+        NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                .uint32Value == displayID
+        }
+    }
+
+    private func capture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper,
+                         attempt: Int = 0) {
         // Read the user's picture before anything is written, not after: the
         // read-back is only eventually consistent, so once an override is in
         // flight it can no longer be trusted to reveal what was there before.
-        if NSScreen.screens.indices.contains(screenIndex) {
-            backUpUserPictureIfNeeded(on: NSScreen.screens[screenIndex])
-        }
+        guard let screen = screen(for: displayID) else { return }
+        backUpUserPictureIfNeeded(on: screen)
         // A new UUID every time: WallpaperAgent caches by path, so rewriting the
         // bytes under a path it already displays does not repaint.
         let target = directory.appending(path: "override-\(UUID().uuidString).heic")
         AppDelegate.shared.wallpaperViewModel.renderer.snapshot(
-            on: screenIndex, path: target.path
+            onDisplay: displayID, path: target.path
         ) { [weak self] ok in
             guard let self else { return }
             if ok, FileManager.default.fileExists(atPath: target.path) {
-                NSLog("[Mirage] 已捕获壁纸实时画面 (屏幕=\(screenIndex))")
-                self.install(target, for: screenIndex)
+                NSLog("[Mirage] 已捕获壁纸实时画面 (显示器=\(displayID))")
+                self.install(target, forDisplay: displayID)
                 return
             }
             try? FileManager.default.removeItem(at: target)
@@ -207,8 +220,8 @@ final class DesktopOverrideService {
             // scene's first frame can take considerably longer than that. Retry
             // before settling for the packaged preview.
             guard attempt + 1 < Self.captureAttempts else {
-                NSLog("[Mirage] 壁纸截图失败，改用预览图 (屏幕=\(screenIndex))")
-                self.installFallbackPreview(of: wallpaper, for: screenIndex)
+                NSLog("[Mirage] 壁纸截图失败，改用预览图 (显示器=\(displayID))")
+                self.installFallbackPreview(of: wallpaper, forDisplay: displayID)
                 return
             }
             let delay = Self.captureRetryDelays[
@@ -221,14 +234,15 @@ final class DesktopOverrideService {
                 // Treating nil as a mismatch here killed the chain on its first
                 // attempt and always fell through to the preview.
                 let current = AppDelegate.shared.wallpaperViewModel.renderer
-                    .currentWallpaper(on: screenIndex)
+                    .currentWallpaper(onDisplay: displayID)
                 if let current, current.id != wallpaper.id { return }
-                self.capture(for: screenIndex, wallpaper: wallpaper, attempt: attempt + 1)
+                self.capture(forDisplay: displayID, wallpaper: wallpaper, attempt: attempt + 1)
             }
         }
     }
 
-    private func installFallbackPreview(of wallpaper: WEWallpaper, for screenIndex: Int) {
+    private func installFallbackPreview(of wallpaper: WEWallpaper,
+                                        forDisplay displayID: CGDirectDisplayID) {
         guard !wallpaper.project.preview.isEmpty else { return }
         let source = wallpaper.previewURL
         guard FileManager.default.fileExists(atPath: source.path) else { return }
@@ -238,18 +252,17 @@ final class DesktopOverrideService {
                   let image = NSImage(contentsOf: source),
                   let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
                   self.encode(cgImage, to: target) else { return }
-            DispatchQueue.main.async { self.install(target, for: screenIndex) }
+            DispatchQueue.main.async { self.install(target, forDisplay: displayID) }
         }
     }
 
     /// Points `screenIndex` at `url`, recording the user's own picture first and
     /// deleting every override file that is no longer displayed.
-    private func install(_ url: URL, for screenIndex: Int) {
-        guard NSScreen.screens.indices.contains(screenIndex) else {
+    private func install(_ url: URL, forDisplay displayID: CGDirectDisplayID) {
+        guard let screen = screen(for: displayID) else {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        let screen = NSScreen.screens[screenIndex]
 
         // Normally already recorded before the capture was requested; repeated
         // here so an install from any other path cannot skip it.
@@ -267,7 +280,7 @@ final class DesktopOverrideService {
             mode = wanted
         }
         setDesktopImage(url, for: screen)
-        installedByScreen[screenIndex] = url
+        installedByScreen[displayID] = url
         pruneAllExcept(Set(installedByScreen.values.map { $0.resolvingSymlinksInPath() }))
     }
 
@@ -311,7 +324,9 @@ final class DesktopOverrideService {
     /// into process exit, so anything deferred to a queue would never run.
     func restore() {
         let target = restoreTarget()
-        for (index, screen) in NSScreen.screens.enumerated() {
+        for screen in NSScreen.screens {
+            guard let displayID = (screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { continue }
             // Only touch screens Mirage actually took over; a screen showing
             // something else is the user's business.
             //
@@ -323,7 +338,7 @@ final class DesktopOverrideService {
             // still needed for the crash-recovery case, where a previous process
             // installed the override and this one has no record of it (by then
             // the store has long settled).
-            let ours = installedByScreen[index] != nil
+            let ours = installedByScreen[displayID] != nil
             if !ours, let current = NSWorkspace.shared.desktopImageURL(for: screen),
                !isMirageGenerated(current) {
                 continue

@@ -42,6 +42,7 @@ struct WallpaperArgs {
     BOOL  spectrum = YES;
     BOOL  externalSpectrum = NO;
     int   screen = 0;
+    CGDirectDisplayID displayID = 0;
     int   runSeconds = 0;
     BOOL  diag = NO;
     BOOL  controlStdin = NO;
@@ -185,6 +186,7 @@ static void PrintUsage(const char *argv0) {
         "  --no-spectrum          disable audio-spectrum capture\n"
         "  --external-spectrum    receive spectrum from the control channel\n"
         "  --screen N             screen index to cover (default 0 = main)\n"
+        "  --display-id N         Core Graphics display ID to cover\n"
         "  --network-policy MODE  block | observe | allow (default observe).\n"
         "                         observe logs every remote request the page makes\n"
         "                         without blocking it; block denies everything but\n"
@@ -217,6 +219,12 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.externalSpectrum = YES;
         } else if (strcmp(arg, "--screen") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.screen = atoi(v);
+        } else if (strcmp(arg, "--display-id") == 0) {
+            const char *v = take(i, arg); if (!v) return false;
+            char *end = nullptr;
+            unsigned long value = strtoul(v, &end, 10);
+            if (end == v || *end != '\0' || value == 0 || value > UINT32_MAX) return false;
+            out.displayID = (CGDirectDisplayID)value;
         } else if (strncmp(arg, "--network-policy=", 17) == 0) {
             if (!ParseNetworkPolicy(arg + 17, out.networkPolicy)) return false;
         } else if (strcmp(arg, "--network-policy") == 0) {
@@ -260,10 +268,18 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) WebRendererEngine *engine;
 @property (nonatomic, strong) WRDesktopInputForwarder *inputForwarder;
 @property (nonatomic, strong) MirageControlChannel *control;
-@property (nonatomic, assign) int screenIndex;
+@property (nonatomic, assign) CGDirectDisplayID displayID;
 - (void)observeScreenParameterChanges;
 @end
 @implementation WebWallpaperAppDelegate
+
+static NSScreen *MirageScreenForDisplayID(CGDirectDisplayID displayID) {
+    for (NSScreen *screen in NSScreen.screens) {
+        NSNumber *number = screen.deviceDescription[@"NSScreenNumber"];
+        if (number != nil && number.unsignedIntValue == displayID) return screen;
+    }
+    return nil;
+}
 
 // Resolution changes, display rearrangement and unplug/replug all leave the
 // window (and the input forwarder's coordinate normalization) on a stale
@@ -277,14 +293,12 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 
 - (void)screenParametersDidChange:(NSNotification *)note {
     (void)note;
-    NSArray<NSScreen *> *screens = NSScreen.screens;
-    // The configured index may no longer exist (display unplugged): fall back
-    // to the main screen rather than leaving a window on a screen that is gone.
-    NSScreen *screen = (self.screenIndex >= 0 && self.screenIndex < (int)screens.count)
-                           ? screens[self.screenIndex]
-                           : NSScreen.mainScreen;
-    if (screen == nil) screen = screens.firstObject;
-    if (screen == nil) return;
+    NSScreen *screen = MirageScreenForDisplayID(self.displayID);
+    if (screen == nil) {
+        [self.window orderOut:nil];
+        [NSApp terminate:nil];
+        return;
+    }
     NSRect frame = screen.frame;
     if (NSWidth(frame) <= 0 || NSHeight(frame) <= 0) return;
     if (!NSEqualRects(self.window.frame, frame)) {
@@ -323,9 +337,13 @@ int main(int argc, char *argv[]) {
         [app finishLaunching];
 
         NSArray<NSScreen *> *screens = NSScreen.screens;
-        NSScreen *screen = (args.screen < (int)screens.count) ? screens[args.screen] : NSScreen.mainScreen;
-        if (screen == nil) screen = NSScreen.mainScreen;
+        NSScreen *screen = args.displayID != 0
+            ? MirageScreenForDisplayID(args.displayID)
+            : ((args.screen >= 0 && args.screen < (int)screens.count) ? screens[args.screen] : nil);
         if (screen == nil) { fprintf(stderr, "WebWallpaper: no screen available\n"); return 1; }
+        NSNumber *screenNumber = screen.deviceDescription[@"NSScreenNumber"];
+        if (screenNumber == nil) return 1;
+        CGDirectDisplayID displayID = screenNumber.unsignedIntValue;
         NSRect screenFrame = screen.frame;
 
         WREngineConfig cfg = [WebRendererEngine defaultConfig];
@@ -342,7 +360,8 @@ int main(int argc, char *argv[]) {
         }
         cfg.assetOverlayDirectories = assetOverlays;
 
-        WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:screenFrame config:cfg];
+        NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame), NSHeight(screenFrame));
+        WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:contentFrame config:cfg];
         delegate.engine = engine;
         engine.audioSpectrumDemandHandler = ^(BOOL needed) {
             MirageEmitEvent(@{ @"event": @"audio-demand", @"needed": @(needed) });
@@ -376,6 +395,7 @@ int main(int argc, char *argv[]) {
         engine.webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
         delegate.window = window;
+        delegate.displayID = displayID;
         [window orderFrontRegardless];
 
         [engine openWallpaper:manifest];
@@ -386,7 +406,6 @@ int main(int argc, char *argv[]) {
         delegate.inputForwarder = [[WRDesktopInputForwarder alloc] initWithWebView:engine.webView screen:screen];
         [delegate.inputForwarder start];
 
-        delegate.screenIndex = args.screen;
         [delegate observeScreenParameterChanges];
 
         // Live control channel: Mirage.app pipes JSON commands on stdin.

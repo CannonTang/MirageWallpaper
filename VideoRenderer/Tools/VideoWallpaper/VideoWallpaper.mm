@@ -24,6 +24,7 @@
 struct WallpaperArgs {
     const char *workshop = nullptr;
     int screen = 0;
+    CGDirectDisplayID displayID = 0;
     float volume = 1.0f;
     BOOL muted = NO;
     int runSeconds = 0;
@@ -156,6 +157,7 @@ static void PrintUsage(const char *argv0) {
         "Usage: %s <wallpaper-dir> [options]\n\n"
         "Options:\n"
         "  --screen N             screen index to cover (default 0 = main)\n"
+        "  --display-id N         Core Graphics display ID to cover\n"
         "  --volume 0..1          audio volume (default 1.0)\n"
         "  --muted                start muted\n"
         "  --fill MODE            cover | contain | stretch (default cover)\n"
@@ -197,6 +199,12 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             exit(0);
         } else if (strcmp(arg, "--screen") == 0) {
             const char *v = take(i, arg); if (!v) return NO; out.screen = atoi(v);
+        } else if (strcmp(arg, "--display-id") == 0) {
+            const char *v = take(i, arg); if (!v) return NO;
+            char *end = nullptr;
+            unsigned long value = strtoul(v, &end, 10);
+            if (end == v || *end != '\0' || value == 0 || value > UINT32_MAX) return NO;
+            out.displayID = (CGDirectDisplayID)value;
         } else if (strcmp(arg, "--volume") == 0) {
             const char *v = take(i, arg); if (!v) return NO; out.volume = strtof(v, nullptr);
         } else if (strcmp(arg, "--muted") == 0) {
@@ -243,11 +251,19 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) VRVideoRendererEngine *engine;
 @property (nonatomic, strong) MirageControlChannel *control;
-@property (nonatomic, assign) int screenIndex;
+@property (nonatomic, assign) CGDirectDisplayID displayID;
 - (void)observeScreenParameterChanges;
 @end
 
 @implementation VideoWallpaperAppDelegate
+
+static NSScreen *MirageScreenForDisplayID(CGDirectDisplayID displayID) {
+    for (NSScreen *screen in NSScreen.screens) {
+        NSNumber *number = screen.deviceDescription[@"NSScreenNumber"];
+        if (number != nil && number.unsignedIntValue == displayID) return screen;
+    }
+    return nil;
+}
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
     [self.engine pause];
@@ -264,14 +280,12 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 
 - (void)screenParametersDidChange:(NSNotification *)note {
     (void)note;
-    NSArray<NSScreen *> *screens = NSScreen.screens;
-    // The configured index may no longer exist (display unplugged): fall back
-    // to the main screen rather than leaving a window on a screen that is gone.
-    NSScreen *screen = (self.screenIndex >= 0 && self.screenIndex < (int)screens.count)
-                           ? screens[self.screenIndex]
-                           : NSScreen.mainScreen;
-    if (screen == nil) screen = screens.firstObject;
-    if (screen == nil) return;
+    NSScreen *screen = MirageScreenForDisplayID(self.displayID);
+    if (screen == nil) {
+        [self.window orderOut:nil];
+        [NSApp terminate:nil];
+        return;
+    }
     NSRect frame = screen.frame;
     if (NSWidth(frame) <= 0 || NSHeight(frame) <= 0) return;
     if (NSEqualRects(self.window.frame, frame)) return;
@@ -310,12 +324,16 @@ int main(int argc, char *argv[]) {
         [app finishLaunching];
 
         NSArray<NSScreen *> *screens = NSScreen.screens;
-        NSScreen *screen = (args.screen < (int)screens.count) ? screens[args.screen] : NSScreen.mainScreen;
-        if (screen == nil) screen = NSScreen.mainScreen;
+        NSScreen *screen = args.displayID != 0
+            ? MirageScreenForDisplayID(args.displayID)
+            : ((args.screen >= 0 && args.screen < (int)screens.count) ? screens[args.screen] : nil);
         if (screen == nil) {
             fprintf(stderr, "VideoWallpaper: no screen available\n");
             return 1;
         }
+        NSNumber *screenNumber = screen.deviceDescription[@"NSScreenNumber"];
+        if (screenNumber == nil) return 1;
+        CGDirectDisplayID displayID = screenNumber.unsignedIntValue;
 
         VRVideoEngineConfig config = [VRVideoRendererEngine defaultConfig];
         config.fillMode = args.fillMode;
@@ -325,7 +343,8 @@ int main(int argc, char *argv[]) {
         config.loadFromMemory = args.loadFromMemory;
 
         NSRect screenFrame = screen.frame;
-        VRVideoRendererEngine *engine = [[VRVideoRendererEngine alloc] initWithFrame:screenFrame
+        NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame), NSHeight(screenFrame));
+        VRVideoRendererEngine *engine = [[VRVideoRendererEngine alloc] initWithFrame:contentFrame
                                                                               config:config];
         // Queueing succeeds for undecodable files, so failures are reported
         // asynchronously; install the handlers before opening the wallpaper.
@@ -371,7 +390,7 @@ int main(int argc, char *argv[]) {
         window.contentView = engine;
         [window orderFrontRegardless];
         delegate.window = window;
-        delegate.screenIndex = args.screen;
+        delegate.displayID = displayID;
         [delegate observeScreenParameterChanges];
 
         // Live control channel: Mirage.app pipes JSON commands on stdin.

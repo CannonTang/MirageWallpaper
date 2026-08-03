@@ -47,11 +47,7 @@ namespace
 struct MacDesktopHost {
     SceneRendererMacDesktopCallbacks callbacks {};
     NSWindow*                        window { nil };
-    // NOTE: never cache an NSScreen* long-term — the system may release and
-    // recreate NSScreen objects when the display config changes (e.g. resizing
-    // windows, sleep/wake, resolution changes). Cache the index and re-resolve
-    // the NSScreen on demand instead.
-    NSUInteger                       screen_index { 0 };
+    CGDirectDisplayID                display_id { 0 };
     NSTimer*                         input_timer { nil };
     SRHostRef*                       hostRef { nil };  // ObjC wrapper for safe weak reference
     CAMetalLayer*                    surface_layer { nil };
@@ -63,24 +59,20 @@ struct MacDesktopHost {
     std::atomic<bool>                activation_confirmed { false };
 };
 
-// Resolve the target NSScreen fresh from the current screen list. Returns the
-// window's own screen, the indexed screen, or the main screen as fallbacks.
-// Never returns a stale/cached pointer.
-NSScreen* ResolveScreen(MacDesktopHost* host) {
-    if (host == nullptr) return nil;
-    if (host->window != nil && host->window.screen != nil) {
-        return host->window.screen;
+NSScreen* ResolveScreen(CGDirectDisplayID display_id) {
+    if (display_id == 0) return nil;
+    for (NSScreen* screen in NSScreen.screens) {
+        NSNumber* number = screen.deviceDescription[@"NSScreenNumber"];
+        if (number != nil && number.unsignedIntValue == display_id) return screen;
     }
-    NSArray<NSScreen*>* screens = NSScreen.screens;
-    if (host->screen_index < screens.count) {
-        return screens[host->screen_index];
-    }
-    return NSScreen.mainScreen;
+    return nil;
 }
 
 double Clamp01(double value) {
     return std::clamp(value, 0.0, 1.0);
 }
+
+void StopApplicationOnMainThread();
 
 void EmitMouseEnter(MacDesktopHost* host, bool entered) {
     if (host == nullptr) return;
@@ -95,11 +87,23 @@ void EmitMouseEnter(MacDesktopHost* host, bool entered) {
 void PollInput(MacDesktopHost* host) {
     if (host == nullptr || host->window == nil) return;
 
-    NSScreen* screen = ResolveScreen(host);
-    if (screen == nil) return;
+    NSScreen* screen = ResolveScreen(host->display_id);
+    if (screen == nil) {
+        [host->window orderOut:nil];
+        StopApplicationOnMainThread();
+        return;
+    }
+
+    const NSRect frame = screen.frame;
+    if (! NSEqualRects(host->window.frame, frame)) {
+        [host->window setFrame:frame display:YES];
+        NSView* content_view = host->window.contentView;
+        host->surface_layer.frame = content_view.bounds;
+        host->surface_layer.contentsScale = screen.backingScaleFactor;
+        host->surface_layer.drawableSize = [content_view convertRectToBacking:content_view.bounds].size;
+    }
 
     const NSPoint mouse = NSEvent.mouseLocation;
-    const NSRect  frame = screen.frame;
     const bool    inside =
         NSWidth(frame) > 0.0 && NSHeight(frame) > 0.0 && NSPointInRect(mouse, frame);
     EmitMouseEnter(host, inside);
@@ -148,21 +152,22 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [app finishLaunching];
 
-        NSScreen*  screen        = nil;
-        NSUInteger resolvedIndex = 0;
-        if (config != nullptr && config->screen_index > 0) {
+        NSScreen* screen = nil;
+        CGDirectDisplayID display_id = config != nullptr ? config->display_id : 0;
+        if (display_id != 0) {
+            screen = ResolveScreen(display_id);
+        } else {
             NSArray<NSScreen*>* screens = NSScreen.screens;
-            if (config->screen_index < screens.count) {
-                screen        = screens[config->screen_index];
-                resolvedIndex = config->screen_index;
-            }
+            const std::uint32_t screen_index = config != nullptr ? config->screen_index : 0;
+            if (screen_index < screens.count) screen = screens[screen_index];
+            NSNumber* number = screen.deviceDescription[@"NSScreenNumber"];
+            if (number != nil) display_id = number.unsignedIntValue;
         }
-        if (screen == nil) screen = NSScreen.mainScreen;
-        if (screen == nil) return nullptr;
+        if (screen == nil || display_id == 0) return nullptr;
 
         auto* host     = new MacDesktopHost();
         host->callbacks = callbacks;
-        host->screen_index = resolvedIndex;
+        host->display_id = display_id;
 
         NSString* title = @"SceneRenderer Wallpaper";
         if (config != nullptr && config->title != nullptr && config->title[0] != '\0') {

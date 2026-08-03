@@ -7,7 +7,8 @@ extern "C" {
 struct SceneRendererMacDesktopConfig {
     const char* title;
     std::uint32_t input_hz;
-    std::uint32_t screen_index; // 0 = main screen; N selects NSScreen.screens[N]
+    std::uint32_t screen_index;
+    std::uint32_t display_id;
     // Keep the window in the compositor, but fully transparent, until
     // SceneRendererMacDesktopActivate(). This allows CAMetalLayer to produce
     // drawables while the previous wallpaper remains visible.
