@@ -27,7 +27,7 @@ enum PlaylistTiming: String, Codable, CaseIterable, Identifiable {
     var id: Self { self }
     var displayName: String {
         switch self {
-        case .timer:     return L("计时器上")
+        case .timer:     return L("按计时器")
         case .logon:     return L("登录时")
         case .daytime:   return L("当日时间")
         case .dayOfWeek: return L("星期")
