@@ -7,6 +7,58 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Mon, 03 Aug 2026 06:47:31 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>226</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 82e7d216b51f2867647bfccaaf532d732fd9e2ec
+Channel: beta
+
+feat(workshop): filter browsing by age rating
+
+The Workshop browser had no rating filter because the rating never made it
+past the parser. `toWorkshopItem` stripped `Everyone`, `Questionable` and
+`Mature` from the tag list alongside the bookkeeping tags like `Approved`
+and `Wallpaper`, and `WorkshopItem` had no field to hold one, so the grid
+could not filter on something it never saw. The local library has filtered
+on `project.json`'s `contentrating` all along, so the two halves of the app
+disagreed about whether rating was a thing you could filter on.
+
+So read the rating off the raw tags before they are stripped, and carry it
+on `WorkshopItem` as a `WorkshopAgeRating` whose raw values match
+`contentrating` - a Workshop item and an installed wallpaper now name the
+same rating the same way.
+
+Narrowing has to happen server-side: at ~3.1M published files and 30 per
+page, filtering the page after it arrives would leave the pager reporting
+counts it cannot deliver. The three ratings are mutually exclusive, so
+listing several in `requiredtags` ANDs to zero rows, and `match_all_tags`
+is a query-wide switch that would turn the type and genre filters into ORs
+too. `excludedtags` is the one mechanism that composes: it is orthogonal to
+`requiredtags`, so the unchecked ratings drop out while type and genre keep
+their AND semantics. Verified against the live API - `Scene`+`Anime` with
+the other two ratings excluded returns 30/30 `Everyone` `Scene` rows.
+
+Two edges are deliberate. A cleared filter stops narrowing instead of
+excluding all three, which would ask Steam for an empty set and read as a
+broken browser; the sidebar says so. And a handful of published files carry
+no rating tag at all, which `excludedtags` cannot exclude - those pass
+through, matching how the local library treats a missing `contentrating`.
+
+The filter defaults to all-ages and persists, so adult content stays
+opt-in. Discover's shelves take the same filter as the grid, or a wallpaper
+filtered out of one would resurface in the other. Cards badge only the
+restricted ratings, since badging every all-ages wallpaper would mark
+almost the whole grid.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-226-82e7d216b51f-macOS-arm64.zip" length="193169628" type="application/octet-stream" sparkle:edSignature="bdPG94KvS6C52L2BpjUz2X/rATJABowqAyz9o1RmSKrkegC1gXvsX34eH2kM8m9MTgw2ZraVUj/OmOG1AcgeDA=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Mon, 03 Aug 2026 05:30:53 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -139,32 +191,9 @@ English and Traditional locales without failing visibly (see 8cfc493).
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-216-0b0676d103bf-macOS-arm64.zip" length="192955474" type="application/octet-stream" sparkle:edSignature="hltGw6c1HE3mVXALnwMqWwz2nENoEil7Ksy3Gxfu5Npw61Xh5lIS+YF26nOnvEG/e+3xP90Nzm/ucbYcClpCCA=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Fri, 31 Jul 2026 15:27:54 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>213</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: e4f81afc8c8357034a196841485c7d7055705e07
-Channel: beta
-
-fix(app): apply the confirmed wallpaper to the display that asked
-
-Assigning a web wallpaper to a secondary display raised the trust sheet,
-whose confirm button applied nextCurrentWallpaper to the main display.
-This path never set that property, so confirming put an unrelated
-wallpaper on the wrong screen. The pending request now carries the target
-screen through the sheet.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-213-e4f81afc8c83-macOS-arm64.zip" length="192924854" type="application/octet-stream" sparkle:edSignature="+Su1BJmzNTU8A4KUiu65RHHY5VNUmXYCaAgQtK0v85p0A2296Tw+fLGtwBNSsE4oxR0tgLwqWKg5fkXLDI1zBg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: loB1YflylJrjZrSPP8DmqYJy08rpXQfriHfs21LioaV80aeXw3gnWmw2U2uhMQZ05zoN0iQpWv19Ifvz8LbtAw==
-length: 9709
+edSignature: litTkyH0zn7jJrZlehVS+Zr82IxN6rv1DRu3ZI9x48/hoRHQeI4esWUjPYhh3pa5rRenKKS39D5ASGO7F3pZDg==
+length: 11473
 -->
