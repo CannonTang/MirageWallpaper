@@ -139,7 +139,6 @@
 "低" = "Low";
 "佚名作者" = "Anonymous author";
 "作者" = "Author";
-"在 Steam 中搜索作者" = "Search authors on Steam";
 "未知作者" = "Unknown author";
 "你即将把以下%@类文件作为壁纸运行：" = "You are about to run the following %@ file as a wallpaper:";
 "使用已保存会话：%@" = "Use saved session: %@";
@@ -422,7 +421,6 @@
 "极致" = "Ultra";
 "查看" = "View";
 "查看全部" = "View all";
-"查看匹配作者的 Wallpaper Engine 作品" = "View matching authors' Wallpaper Engine items";
 "查看作者的 Wallpaper Engine 作品" = "View this author's Wallpaper Engine items";
 "标签" = "Tags";
 "根据壁纸自带的属性动态生成调节控件，音量、速度、颜色、开关等即改即生效。" = "Controls are generated from each wallpaper's properties. Changes to volume, speed, color, toggles, and other settings take effect immediately.";
@@ -558,6 +556,11 @@
 "设置快捷键" = "Set Keyboard Shortcut";
 "评分" = "Rating";
 "评分最高" = "Top Rated";
+"最热门（%@）" = "Most Popular (%@)";
+"最近" = "Recent";
+"最多订阅" = "Most Subscribed";
+"今年" = "This Year";
+"%@（%@）" = "%@ (%@)";
 "试试调整搜索条件或筛选标签" = "Try adjusting your search criteria or filtering tags";
 "该 Steam 账号没有 Wallpaper Engine 的可用所有权" = "This Steam account does not have a valid Wallpaper Engine license";
 "该镜像仅允许中国大陆用户访问，且并非 Steam 官方服务，不保证安全性和可用性。它只代理浏览 API，不能加速 SteamCMD 登录或壁纸下载。" = "This mirror is only accessible to users in mainland China and is not an official Steam service. Its security and availability are not guaranteed. It only proxies the browsing API and does not speed up SteamCMD sign-in or wallpaper downloads.";

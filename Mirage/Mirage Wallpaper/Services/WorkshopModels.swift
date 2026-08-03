@@ -257,10 +257,22 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
 
     var usesTrendPeriod: Bool {
         switch self {
-        case .trending, .mostUpvoted, .playtimeTrend, .averagePlaytimeTrend, .sessionsTrend:
+        case .trending, .playtimeTrend, .averagePlaytimeTrend, .sessionsTrend:
             return true
         default:
             return false
+        }
+    }
+
+    func workshopLabel(period: WorkshopTrendPeriod) -> String {
+        switch self {
+        case .topRated: return L("评分最高")
+        case .trending: return L("最热门（%@）", period.workshopLabel)
+        case .mostRecent: return L("最近")
+        case .mostUpvoted: return L("最多投票")
+        case .mostSubscribed: return L("最多订阅")
+        default:
+            return usesTrendPeriod ? L("%@（%@）", label, period.workshopLabel) : label
         }
     }
 }
@@ -283,6 +295,13 @@ enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
         case .threeMonths: return L("三个月")
         case .sixMonths: return L("半年")
         case .year: return L("一年")
+        }
+    }
+
+    var workshopLabel: String {
+        switch self {
+        case .year: return L("今年")
+        default: return label
         }
     }
 }

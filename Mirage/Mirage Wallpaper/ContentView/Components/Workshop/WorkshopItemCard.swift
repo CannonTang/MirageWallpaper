@@ -9,6 +9,7 @@ import SwiftUI
 struct WorkshopItemCard: View {
     var item: WorkshopItem
     var isHovered: Bool
+    var isSelected: Bool
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
@@ -26,8 +27,11 @@ struct WorkshopItemCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.white.opacity(isHovered ? 0.18 : 0.06),
-                              lineWidth: 1)
+                .strokeBorder(
+                    isSelected ? Color.accentColor : Color.white.opacity(isHovered ? 0.32 : 0.06),
+                    lineWidth: isSelected ? 2 : 1
+                )
+                .allowsHitTesting(false)
         )
         .shadow(color: .black.opacity(isHovered ? 0.30 : 0.12),
                 radius: isHovered ? 12 : 4, y: isHovered ? 6 : 2)

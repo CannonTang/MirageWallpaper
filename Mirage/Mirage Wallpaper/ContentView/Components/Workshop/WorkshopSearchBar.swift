@@ -39,63 +39,43 @@ struct WorkshopSearchBar: View {
                     .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
             )
 
-            if workshopViewModel.showsCreatorSearch {
+            HStack(spacing: 6) {
+                Text("排序")
                 Menu {
-                    ForEach(workshopViewModel.matchingCreators) { creator in
-                        Button {
-                            workshopViewModel.openCreatorWorkshop(creator)
-                        } label: {
-                            Label(creator.name, systemImage: "person.crop.circle")
-                        }
-                    }
-                    if !workshopViewModel.matchingCreators.isEmpty {
-                        Divider()
-                    }
-                    Button {
-                        workshopViewModel.searchCreatorOnSteam()
-                    } label: {
-                        Label("在 Steam 中搜索作者", systemImage: "magnifyingglass")
-                    }
+                    sortOption(.topRated)
+                    sortOption(.trending, period: .year)
+                    sortOption(.trending, period: .month)
+                    sortOption(.trending, period: .week)
+                    sortOption(.trending, period: .day)
+                    sortOption(.mostRecent)
+                    sortOption(.mostUpvoted)
+                    sortOption(.mostSubscribed)
                 } label: {
-                    Label("作者", systemImage: "person.2")
+                    Text(workshopViewModel.sortOrder.workshopLabel(
+                        period: workshopViewModel.trendPeriod
+                    ))
+                    .lineLimit(1)
                 }
-                .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("查看匹配作者的 Wallpaper Engine 作品")
             }
+        }
+    }
 
-            Picker("排序", selection: Binding(
-                get: { workshopViewModel.sortOrder },
-                set: { newValue in
-                    workshopViewModel.sortOrder = newValue
-                    workshopViewModel.currentPage = 1
-                    workshopViewModel.search()
+    private func sortOption(
+        _ order: WorkshopSortOrder,
+        period: WorkshopTrendPeriod? = nil
+    ) -> some View {
+        let activePeriod = period ?? workshopViewModel.trendPeriod
+        let isSelected = workshopViewModel.sortOrder == order
+            && (period == nil || workshopViewModel.trendPeriod == period)
+        return Button {
+            workshopViewModel.selectWorkshopSort(order, period: period)
+        } label: {
+            HStack {
+                Text(order.workshopLabel(period: activePeriod))
+                if isSelected {
+                    Image(systemName: "checkmark")
                 }
-            )) {
-                ForEach(WorkshopSortOrder.allCases) { order in
-                    Text(order.label).tag(order)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 150)
-
-            if workshopViewModel.sortOrder.usesTrendPeriod {
-                Picker("时间范围", selection: Binding(
-                    get: { workshopViewModel.trendPeriod },
-                    set: { newValue in
-                        workshopViewModel.trendPeriod = newValue
-                        workshopViewModel.currentPage = 1
-                        workshopViewModel.search()
-                    }
-                )) {
-                    ForEach(WorkshopTrendPeriod.allCases) { period in
-                        Text(period.label).tag(period)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 120)
-                .help("趋势范围")
             }
         }
     }

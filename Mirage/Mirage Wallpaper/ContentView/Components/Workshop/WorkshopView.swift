@@ -177,16 +177,11 @@ struct WorkshopView: View {
                                     WorkshopItemCard(
                                         item: item,
                                         isHovered: hoveredId == item.id,
+                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
                                         isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                         presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                                         downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
                                     )
-                                    .overlay {
-                                        if workshopViewModel.selectedItem?.id == item.id {
-                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                .stroke(Color.accentColor, lineWidth: 2)
-                                        }
-                                    }
                                     .onHover { hovered in
                                         hoveredId = hovered ? item.id : nil
                                     }

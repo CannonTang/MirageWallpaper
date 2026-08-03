@@ -75,23 +75,6 @@ class WorkshopViewModel: ObservableObject {
         }.count
     }
 
-    var matchingCreators: [WorkshopCreator] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-        var matches = knownCreators.filter {
-            $0.name.localizedCaseInsensitiveContains(query) || $0.steamId.contains(query)
-        }
-        if Self.isSteamUserId(query), !matches.contains(where: { $0.steamId == query }) {
-            matches.insert(WorkshopCreator(steamId: query, name: query), at: 0)
-        }
-        return Array(matches.prefix(5))
-    }
-
-    var showsCreatorSearch: Bool {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !query.isEmpty && (!query.allSatisfy(\.isNumber) || !matchingCreators.isEmpty)
-    }
-
     private static let ageRatingStorageKey = "WorkshopAgeRatingFilter"
 
     private var searchDebounce: AnyCancellable?
@@ -342,6 +325,18 @@ class WorkshopViewModel: ObservableObject {
         search()
     }
 
+    func selectWorkshopSort(
+        _ order: WorkshopSortOrder,
+        period: WorkshopTrendPeriod? = nil
+    ) {
+        sortOrder = order
+        if let period {
+            trendPeriod = period
+        }
+        currentPage = 1
+        search()
+    }
+
     func submitSearch() {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let creator = knownCreators.first(where: {
@@ -366,15 +361,6 @@ class WorkshopViewModel: ObservableObject {
     func openCreatorWorkshop(for item: WorkshopItem) {
         guard let creator = WorkshopCreator(item: item) else { return }
         openCreatorWorkshop(creator)
-    }
-
-    func searchCreatorOnSteam() {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty,
-              var components = URLComponents(string: "https://steamcommunity.com/search/users/") else { return }
-        components.fragment = "text=\(query)"
-        guard let url = components.url else { return }
-        NSWorkspace.shared.open(url)
     }
 
     func loadNextPage() {
@@ -579,7 +565,7 @@ class WorkshopViewModel: ObservableObject {
         } else if let wallpaper = installed, wallpaper.isValid {
             AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
             showCustomization = true
-            selectedItem = nil
+            selectedItem = item
         } else {
             showCustomization = false
             selectedItem = item
