@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Mon, 03 Aug 2026 14:32:06 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>240</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 5a6fc79066e0093956aa889e8821ae11c6c7664f
+Channel: beta
+
+fix(workshop): refine browsing controls
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-240-5a6fc79066e0-macOS-x86_64.zip" length="198310710" type="application/octet-stream" sparkle:edSignature="dQ3+J8foXkK8/A3EIW3nhGu5ifS9sVxoiMR6PKmLF0k/nymPYE2Q9Ev1cYntLrueF0XVrTaDm/hMMdjJbbmWDA=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Mon, 03 Aug 2026 13:46:22 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -92,6 +109,6 @@ fix(app): sync wallpaper state and browsing controls
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: l8DO/G2TfZz9xTqTZ+Wb8/c44vn2gSqCE/nYx5c4BzK/5v9DQ+ho46cryCFQa6KS5+l7aeZ6rQduqLIrL5vCCA==
-length: 5124
+edSignature: w80XPisuyzXwvZELjUqbq/YC2C54NYBtBjaAMiTOJ33QkNZJltjENUDTZI8oAR6U0NjYXp36Z+okH9Q+ZzV/BQ==
+length: 6069
 -->
