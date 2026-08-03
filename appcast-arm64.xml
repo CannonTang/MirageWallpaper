@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Mon, 03 Aug 2026 07:42:33 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>227</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 2ed07eec5df04e8512b0efa9c1a677798e5514a2
+Channel: beta
+
+fix(workshop): restore animated square previews
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-227-2ed07eec5df0-macOS-arm64.zip" length="193185432" type="application/octet-stream" sparkle:edSignature="OfToSiYmvlgA1sYkhN92UXmvm848fdZnf1OtkUD4046fv51NMMM3VOOP8rkhynJ4C78ptSGwRZgZuwMrA7d3BQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Mon, 03 Aug 2026 06:47:31 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -163,37 +181,9 @@ Add runtime and scripting compatibility regression tests
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-222-ba50eaf317c3-macOS-arm64.zip" length="193124422" type="application/octet-stream" sparkle:edSignature="TNfDppe9umzhaVPyL4HsH1D7izutL09filQ2ya2lhQTU0EdBY129bL1Ryzz1qk9cGVE34nHfWcYPS/Py2JX6Aw=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Fri, 31 Jul 2026 19:20:09 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>216</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 0b0676d103bfd507ed8e4420c4ab4deae54e4fc4
-Channel: beta
-
-feat(settings): add the override-wallpaper toggle to the appearance section
-
-Exposes the desktop override as "覆盖壁纸" under 通用 › 外观, which until now
-had no user-facing control at all — its predecessor was gated on
-adjustMenuBarTint, a setting no view bound. Off is the default and keeps the
-previous behaviour of overriding only while Mirage runs, for menu bar and Dock
-tint consistency; on keeps the override after quitting, the way Wallpaper
-Engine's option of the same name does.
-
-Both strings are translated in all three tables rather than left equal to
-their Simplified Chinese keys, which would have read as Simplified in the
-English and Traditional locales without failing visibly (see 8cfc493).
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-216-0b0676d103bf-macOS-arm64.zip" length="192955474" type="application/octet-stream" sparkle:edSignature="hltGw6c1HE3mVXALnwMqWwz2nENoEil7Ksy3Gxfu5Npw61Xh5lIS+YF26nOnvEG/e+3xP90Nzm/ucbYcClpCCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: litTkyH0zn7jJrZlehVS+Zr82IxN6rv1DRu3ZI9x48/hoRHQeI4esWUjPYhh3pa5rRenKKS39D5ASGO7F3pZDg==
-length: 11473
+edSignature: NpWMp28AieQIBolZvTN/vO/k907x9KzZQWlmdadIox3U5iAh8SGWDwE2a5KnFYO15e7rOXRlocXBFOfRFwT9Bg==
+length: 10801
 -->
