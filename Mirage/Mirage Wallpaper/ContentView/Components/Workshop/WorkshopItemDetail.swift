@@ -11,6 +11,7 @@ struct WorkshopItemDetail: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
 
     @State private var isLoaded = false
+    @State private var isPreviewHovered = false
 
     var body: some View {
         VStack {
@@ -58,17 +59,22 @@ struct WorkshopItemDetail: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .frame(width: 280, height: 158)
+                    .frame(width: 280, height: 280)
                     .background(Color.secondary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 } else {
-                    WorkshopImage(url: item.previewImageURL, contentMode: .fill)
-                        .frame(width: 280, height: 158)
+                    WorkshopImage(
+                        url: item.previewImageURL,
+                        contentMode: .fill,
+                        isAnimating: isPreviewHovered
+                    )
+                        .frame(width: 280, height: 280)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .strokeBorder(Color.white.opacity(0.7), lineWidth: 3)
                         )
+                        .onHover { isPreviewHovered = $0 }
                 }
 
                 Text(item.title)

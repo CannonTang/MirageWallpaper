@@ -13,6 +13,7 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     var title: String
     var itemDescription: String
     var previewImageURL: URL?
+    var additionalPreviewImageURLs: [URL]? = nil
     var tags: [String]
     var subscriptions: Int
     var favorited: Int
@@ -462,6 +463,7 @@ struct SteamPublishedFile: Codable {
     var title: String?
     var file_description: String?
     var preview_url: String?
+    var previews: [SteamPreview]?
     var tags: [SteamTag]?
     var subscriptions: Int?
     var favorited: Int?
@@ -495,6 +497,10 @@ struct SteamPublishedFile: Codable {
             title: title ?? "无标题",
             itemDescription: file_description ?? "",
             previewImageURL: URL(string: preview_url ?? ""),
+            additionalPreviewImageURLs: previews?.compactMap { preview in
+                guard let value = preview.url, !value.isEmpty else { return nil }
+                return URL(string: value)
+            },
             tags: tagStrings,
             subscriptions: subscriptions ?? 0,
             favorited: favorited ?? 0,
@@ -507,6 +513,10 @@ struct SteamPublishedFile: Codable {
             ageRating: ageRating
         )
     }
+}
+
+struct SteamPreview: Codable {
+    var url: String?
 }
 
 struct SteamTag: Codable {

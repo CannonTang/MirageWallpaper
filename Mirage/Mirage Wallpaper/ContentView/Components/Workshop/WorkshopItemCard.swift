@@ -6,10 +6,6 @@
 
 import SwiftUI
 
-// A Wallpaper-Engine-style browse card: a fixed 16:9 preview that always fills
-// the frame, a gradient caption strip with title + stats, and status/preset
-// badges. Downloaded state is passed in as plain values so the card never
-// touches the filesystem while rendering.
 struct WorkshopItemCard: View {
     var item: WorkshopItem
     var isHovered: Bool
@@ -19,13 +15,13 @@ struct WorkshopItemCard: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            WorkshopImage(url: item.previewImageURL, contentMode: .fill)
+            WorkshopImage(url: item.previewImageURL, contentMode: .fill, isAnimating: isHovered)
 
             captionStrip
 
             topBadges
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .aspectRatio(1.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(

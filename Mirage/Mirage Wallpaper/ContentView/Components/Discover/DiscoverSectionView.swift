@@ -76,15 +76,13 @@ struct DiscoverCard: View {
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
 
-    // A fixed, WE-style tile. The preview always fills its box; text lives on a
-    // solid footer below so it reads cleanly at small sizes.
     private let cardWidth: CGFloat = 236
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topTrailing) {
-                WorkshopImage(url: item.previewImageURL, contentMode: .fill)
-                    .frame(width: cardWidth, height: cardWidth * 9 / 16)
+                WorkshopImage(url: item.previewImageURL, contentMode: .fill, isAnimating: isHovered)
+                    .frame(width: cardWidth, height: cardWidth)
 
                 if isDownloaded {
                     Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")

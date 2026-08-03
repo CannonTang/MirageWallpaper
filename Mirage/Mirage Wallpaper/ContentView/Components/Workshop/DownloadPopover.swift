@@ -130,7 +130,7 @@ struct DownloadRow: View {
     var body: some View {
         HStack(spacing: 10) {
             WorkshopImage(url: task.workshopItem.previewImageURL, contentMode: .fill)
-                .frame(width: 64, height: 36)
+                .frame(width: 64, height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 
             VStack(alignment: .leading, spacing: 3) {

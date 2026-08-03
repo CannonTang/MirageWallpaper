@@ -90,7 +90,7 @@ struct WorkshopView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 14)],
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 14)],
                               alignment: .leading, spacing: 14) {
                         ForEach(workshopViewModel.items) { item in
                             // O(1) lookups against the cached installed-state set;
