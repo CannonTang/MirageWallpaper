@@ -26,13 +26,22 @@ struct ExplorerTopBar: SubviewOfContentView {
                 Label("筛选", systemImage: "checklist.checked")
             }
             .buttonStyle(.borderedProminent)
-            if globalSettingsViewModel.settings.autoRefresh {
-                Button {
-                    viewModel.refresh()
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
+            Button {
+                viewModel.refresh()
+            } label: {
+                Group {
+                    if viewModel.isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
                 }
+                .frame(width: 16, height: 16)
             }
+            .disabled(viewModel.isRefreshing)
+            .help("刷新壁纸库")
+            WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
             Spacer()
             Button { 
                 if viewModel.sortingSequence == .decrease {

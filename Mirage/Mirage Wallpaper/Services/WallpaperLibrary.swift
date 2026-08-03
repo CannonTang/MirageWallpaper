@@ -137,10 +137,12 @@ final class WallpaperLibrary {
     func setWorkshopDirectory(_ url: URL?) {
         UserDefaults.standard.set(url?.path, forKey: workshopKey)
         restartMonitoringIfNeeded()
+        libraryDidChange(at: nil)
     }
     func setImportedDirectory(_ url: URL?) {
         UserDefaults.standard.set(url?.path, forKey: importedKey)
         restartMonitoringIfNeeded()
+        libraryDidChange(at: nil)
     }
 
     var librarySources: [WallpaperLibrarySource] {
@@ -311,6 +313,7 @@ final class WallpaperLibrary {
         } catch {
             throw WPImportError.copyFailed(error.localizedDescription)
         }
+        libraryDidChange(at: dest)
         return dest
     }
 
@@ -343,6 +346,7 @@ final class WallpaperLibrary {
         } catch {
             throw WPImportError.copyFailed(error.localizedDescription)
         }
+        libraryDidChange(at: dest)
         return dest
     }
 
@@ -378,10 +382,12 @@ final class WallpaperLibrary {
 
     func trash(_ wallpaper: WEWallpaper) throws {
         try fm.trashItem(at: wallpaper.wallpaperDirectory, resultingItemURL: nil)
+        libraryDidChange(at: wallpaper.wallpaperDirectory)
     }
 
     func delete(_ wallpaper: WEWallpaper) throws {
         try fm.removeItem(at: wallpaper.wallpaperDirectory)
+        libraryDidChange(at: wallpaper.wallpaperDirectory)
     }
 
     func isImported(_ wallpaper: WEWallpaper) -> Bool {
@@ -402,8 +408,9 @@ final class WallpaperLibrary {
                 eventMask: [.write, .delete, .rename],
                 queue: .main
             )
-            source.setEventHandler {
+            source.setEventHandler { [weak self] in
                 onChange()
+                self?.libraryDidChange(at: nil)
             }
             source.setCancelHandler { close(descriptor) }
             directoryMonitors.append(DirectoryMonitor(source: source, descriptor: descriptor))
@@ -425,4 +432,19 @@ final class WallpaperLibrary {
         guard let callback = monitoringCallback else { return }
         startMonitoringWorkshopDirectory(onChange: callback)
     }
+
+    private func libraryDidChange(at url: URL?) {
+        loadCacheLock.lock()
+        if let url {
+            loadCache.removeValue(forKey: url.standardizedFileURL.path)
+        } else {
+            loadCache.removeAll()
+        }
+        loadCacheLock.unlock()
+        NotificationCenter.default.post(name: .wallpaperLibraryChanged, object: url)
+    }
+}
+
+extension Notification.Name {
+    static let wallpaperLibraryChanged = Notification.Name("wallpaperLibraryChanged")
 }

@@ -38,7 +38,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("FRTag") public var tag = FRTag.all { didSet { currentPage = 1 } }
     
     @AppStorage("FilterReveal") var isFilterReveal = false
-    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 200
+    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 125
     
     @Published var isDisplaySettingsReveal = false
     @Published var importAlertPresented = false
@@ -111,6 +111,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     private var refreshWorkItem: DispatchWorkItem?
     private var refreshInFlight = false
     private var refreshAgain = false
+    @Published private(set) var isRefreshing = false
 
     convenience init(isStaging: Bool, topTabBarSelection: Int = 0) {
         self.init()
@@ -120,6 +121,9 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
 
     init() {
+        if ![100.0, 125.0, 150.0].contains(explorerIconSize) {
+            explorerIconSize = 125
+        }
         downloadObserver = NotificationCenter.default.publisher(for: .workshopItemDownloaded)
             .debounce(for: .seconds(1), scheduler: RunLoop.main)
             .sink { [weak self] _ in
@@ -428,6 +432,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
             return
         }
         refreshInFlight = true
+        isRefreshing = true
         let shouldPrewarmSizes = sortingBy == .fileSize
         DispatchQueue.global(qos: .userInitiated).async {
             let loaded = WallpaperLibrary.shared.loadAll()
@@ -440,6 +445,8 @@ class ContentViewModel: ObservableObject, DropDelegate {
                 if self.refreshAgain {
                     self.refreshAgain = false
                     self.refresh()
+                } else {
+                    self.isRefreshing = false
                 }
             }
         }

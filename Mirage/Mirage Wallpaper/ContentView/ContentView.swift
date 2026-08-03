@@ -58,8 +58,6 @@ struct ContentView: View {
                                 viewModel: viewModel
                             )
                         case 2:
-                            ExplorerTopBar(contentViewModel: viewModel)
-                                .environmentObject(globalSettingsViewModel)
                             HStack(spacing: 0) {
                                 WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
                                     .frame(width: viewModel.isFilterReveal ? 225 : 0)
@@ -110,10 +108,11 @@ struct ContentView: View {
         }
         .confirmationDialog("删除壁纸",
                             isPresented: $viewModel.isUnsubscribeConfirming) {
-            if let url = viewModel.hoveredWallpaper?.wallpaperDirectory {
+            if let wallpaper = viewModel.hoveredWallpaper {
+                let url = wallpaper.wallpaperDirectory
                 Button("立即删除", role: .destructive) {
                     WEWallpaper.invalidateSizeCache()
-                    try? FileManager.default.removeItem(at: url)
+                    try? WallpaperLibrary.shared.delete(wallpaper)
                     if url == wallpaperViewModel.currentWallpaper.wallpaperDirectory {
                         wallpaperViewModel.currentWallpaper = WallpaperViewModel.invalidWallpaper
                     }
@@ -122,7 +121,7 @@ struct ContentView: View {
                 }
                 Button("移到废纸篓") {
                     WEWallpaper.invalidateSizeCache()
-                    try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                    try? WallpaperLibrary.shared.trash(wallpaper)
                     if url == wallpaperViewModel.currentWallpaper.wallpaperDirectory {
                         wallpaperViewModel.currentWallpaper = WallpaperViewModel.invalidWallpaper
                     }
