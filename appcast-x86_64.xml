@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Mon, 03 Aug 2026 05:30:46 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>225</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: d958c342356d89a971c06918df4cf2cfa1364a73
+Channel: beta
+
+feat(app): full support for traditional chinese and english
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-225-d958c342356d-macOS-x86_64.zip" length="198106009" type="application/octet-stream" sparkle:edSignature="BSPscYh//fyl/nYEGSd5B91D6Y8VmOlZsQ4b1Sr5KAyNJhCbsmuMiWVBkXpo01A7/P6DUlUyHTYpjLTV+esVDQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 02 Aug 2026 16:40:18 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -139,33 +156,9 @@ screen through the sheet.
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-213-e4f81afc8c83-macOS-x86_64.zip" length="197864055" type="application/octet-stream" sparkle:edSignature="qx5NIzTSiHUyKnu9MtID7AgWmXncRGi1mkygDdiOmFs2KtYo1bBmbEv16OyZ0mjy9t+ItZ1IN3uXX7q2zFhYBw=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 30 Jul 2026 18:01:35 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>210</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 8cfc493fd0226d57dd4c7ab9da54ad9044d45d09
-Channel: beta
-
-fix(i18n): translate the screen saver strings
-
-Every entry in the saver's en and zh-Hant tables was still the Simplified
-Chinese key verbatim. Because the keys are themselves Chinese, the missing
-translations fell back to the key and read as Simplified in both locales
-instead of failing visibly.
-
-zh-Hant follows Taiwan usage rather than a glyph-level conversion:
-螢幕保護程式, 元件, 載入, 設定, 影片, 壁紙.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-210-8cfc493fd022-macOS-x86_64.zip" length="197851724" type="application/octet-stream" sparkle:edSignature="iZFO4zxQr4xYahyxUUyUjfWVo+MVk4/pRDmX/iXM31H7YVjhwfJfT5U/dwVk/8teNqC8C/AGLUQsFIr1nU5ECg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: /2AqWNXiECayuheza6awp/l3CUSlMLXovLT5eAWMP3lA0O7Sw4audMC3870tnDq+p0nLXUHKT5COW1378nSPDA==
-length: 9605
+edSignature: vQjgvailfdRkKsi6V5Bu/V3dAqGf0RPxEAQgGC/AnPUD9iEpzwfUMmnksW0ZHOtr73zNNDVscFfjo5hPUkyPAw==
+length: 9241
 -->
