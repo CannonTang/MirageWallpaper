@@ -75,9 +75,11 @@ final class SteamWebAPI {
         typeFilter: WorkshopTypeFilter = .all,
         ageRating: WorkshopAgeRatingFilter = .all,
         page: Int = 1,
-        perPage: Int = 30
+        perPage: Int = 30,
+        trendDays: Int? = nil,
+        enrichCreatorProfiles: Bool = true
     ) async throws -> (items: [WorkshopItem], total: Int) {
-        await throttle()
+        try await throttle()
 
         var params: [String: String] = [
             "key": apiKey,
@@ -92,8 +94,10 @@ final class SteamWebAPI {
             "strip_description_bbcode": "true",
         ]
 
+        if sortOrder.usesTrendPeriod {
+            params["days"] = "\(trendDays ?? WorkshopTrendPeriod.week.rawValue)"
+        }
         if sortOrder == .trending {
-            params["days"] = "7"
             params["include_recent_votes_only"] = "true"
         }
 
@@ -141,7 +145,7 @@ final class SteamWebAPI {
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
         let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
         let visibleItems = decodedItems.filter { $0.fileSize > 0 }
-        let items = await enrichCreators(in: visibleItems)
+        let items = enrichCreatorProfiles ? await enrichCreators(in: visibleItems) : visibleItems
         let total = apiResponse.response.total ?? items.count
 
         return (items, total)
@@ -150,7 +154,7 @@ final class SteamWebAPI {
     // MARK: - Get File Details
 
     func getFileDetails(workshopIds: [String]) async throws -> [WorkshopItem] {
-        await throttle()
+        try await throttle()
 
         let components = URLComponents(string: baseURL + "ISteamRemoteStorage/GetPublishedFileDetails/v1/")!
 
@@ -195,6 +199,29 @@ final class SteamWebAPI {
     }
 
     // MARK: - Trending / Featured
+
+    func fetchDiscover(
+        category: WorkshopDiscoverCategory,
+        period: WorkshopTrendPeriod,
+        count: Int = 12,
+        ageRating: WorkshopAgeRatingFilter = .all
+    ) async throws -> [WorkshopItem] {
+        let sortOrder = category.sortOrder ?? .trending
+        let result = try await queryFiles(
+            tags: category.tag.map { [$0] } ?? [],
+            sortOrder: sortOrder,
+            ageRating: ageRating,
+            page: 1,
+            perPage: count,
+            trendDays: category.usesTrendPeriod ? period.rawValue : nil,
+            enrichCreatorProfiles: false
+        )
+        return result.items
+    }
+
+    func enrichCreatorDetails(in items: [WorkshopItem]) async -> [WorkshopItem] {
+        await enrichCreators(in: items)
+    }
 
     func fetchTrending(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
         let result = try await queryFiles(sortOrder: .trending, ageRating: ageRating, page: 1, perPage: count)
@@ -272,8 +299,8 @@ final class SteamWebAPI {
 
     // MARK: - Throttle
 
-    private func throttle() async {
-        await requestThrottle.wait()
+    private func throttle() async throws {
+        try await requestThrottle.wait()
     }
 
     private func enrichCreators(in items: [WorkshopItem]) async -> [WorkshopItem] {
@@ -322,7 +349,7 @@ final class SteamWebAPI {
         for start in stride(from: 0, to: steamIds.count, by: 100) {
             let end = min(start + 100, steamIds.count)
             let batch = Array(steamIds[start..<end])
-            await throttle()
+            try await throttle()
 
             var components = URLComponents(string: baseURL + "ISteamUser/GetPlayerSummaries/v2/")!
             components.queryItems = [
@@ -364,14 +391,16 @@ private actor SteamRequestThrottle {
         self.interval = interval
     }
 
-    func wait() async {
+    func wait() async throws {
+        try Task.checkCancellation()
         let now = Date()
         let scheduled = max(now, nextAllowed)
         nextAllowed = scheduled.addingTimeInterval(interval)
         let delay = scheduled.timeIntervalSince(now)
         if delay > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
+        try Task.checkCancellation()
     }
 }
 

@@ -14,6 +14,7 @@ class WorkshopViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var selectedTags: Set<String> = []
     @Published var sortOrder: WorkshopSortOrder = .trending
+    @Published var trendPeriod: WorkshopTrendPeriod = .week
     @Published var typeFilter: WorkshopTypeFilter = .all
     /// `@Published` + manual persistence rather than `@AppStorage`: SwiftUI does
     /// not route `@AppStorage` writes inside an `ObservableObject` through
@@ -39,16 +40,13 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Discover State
 
-    @Published var trendingItems: [WorkshopItem] = []
-    @Published var mostRecentItems: [WorkshopItem] = []
-    @Published var mostSubscribedItems: [WorkshopItem] = []
-    @Published var topRatedItems: [WorkshopItem] = []
-    @Published var animeItems: [WorkshopItem] = []
-    @Published var natureItems: [WorkshopItem] = []
-    @Published var abstractItems: [WorkshopItem] = []
-    @Published var landscapeItems: [WorkshopItem] = []
+    @Published private(set) var discoverItems: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
+    @Published var discoverTrendPeriod: WorkshopTrendPeriod = .week
     @Published var isDiscoverLoading: Bool = false
-    @Published var bannerItems: [WorkshopItem] = []
+
+    var bannerItems: [WorkshopItem] {
+        Array((discoverItems[.trending] ?? []).prefix(5))
+    }
 
     // MARK: - Download State
 
@@ -65,7 +63,7 @@ class WorkshopViewModel: ObservableObject {
     @Published var isLoggingOut = false
 
     var totalPages: Int {
-        min(maximumPages, max(1, Int(ceil(Double(totalItems) / Double(itemsPerPage)))))
+        maximumPages
     }
 
     var activeDownloadCount: Int {
@@ -272,6 +270,7 @@ class WorkshopViewModel: ObservableObject {
         let requestSortOrder = sortOrder
         let requestTypeFilter = typeFilter
         let requestAgeRating = ageRatingFilter
+        let requestTrendPeriod = trendPeriod
         let requestPage = currentPage
         isLoading = true
         error = nil
@@ -300,7 +299,8 @@ class WorkshopViewModel: ObservableObject {
                         typeFilter: requestTypeFilter,
                         ageRating: requestAgeRating,
                         page: requestPage,
-                        perPage: self.itemsPerPage
+                        perPage: self.itemsPerPage,
+                        trendDays: requestSortOrder.usesTrendPeriod ? requestTrendPeriod.rawValue : nil
                     )
                 }
 
@@ -425,6 +425,7 @@ class WorkshopViewModel: ObservableObject {
         searchText = ""
         typeFilter = .all
         sortOrder = .trending
+        trendPeriod = .week
         ageRatingFilter = .default
         currentPage = 1
         search()
@@ -438,43 +439,47 @@ class WorkshopViewModel: ObservableObject {
         discoverGeneration += 1
         let generation = discoverGeneration
         let rating = ageRatingFilter
+        let period = discoverTrendPeriod
         isDiscoverLoading = true
 
         discoverTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            async let trending = SteamWebAPI.shared.fetchTrending(count: 15, ageRating: rating)
-            async let recent = SteamWebAPI.shared.fetchMostRecent(count: 10, ageRating: rating)
-            async let subscribed = SteamWebAPI.shared.fetchMostSubscribed(count: 10, ageRating: rating)
-            async let rated = SteamWebAPI.shared.fetchTopRated(count: 10, ageRating: rating)
-            async let anime = SteamWebAPI.shared.fetchByTag("Anime", count: 10, ageRating: rating)
-            async let nature = SteamWebAPI.shared.fetchByTag("Nature", count: 10, ageRating: rating)
-            async let abstract = SteamWebAPI.shared.fetchByTag("Abstract", count: 10, ageRating: rating)
-            async let landscape = SteamWebAPI.shared.fetchByTag("Landscape", count: 10, ageRating: rating)
-
-            do {
-                let results = try await (
-                    trending, recent, subscribed, rated,
-                    anime, nature, abstract, landscape
-                )
-                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
-                self.trendingItems = results.0
-                self.mostRecentItems = results.1
-                self.mostSubscribedItems = results.2
-                self.topRatedItems = results.3
-                self.animeItems = results.4
-                self.natureItems = results.5
-                self.abstractItems = results.6
-                self.landscapeItems = results.7
-
-                self.bannerItems = Array(self.trendingItems.prefix(5))
-                self.rememberCreators(in: [
-                    results.0, results.1, results.2, results.3,
-                    results.4, results.5, results.6, results.7
-                ].flatMap { $0 })
-            } catch {
-                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
-                NSLog("[Mirage] 加载发现页失败: \(error.localizedDescription)")
+            let loaded = await withTaskGroup(
+                of: (WorkshopDiscoverCategory, [WorkshopItem])?.self,
+                returning: [WorkshopDiscoverCategory: [WorkshopItem]].self
+            ) { group in
+                for category in WorkshopDiscoverCategory.allCases {
+                    group.addTask {
+                        guard !Task.isCancelled else { return nil }
+                        let items = try? await SteamWebAPI.shared.fetchDiscover(
+                            category: category,
+                            period: period,
+                            count: category == .trending ? 15 : 12,
+                            ageRating: rating
+                        )
+                        guard let items else { return nil }
+                        return (category, items)
+                    }
+                }
+                var sections: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
+                for await result in group {
+                    if let (category, items) = result {
+                        sections[category] = items
+                    }
+                }
+                return sections
             }
+
+            guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+            let enriched = await SteamWebAPI.shared.enrichCreatorDetails(
+                in: loaded.values.flatMap { $0 }
+            )
+            guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+            let byID = Dictionary(enriched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            self.discoverItems = loaded.mapValues { items in
+                items.map { byID[$0.id] ?? $0 }
+            }
+            self.rememberCreators(in: enriched)
             if generation == self.discoverGeneration {
                 self.isDiscoverLoading = false
             }
@@ -637,21 +642,29 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Navigate to Workshop with filter
 
-    func navigateToWorkshopWithTag(_ tag: String) {
+    func navigateToWorkshopWithTag(
+        _ tag: String,
+        trendPeriod: WorkshopTrendPeriod = .week
+    ) {
         selectedTags = [tag]
         searchText = ""
         typeFilter = .all
         sortOrder = .trending
+        self.trendPeriod = trendPeriod
         showCustomization = false
         currentPage = 1
         search()
     }
 
-    func navigateToWorkshopWithSort(_ sort: WorkshopSortOrder) {
+    func navigateToWorkshopWithSort(
+        _ sort: WorkshopSortOrder,
+        trendPeriod: WorkshopTrendPeriod = .week
+    ) {
         selectedTags.removeAll()
         searchText = ""
         typeFilter = .all
         sortOrder = sort
+        self.trendPeriod = trendPeriod
         showCustomization = false
         currentPage = 1
         search()

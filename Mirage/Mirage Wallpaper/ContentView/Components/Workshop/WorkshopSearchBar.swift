@@ -77,7 +77,26 @@ struct WorkshopSearchBar: View {
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 120)
+            .frame(width: 150)
+
+            if workshopViewModel.sortOrder.usesTrendPeriod {
+                Picker("时间范围", selection: Binding(
+                    get: { workshopViewModel.trendPeriod },
+                    set: { newValue in
+                        workshopViewModel.trendPeriod = newValue
+                        workshopViewModel.currentPage = 1
+                        workshopViewModel.search()
+                    }
+                )) {
+                    ForEach(WorkshopTrendPeriod.allCases) { period in
+                        Text(period.label).tag(period)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 120)
+                .help("趋势范围")
+            }
         }
     }
 }

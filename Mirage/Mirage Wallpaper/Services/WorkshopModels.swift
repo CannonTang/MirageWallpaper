@@ -210,6 +210,14 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
     case mostRecent = 1
     case mostSubscribed = 2
     case topRated = 3
+    case mostUpvoted = 4
+    case playtimeTrend = 5
+    case totalPlaytime = 6
+    case averagePlaytimeTrend = 7
+    case lifetimeAveragePlaytime = 8
+    case sessionsTrend = 9
+    case lifetimeSessions = 10
+    case lastUpdated = 11
 
     var id: Int { rawValue }
 
@@ -219,6 +227,14 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
         case .mostRecent: return L("最新发布")
         case .mostSubscribed: return L("订阅最多")
         case .topRated: return L("评分最高")
+        case .mostUpvoted: return L("最多投票")
+        case .playtimeTrend: return L("播放时长最多")
+        case .totalPlaytime: return L("总播放时长最多")
+        case .averagePlaytimeTrend: return L("平均播放时长最长")
+        case .lifetimeAveragePlaytime: return L("终身平均播放时长")
+        case .sessionsTrend: return L("播放次数最多")
+        case .lifetimeSessions: return L("总播放次数最多")
+        case .lastUpdated: return L("最近更新")
         }
     }
 
@@ -226,9 +242,101 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
         switch self {
         case .trending: return 3
         case .mostRecent: return 1
-        case .mostSubscribed: return 9
+        case .mostSubscribed: return 12
         case .topRated: return 0
+        case .mostUpvoted: return 10
+        case .playtimeTrend: return 13
+        case .totalPlaytime: return 14
+        case .averagePlaytimeTrend: return 15
+        case .lifetimeAveragePlaytime: return 16
+        case .sessionsTrend: return 17
+        case .lifetimeSessions: return 18
+        case .lastUpdated: return 19
         }
+    }
+
+    var usesTrendPeriod: Bool {
+        switch self {
+        case .trending, .mostUpvoted, .playtimeTrend, .averagePlaytimeTrend, .sessionsTrend:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
+    case day = 1
+    case week = 7
+    case month = 30
+    case threeMonths = 90
+    case sixMonths = 180
+    case year = 365
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .day: return L("今日")
+        case .week: return L("本周")
+        case .month: return L("本月")
+        case .threeMonths: return L("三个月")
+        case .sixMonths: return L("半年")
+        case .year: return L("一年")
+        }
+    }
+}
+
+enum WorkshopDiscoverCategory: String, CaseIterable, Identifiable {
+    case trending
+    case mostUpvoted
+    case mostSubscribed
+    case topRated
+    case mostRecent
+    case lastUpdated
+    case playtimeTrend
+    case averagePlaytimeTrend
+    case sessionsTrend
+    case totalPlaytime
+    case lifetimeAveragePlaytime
+    case lifetimeSessions
+    case anime
+    case nature
+    case abstract
+    case landscape
+
+    var id: String { rawValue }
+
+    var sortOrder: WorkshopSortOrder? {
+        switch self {
+        case .trending: return .trending
+        case .mostUpvoted: return .mostUpvoted
+        case .mostSubscribed: return .mostSubscribed
+        case .topRated: return .topRated
+        case .mostRecent: return .mostRecent
+        case .lastUpdated: return .lastUpdated
+        case .playtimeTrend: return .playtimeTrend
+        case .averagePlaytimeTrend: return .averagePlaytimeTrend
+        case .sessionsTrend: return .sessionsTrend
+        case .totalPlaytime: return .totalPlaytime
+        case .lifetimeAveragePlaytime: return .lifetimeAveragePlaytime
+        case .lifetimeSessions: return .lifetimeSessions
+        case .anime, .nature, .abstract, .landscape: return nil
+        }
+    }
+
+    var tag: String? {
+        switch self {
+        case .anime: return "Anime"
+        case .nature: return "Nature"
+        case .abstract: return "Abstract"
+        case .landscape: return "Landscape"
+        default: return nil
+        }
+    }
+
+    var usesTrendPeriod: Bool {
+        sortOrder?.usesTrendPeriod == true || tag != nil
     }
 }
 

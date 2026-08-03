@@ -39,7 +39,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("FRTag") public var tag = FRTag.all { didSet { currentPage = 1 } }
     
     @AppStorage("FilterReveal") var isFilterReveal = false
-    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 125
+    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 170
     
     @Published var isDisplaySettingsReveal = false
     @Published var importAlertPresented = false
@@ -122,8 +122,17 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
 
     init() {
-        if ![100.0, 125.0, 150.0].contains(explorerIconSize) {
-            explorerIconSize = 125
+        switch explorerIconSize {
+        case 100:
+            explorerIconSize = 140
+        case 125:
+            explorerIconSize = 170
+        case 150:
+            explorerIconSize = 200
+        case 140, 170, 200:
+            break
+        default:
+            explorerIconSize = 170
         }
         downloadObserver = NotificationCenter.default.publisher(for: .workshopItemDownloaded)
             .debounce(for: .seconds(1), scheduler: RunLoop.main)

@@ -50,9 +50,15 @@ struct WorkshopItemCard: View {
 
             HStack(spacing: 10) {
                 Label(item.formattedSubscriptions, systemImage: "arrow.down.circle.fill")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                 Label(item.formattedViews, systemImage: "eye.fill")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                 Spacer(minLength: 0)
                 Text(item.displayTypeName)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(kindColor.opacity(0.9), in: Capsule())
@@ -60,8 +66,6 @@ struct WorkshopItemCard: View {
             }
             .font(.caption2)
             .foregroundStyle(.white.opacity(0.9))
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
         }
         .padding(.horizontal, 10)
         .padding(.top, 22)
@@ -78,17 +82,21 @@ struct WorkshopItemCard: View {
 
     private var topBadges: some View {
         VStack {
-            HStack(alignment: .top) {
-                if item.isPreset {
-                    Label("预设", systemImage: "slider.horizontal.3")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.purple, in: Capsule())
-                        .foregroundStyle(.white)
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .leading, spacing: 5) {
+                    if item.isPreset {
+                        Label("预设", systemImage: "slider.horizontal.3")
+                            .font(.caption2.bold())
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.purple, in: Capsule())
+                            .foregroundStyle(.white)
+                    }
+                    ageRatingBadge
                 }
-                ageRatingBadge
-                Spacer(minLength: 0)
+                Spacer(minLength: 6)
                 statusBadge
             }
             Spacer(minLength: 0)
@@ -103,6 +111,8 @@ struct WorkshopItemCard: View {
         if let rating = item.ageRating, rating != .everyone {
             Text(rating.displayName)
                 .font(.caption2.bold())
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background(rating == .mature ? .red : .orange, in: Capsule())
@@ -114,6 +124,7 @@ struct WorkshopItemCard: View {
     private var statusBadge: some View {
         if let state = downloadState, !(presetNeedsDependency && state == .completed) {
             downloadBadge(state)
+                .fixedSize()
         } else if isDownloaded {
             HStack(spacing: 3) {
                 Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark")
@@ -125,6 +136,8 @@ struct WorkshopItemCard: View {
             .padding(.vertical, 3)
             .background(presetNeedsDependency ? .orange : .green, in: Capsule())
             .foregroundStyle(.white)
+            .lineLimit(1)
+            .fixedSize()
         }
     }
 

@@ -137,9 +137,9 @@ struct WallpaperGridViewMenu: View {
     var body: some View {
         Menu("视图") {
             Picker("图标大小", selection: $viewModel.explorerIconSize) {
-                Text("小图标").tag(Double(100))
-                Text("中图标").tag(Double(125))
-                Text("大图标").tag(Double(150))
+                Text("小图标").tag(Double(140))
+                Text("中图标").tag(Double(170))
+                Text("大图标").tag(Double(200))
             }
             .pickerStyle(.inline)
 
@@ -215,9 +215,18 @@ final class HorizontalScrollWheelView: NSView {
                   let scrollView = self.enclosingScrollView else { return event }
             let point = self.convert(event.locationInWindow, from: nil)
             guard self.bounds.contains(point) else { return event }
-            let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-                ? event.scrollingDeltaX
-                : event.scrollingDeltaY
+            if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
+                var ancestor = scrollView.superview
+                while let view = ancestor {
+                    if let outerScrollView = view as? NSScrollView {
+                        outerScrollView.scrollWheel(with: event)
+                        return nil
+                    }
+                    ancestor = view.superview
+                }
+                return event
+            }
+            let delta = event.scrollingDeltaX
             guard delta != 0 else { return event }
             let clipView = scrollView.contentView
             let maximumX = max(0, (scrollView.documentView?.bounds.width ?? 0) - clipView.bounds.width)

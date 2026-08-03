@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct DiscoverSectionView: View {
-    var title: LocalizedStringKey
+    var title: String
     var icon: String
     var iconColor: Color
     var items: [WorkshopItem]
@@ -109,10 +109,11 @@ struct DiscoverSectionView: View {
     private func scrollButton(systemImage: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.headline)
-                .frame(width: 30, height: 30)
+                .font(.title3.weight(.semibold))
+                .frame(width: 44, height: 44)
                 .background(.regularMaterial, in: Circle())
                 .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(disabled)
