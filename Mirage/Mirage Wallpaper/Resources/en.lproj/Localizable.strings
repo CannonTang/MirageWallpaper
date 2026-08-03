@@ -138,6 +138,8 @@
 "低" = "Low";
 "佚名作者" = "Anonymous author";
 "作者" = "Author";
+"在 Steam 中搜索作者" = "Search authors on Steam";
+"未知作者" = "Unknown author";
 "你即将把以下%@类文件作为壁纸运行：" = "You are about to run the following %@ file as a wallpaper:";
 "使用已保存会话：%@" = "Use saved session: %@";
 "保存" = "Save";
@@ -341,6 +343,7 @@
 "搜索" = "Search";
 "搜索、筛选、排序海量壁纸" = "Search, Filter, and Sort Thousands of Wallpapers";
 "搜索创意工坊壁纸..." = "Search Workshop Wallpapers...";
+"搜索作品、作者或作品 ID..." = "Search titles, authors, or Workshop ID...";
 "搜索浏览" = "Search and Browse";
 "撤销" = "Undo";
 "播放列表" = "Playlist";
@@ -418,6 +421,8 @@
 "极致" = "Ultra";
 "查看" = "View";
 "查看全部" = "View all";
+"查看匹配作者的 Wallpaper Engine 作品" = "View matching authors' Wallpaper Engine items";
+"查看作者的 Wallpaper Engine 作品" = "View this author's Wallpaper Engine items";
 "标签" = "Tags";
 "根据壁纸自带的属性动态生成调节控件，音量、速度、颜色、开关等即改即生效。" = "Controls are generated from each wallpaper's properties. Changes to volume, speed, color, toggles, and other settings take effect immediately.";
 "检查更新…" = "Check for updates…";
@@ -538,6 +543,7 @@
 "视频无法播放" = "Video Cannot Be Played";
 "解压完成后未找到可执行的 steamcmd.sh" = "The SteamCMD archive did not contain an executable steamcmd.sh file";
 "计时器上" = "On a Timer";
+"按计时器" = "On a Timer";
 "订阅" = "Subscribe";
 "订阅最多" = "Most Subscribed";
 "设为屏保" = "Set as Screen Saver";

@@ -23,15 +23,14 @@ struct WorkshopItemCard: View {
         }
         .aspectRatio(1.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.white.opacity(isHovered ? 0.18 : 0.06),
                               lineWidth: 1)
         )
         .shadow(color: .black.opacity(isHovered ? 0.30 : 0.12),
                 radius: isHovered ? 12 : 4, y: isHovered ? 6 : 2)
-        .scaleEffect(isHovered ? 1.035 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isHovered)
     }
 
@@ -41,6 +40,13 @@ struct WorkshopItemCard: View {
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .foregroundStyle(.white)
+
+            if !item.creatorSteamId.isEmpty {
+                Label(item.creatorDisplayName, systemImage: "person.fill")
+                    .lineLimit(1)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.82))
+            }
 
             HStack(spacing: 10) {
                 Label(item.formattedSubscriptions, systemImage: "arrow.down.circle.fill")
@@ -54,6 +60,8 @@ struct WorkshopItemCard: View {
             }
             .font(.caption2)
             .foregroundStyle(.white.opacity(0.9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
         }
         .padding(.horizontal, 10)
         .padding(.top, 22)

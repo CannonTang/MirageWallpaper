@@ -16,6 +16,7 @@ struct DiscoverSectionView: View {
     var onSeeAll: () -> Void
 
     @State private var hoveredId: String?
+    @State private var scrollIndex = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -40,31 +41,82 @@ struct DiscoverSectionView: View {
                 .buttonStyle(.plain)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
-                    ForEach(items) { item in
-                        DiscoverCard(
-                            item: item,
-                            isHovered: hoveredId == item.id,
-                            isSelected: workshopViewModel.selectedItem?.id == item.id,
-                            isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                            presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                            downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
-                        )
-                        .onHover { hovered in
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                hoveredId = hovered ? item.id : nil
+            ScrollViewReader { proxy in
+                ZStack {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 14) {
+                            ForEach(items) { item in
+                                DiscoverCard(
+                                    item: item,
+                                    isHovered: hoveredId == item.id,
+                                    isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                    cardWidth: contentViewModel.explorerIconSize
+                                )
+                                .id(item.id)
+                                .onHover { hovered in
+                                    hoveredId = hovered ? item.id : nil
+                                }
+                                .onTapGesture {
+                                    workshopViewModel.selectWorkshopItem(item)
+                                }
+                                .contextMenu {
+                                    WallpaperGridViewMenu(viewModel: contentViewModel)
+                                }
                             }
                         }
-                        .onTapGesture {
-                            workshopViewModel.selectWorkshopItem(item)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 2)
+                        .background(HorizontalScrollWheelBridge { offset in
+                            let extent = max(1, contentViewModel.explorerIconSize + 14)
+                            let index = Int((offset / extent).rounded(.up))
+                            scrollIndex = min(max(0, items.count - 1), max(0, index))
+                        })
+                    }
+
+                    HStack {
+                        scrollButton(systemImage: "chevron.left", disabled: scrollIndex == 0) {
+                            scrollIndex = max(0, scrollIndex - 3)
+                            scroll(to: scrollIndex, proxy: proxy)
+                        }
+                        Spacer()
+                        scrollButton(
+                            systemImage: "chevron.right",
+                            disabled: scrollIndex >= max(0, items.count - 1)
+                        ) {
+                            scrollIndex = min(max(0, items.count - 1), scrollIndex + 3)
+                            scroll(to: scrollIndex, proxy: proxy)
                         }
                     }
+                    .padding(.horizontal, 6)
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 2)
+                .onChange(of: items.map(\.id)) { _, _ in
+                    scrollIndex = 0
+                }
             }
         }
+    }
+
+    private func scroll(to index: Int, proxy: ScrollViewProxy) {
+        guard items.indices.contains(index) else { return }
+        withAnimation(.easeOut(duration: 0.25)) {
+            proxy.scrollTo(items[index].id, anchor: .leading)
+        }
+    }
+
+    private func scrollButton(systemImage: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.headline)
+                .frame(width: 30, height: 30)
+                .background(.regularMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
     }
 }
 
@@ -75,8 +127,7 @@ struct DiscoverCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
-
-    private let cardWidth: CGFloat = 236
+    var cardWidth: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -118,21 +169,22 @@ struct DiscoverCard: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
             .frame(width: cardWidth, alignment: .leading)
         }
         .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(isSelected ? Color.accentColor : Color.white.opacity(0.06),
                               lineWidth: isSelected ? 2 : 1)
         }
         .shadow(color: .black.opacity(isHovered ? 0.28 : 0.10),
                 radius: isHovered ? 12 : 4, y: isHovered ? 6 : 2)
-        .scaleEffect(isHovered ? 1.03 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isHovered)
     }
 

@@ -125,16 +125,81 @@ final class WorkshopImageLoader {
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
             return NSImage(data: data)
         }
+        let frameIndex = representativeFrameIndex(in: source)
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel
         ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, frameIndex, options as CFDictionary) else {
             return NSImage(data: data)
         }
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    private static func representativeFrameIndex(in source: CGImageSource) -> Int {
+        let count = CGImageSourceGetCount(source)
+        guard count > 1 else { return 0 }
+
+        let sampleCount = min(count, 32)
+        let indexes = Set((0..<sampleCount).map { sample in
+            sampleCount == 1 ? 0 : sample * (count - 1) / (sampleCount - 1)
+        }).sorted()
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 64
+        ]
+
+        for index in indexes {
+            guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else {
+                continue
+            }
+            if !isNearBlack(frame) {
+                return index
+            }
+        }
+        return 0
+    }
+
+    private static func isNearBlack(_ image: CGImage) -> Bool {
+        let width = min(image.width, 64)
+        let height = min(image.height, 64)
+        guard width > 0, height > 0 else { return true }
+
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let rendered = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGBitmapInfo.byteOrder32Big.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else { return true }
+
+        var visiblePixels = 0
+        var litPixels = 0
+        var brightnessTotal = 0
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            guard pixels[offset + 3] > 8 else { continue }
+            visiblePixels += 1
+            let brightness = max(pixels[offset], pixels[offset + 1], pixels[offset + 2])
+            brightnessTotal += Int(brightness)
+            if brightness > 18 {
+                litPixels += 1
+            }
+        }
+        guard visiblePixels > 0 else { return true }
+        return litPixels * 50 < visiblePixels && brightnessTotal < visiblePixels * 10
     }
 }
 
@@ -160,7 +225,11 @@ struct WorkshopImage: View {
                         .interpolation(.high)
                         .aspectRatio(contentMode: contentMode)
                     if isAnimating, let animationData, let url {
-                        WorkshopAnimatedImage(data: animationData, identity: url.absoluteString)
+                        WorkshopAnimatedImage(
+                            data: animationData,
+                            identity: url.absoluteString,
+                            contentMode: contentMode
+                        )
                     }
                 } else if failed {
                     Image(systemName: "photo")
@@ -225,6 +294,7 @@ struct WorkshopImage: View {
 private struct WorkshopAnimatedImage: NSViewRepresentable {
     let data: Data
     let identity: String
+    let contentMode: ContentMode
 
     final class Coordinator {
         var identity: String?
@@ -234,25 +304,70 @@ private struct WorkshopAnimatedImage: NSViewRepresentable {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
-        view.imageScaling = .scaleProportionallyUpOrDown
-        view.imageAlignment = .alignCenter
-        view.animates = true
+    func makeNSView(context: Context) -> WorkshopAnimatedNSView {
+        let view = WorkshopAnimatedNSView()
         updateNSView(view, context: context)
         return view
     }
 
-    func updateNSView(_ view: NSImageView, context: Context) {
-        guard context.coordinator.identity != identity else { return }
-        context.coordinator.identity = identity
-        view.image = NSImage(data: data)
-        view.animates = true
+    func updateNSView(_ view: WorkshopAnimatedNSView, context: Context) {
+        view.contentMode = contentMode
+        if context.coordinator.identity != identity {
+            context.coordinator.identity = identity
+            view.image = NSImage(data: data)
+        }
     }
 
-    static func dismantleNSView(_ view: NSImageView, coordinator: Coordinator) {
-        view.animates = false
+    static func dismantleNSView(_ view: WorkshopAnimatedNSView, coordinator: Coordinator) {
         view.image = nil
         coordinator.identity = nil
+    }
+}
+
+private final class WorkshopAnimatedNSView: NSView {
+    private let imageView = NSImageView()
+    var contentMode: ContentMode = .fill {
+        didSet { needsLayout = true }
+    }
+    var image: NSImage? {
+        get { imageView.image }
+        set {
+            imageView.image = newValue
+            imageView.animates = newValue != nil
+            needsLayout = true
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.autoresizingMask = []
+        addSubview(imageView)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        guard contentMode == .fill, let size = imageView.image?.size,
+              size.width > 0, size.height > 0,
+              bounds.width > 0, bounds.height > 0 else {
+            imageView.frame = bounds
+            return
+        }
+        let scale = max(bounds.width / size.width, bounds.height / size.height)
+        let width = size.width * scale
+        let height = size.height * scale
+        imageView.frame = NSRect(
+            x: (bounds.width - width) / 2,
+            y: (bounds.height - height) / 2,
+            width: width,
+            height: height
+        )
     }
 }

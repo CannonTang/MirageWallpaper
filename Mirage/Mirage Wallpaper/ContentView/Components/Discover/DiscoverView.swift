@@ -14,37 +14,59 @@ struct DiscoverView: View {
     @State private var showAPIKeyReminder = false
 
     var body: some View {
-        ScrollView {
-            if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
-                SteamAPIKeyReminderBanner()
-                    .padding(.horizontal)
-            }
-
-            if workshopViewModel.isDiscoverLoading && workshopViewModel.bannerItems.isEmpty {
-                VStack(spacing: 20) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("正在加载推荐内容...")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 100)
-            } else {
-                VStack(spacing: 24) {
-                    if !workshopViewModel.trendingItems.isEmpty {
-                        DiscoverSectionView(
-                            title: "本周最热",
-                            icon: "flame.fill",
-                            iconColor: .orange,
-                            items: workshopViewModel.trendingItems,
-                            workshopViewModel: workshopViewModel,
-                            contentViewModel: viewModel,
-                            onSeeAll: {
-                                workshopViewModel.navigateToWorkshopWithSort(.trending)
-                                viewModel.topTabBarSelection = 2
-                            }
-                        )
+        VStack(spacing: 8) {
+            HStack {
+                Spacer()
+                Button {
+                    workshopViewModel.refreshDiscover()
+                } label: {
+                    Group {
+                        if workshopViewModel.isDiscoverLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
                     }
+                    .frame(width: 16, height: 16)
+                }
+                .disabled(workshopViewModel.isDiscoverLoading)
+                .help("刷新发现")
+                WallpaperGridViewMenu(viewModel: viewModel)
+            }
+            .padding(.horizontal)
+
+            ScrollView {
+                if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
+                    SteamAPIKeyReminderBanner()
+                        .padding(.horizontal)
+                }
+
+                if workshopViewModel.isDiscoverLoading && workshopViewModel.bannerItems.isEmpty {
+                    VStack(spacing: 20) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("正在加载推荐内容...")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, 100)
+                } else {
+                    VStack(spacing: 24) {
+                        if !workshopViewModel.trendingItems.isEmpty {
+                            DiscoverSectionView(
+                                title: "本周最热",
+                                icon: "flame.fill",
+                                iconColor: .orange,
+                                items: workshopViewModel.trendingItems,
+                                workshopViewModel: workshopViewModel,
+                                contentViewModel: viewModel,
+                                onSeeAll: {
+                                    workshopViewModel.navigateToWorkshopWithSort(.trending)
+                                    viewModel.topTabBarSelection = 2
+                                }
+                            )
+                        }
 
                     if !workshopViewModel.mostRecentItems.isEmpty {
                         DiscoverSectionView(
@@ -151,10 +173,14 @@ struct DiscoverView: View {
                         )
                     }
 
-                    Spacer(minLength: 20)
+                        Spacer(minLength: 20)
+                    }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
             }
+        }
+        .contextMenu {
+            WallpaperGridViewMenu(viewModel: viewModel)
         }
         .onAppear {
             if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {

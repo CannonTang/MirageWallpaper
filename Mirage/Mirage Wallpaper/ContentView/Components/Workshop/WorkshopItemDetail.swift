@@ -11,7 +11,6 @@ struct WorkshopItemDetail: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
 
     @State private var isLoaded = false
-    @State private var isPreviewHovered = false
 
     var body: some View {
         VStack {
@@ -66,7 +65,7 @@ struct WorkshopItemDetail: View {
                     WorkshopImage(
                         url: item.previewImageURL,
                         contentMode: .fill,
-                        isAnimating: isPreviewHovered
+                        isAnimating: true
                     )
                         .frame(width: 280, height: 280)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -74,13 +73,38 @@ struct WorkshopItemDetail: View {
                             RoundedRectangle(cornerRadius: 12)
                                 .strokeBorder(Color.white.opacity(0.7), lineWidth: 3)
                         )
-                        .onHover { isPreviewHovered = $0 }
                 }
 
                 Text(item.title)
                     .font(.headline)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
+
+                if !item.creatorSteamId.isEmpty {
+                    Button {
+                        workshopViewModel.openCreatorWorkshop(for: item)
+                    } label: {
+                        HStack(spacing: 10) {
+                            creatorAvatar(for: item)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.creatorDisplayName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                Text("查看作者的 Wallpaper Engine 作品")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 if item.isPreset {
                     Label("创意工坊预设：需要对应的基础壁纸", systemImage: "slider.horizontal.3")
@@ -329,6 +353,23 @@ struct WorkshopItemDetail: View {
                 Divider().frame(height: 1).overlay(Color.accentColor)
             }
         }
+    }
+
+    @ViewBuilder
+    func creatorAvatar(for item: WorkshopItem) -> some View {
+        AsyncImage(url: item.creatorAvatarURL) { phase in
+            if case .success(let image) = phase {
+                image
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 34, height: 34)
+        .clipShape(Circle())
     }
 }
 

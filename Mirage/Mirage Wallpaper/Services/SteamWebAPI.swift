@@ -27,6 +27,7 @@ final class SteamWebAPI {
     }()
     private let decoder = JSONDecoder()
     private let imageCache = NSCache<NSString, CacheEntry>()
+    private let creatorCache = NSCache<NSString, CreatorCacheEntry>()
     private let requestThrottle = SteamRequestThrottle(interval: 0.35)
 
     private static let officialBase = "https://api.steampowered.com/"
@@ -55,6 +56,16 @@ final class SteamWebAPI {
         }
     }
 
+    final class CreatorCacheEntry {
+        let creator: WorkshopCreator
+        let date: Date
+
+        init(creator: WorkshopCreator) {
+            self.creator = creator
+            self.date = Date()
+        }
+    }
+
     // MARK: - Query Workshop Files
 
     func queryFiles(
@@ -74,6 +85,7 @@ final class SteamWebAPI {
             "page": "\(page)",
             "numperpage": "\(perPage)",
             "appid": appId,
+            "filetype": "0",
             "return_tags": "true",
             "return_previews": "true",
             "return_metadata": "true",
@@ -89,7 +101,11 @@ final class SteamWebAPI {
             params["search_text"] = searchText
         }
 
-        var allTags = tags
+        let selectableTags = Set(WorkshopTag.allCases.map(\.rawValue))
+        let requestedTags = Set(tags)
+        var allTags = selectableTags.isSubset(of: requestedTags)
+            ? tags.filter { !selectableTags.contains($0) }
+            : tags
         if typeFilter != .all {
             allTags.append(typeFilter.rawValue.capitalized)
         }
@@ -123,8 +139,10 @@ final class SteamWebAPI {
         }
 
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
-        let items = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
-        let total = apiResponse.response.total ?? 0
+        let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
+        let visibleItems = decodedItems.filter { $0.fileSize > 0 }
+        let items = await enrichCreators(in: visibleItems)
+        let total = apiResponse.response.total ?? items.count
 
         return (items, total)
     }
@@ -160,7 +178,20 @@ final class SteamWebAPI {
         }
 
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
-        return apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
+        let items = (apiResponse.response.publishedfiledetails ?? [])
+            .map { $0.toWorkshopItem() }
+            .filter { $0.fileSize > 0 }
+        return await enrichCreators(in: items)
+    }
+
+    func creatorProfile(steamId: String) async -> WorkshopCreator? {
+        let normalized = steamId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        if let cached = cachedCreator(steamId: normalized) {
+            return cached
+        }
+        let profiles = try? await fetchCreatorProfiles(steamIds: [normalized])
+        return profiles?[normalized]
     }
 
     // MARK: - Trending / Featured
@@ -243,6 +274,85 @@ final class SteamWebAPI {
 
     private func throttle() async {
         await requestThrottle.wait()
+    }
+
+    private func enrichCreators(in items: [WorkshopItem]) async -> [WorkshopItem] {
+        let steamIds = Set(items.map(\.creatorSteamId).filter { !$0.isEmpty })
+        guard !steamIds.isEmpty else { return items }
+
+        var creators: [String: WorkshopCreator] = [:]
+        var missingIds: [String] = []
+        for steamId in steamIds {
+            if let creator = cachedCreator(steamId: steamId) {
+                creators[steamId] = creator
+            } else {
+                missingIds.append(steamId)
+            }
+        }
+
+        if !missingIds.isEmpty,
+           let fetched = try? await fetchCreatorProfiles(steamIds: missingIds) {
+            creators.merge(fetched) { _, new in new }
+        }
+
+        return items.map { item in
+            guard let creator = creators[item.creatorSteamId] else { return item }
+            var enriched = item
+            enriched.creatorName = creator.name
+            enriched.creatorAvatarURL = creator.avatarURL
+            enriched.creatorProfileURL = creator.profileURL
+            return enriched
+        }
+    }
+
+    private func cachedCreator(steamId: String) -> WorkshopCreator? {
+        let key = NSString(string: steamId)
+        guard let entry = creatorCache.object(forKey: key) else { return nil }
+        if Date().timeIntervalSince(entry.date) > 3_600 {
+            creatorCache.removeObject(forKey: key)
+            return nil
+        }
+        return entry.creator
+    }
+
+    private func fetchCreatorProfiles(steamIds: [String]) async throws -> [String: WorkshopCreator] {
+        guard !apiKey.isEmpty else { return [:] }
+        var result: [String: WorkshopCreator] = [:]
+
+        for start in stride(from: 0, to: steamIds.count, by: 100) {
+            let end = min(start + 100, steamIds.count)
+            let batch = Array(steamIds[start..<end])
+            await throttle()
+
+            var components = URLComponents(string: baseURL + "ISteamUser/GetPlayerSummaries/v2/")!
+            components.queryItems = [
+                URLQueryItem(name: "key", value: apiKey),
+                URLQueryItem(name: "steamids", value: batch.joined(separator: ","))
+            ]
+            guard let url = components.url else { throw SteamAPIError.invalidURL }
+
+            let (data, response) = try await session.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw SteamAPIError.invalidResponse
+            }
+            guard httpResponse.statusCode == 200 else {
+                throw SteamAPIError.httpError(httpResponse.statusCode)
+            }
+
+            let apiResponse = try decoder.decode(SteamPlayerSummariesResponse.self, from: data)
+            for player in apiResponse.response.players {
+                let creator = WorkshopCreator(
+                    steamId: player.steamid,
+                    name: player.personaname,
+                    avatarURL: player.avatarmedium.flatMap(URL.init(string:)),
+                    profileURL: player.profileurl.flatMap(URL.init(string:))
+                )
+                result[player.steamid] = creator
+                creatorCache.setObject(CreatorCacheEntry(creator: creator), forKey: NSString(string: player.steamid))
+            }
+        }
+
+        return result
     }
 }
 

@@ -28,6 +28,7 @@ class WorkshopViewModel: ObservableObject {
     @Published var totalItems: Int = 0
     @Published var isLoading: Bool = false
     @Published var error: String?
+    @Published private(set) var knownCreators: [WorkshopCreator] = []
 
     @Published var selectedItem: WorkshopItem?
     @Published var showCustomization: Bool = false
@@ -74,12 +75,33 @@ class WorkshopViewModel: ObservableObject {
         }.count
     }
 
+    var matchingCreators: [WorkshopCreator] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        var matches = knownCreators.filter {
+            $0.name.localizedCaseInsensitiveContains(query) || $0.steamId.contains(query)
+        }
+        if Self.isSteamUserId(query), !matches.contains(where: { $0.steamId == query }) {
+            matches.insert(WorkshopCreator(steamId: query, name: query), at: 0)
+        }
+        return Array(matches.prefix(5))
+    }
+
+    var showsCreatorSearch: Bool {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !query.isEmpty && (!query.allSatisfy(\.isNumber) || !matchingCreators.isEmpty)
+    }
+
     private static let ageRatingStorageKey = "WorkshopAgeRatingFilter"
 
     private var searchDebounce: AnyCancellable?
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
     private var pendingPresetApplication: (presetID: String, dependencyID: String)?
+    private var searchTask: Task<Void, Never>?
+    private var discoverTask: Task<Void, Never>?
+    private var searchGeneration = 0
+    private var discoverGeneration = 0
 
     init() {
         if let stored = UserDefaults.standard.object(forKey: Self.ageRatingStorageKey) as? Int {
@@ -118,6 +140,11 @@ class WorkshopViewModel: ObservableObject {
             .sink { [weak self] _ in self?.refreshInstalledState() }
             .store(in: &serviceStateCancellables)
 
+        NotificationCenter.default.publisher(for: .wallpaperLibraryChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in self?.handleLibraryChange(notification) }
+            .store(in: &serviceStateCancellables)
+
         refreshInstalledState()
     }
 
@@ -134,7 +161,7 @@ class WorkshopViewModel: ObservableObject {
     private let installedScanQueue = DispatchQueue(
         label: "cn.laobamac.Mirage.workshop.installed", qos: .utility)
 
-    func refreshInstalledState() {
+    func refreshInstalledState(reconcileDownloads: Bool = false) {
         installedScanQueue.async { [weak self] in
             guard let self else { return }
             let directories = WallpaperLibrary.shared.allWorkshopIDDirectories()
@@ -155,8 +182,31 @@ class WorkshopViewModel: ObservableObject {
                 if self.presetsNeedingDependency != needsDependency {
                     self.presetsNeedingDependency = needsDependency
                 }
+                if reconcileDownloads {
+                    self.downloadQueue.removeAll { task in
+                        guard !installed.contains(task.id) else { return false }
+                        if case .completed = task.state { return true }
+                        return false
+                    }
+                }
             }
         }
+    }
+
+    private func handleLibraryChange(_ notification: Notification) {
+        if let url = notification.object as? URL {
+            let workshopID = url.lastPathComponent
+            if WallpaperLibrary.shared.workshopItemDirectory(for: workshopID) == nil {
+                installedWorkshopIDs.remove(workshopID)
+                presetsNeedingDependency.remove(workshopID)
+                downloadQueue.removeAll { task in
+                    guard task.id == workshopID else { return false }
+                    if case .completed = task.state { return true }
+                    return false
+                }
+            }
+        }
+        refreshInstalledState(reconcileDownloads: true)
     }
 
     func isInstalled(_ workshopId: String) -> Bool {
@@ -211,36 +261,100 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Search
 
     func search() {
-        guard !isLoading else { return }
+        searchTask?.cancel()
+        searchGeneration += 1
+        let generation = searchGeneration
+        let requestSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestTags = Array(selectedTags)
+        let requestSortOrder = sortOrder
+        let requestTypeFilter = typeFilter
+        let requestAgeRating = ageRatingFilter
+        let requestPage = currentPage
         isLoading = true
         error = nil
         steamServiceStatus.browsingAPI = .checking
 
-        Task { @MainActor in
+        searchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
-                let result = try await SteamWebAPI.shared.queryFiles(
-                    searchText: searchText,
-                    tags: Array(selectedTags),
-                    sortOrder: sortOrder,
-                    typeFilter: typeFilter,
-                    ageRating: ageRatingFilter,
-                    page: currentPage,
-                    perPage: itemsPerPage
-                )
+                let result: (items: [WorkshopItem], total: Int)
+                var matchedCreator: WorkshopCreator?
+                if Self.isPublishedFileId(requestSearchText) {
+                    let details = try await SteamWebAPI.shared.getFileDetails(workshopIds: [requestSearchText])
+                    let items = details.filter {
+                        $0.publishedFileId == requestSearchText && $0.consumerAppId == 431960
+                    }
+                    result = (items, items.count)
+                } else if Self.isSteamUserId(requestSearchText) {
+                    matchedCreator = await SteamWebAPI.shared.creatorProfile(steamId: requestSearchText)
+                    result = ([], 0)
+                } else {
+                    result = try await SteamWebAPI.shared.queryFiles(
+                        searchText: requestSearchText,
+                        tags: requestTags,
+                        sortOrder: requestSortOrder,
+                        typeFilter: requestTypeFilter,
+                        ageRating: requestAgeRating,
+                        page: requestPage,
+                        perPage: self.itemsPerPage
+                    )
+                }
 
-                // 创意工坊在线数据不含 approved/mobile/audio/customizable 标志，
-                // "仅显示"分区仅为与「已安装」保持 UI 一致，不收窄结果，避免空列表。
-                // 分级不同：它是真实的工坊标签，由 excludedtags 在服务端收窄。
+                guard !Task.isCancelled, generation == self.searchGeneration else { return }
                 self.items = result.items
                 self.totalItems = result.total
+                self.rememberCreators(in: result.items)
+                if let matchedCreator {
+                    self.rememberCreator(matchedCreator)
+                }
                 self.isLoading = false
                 self.steamServiceStatus.browsingAPI = .available("Steam Web API 可用")
             } catch {
+                guard !Task.isCancelled, generation == self.searchGeneration else { return }
                 self.error = error.localizedDescription
                 self.isLoading = false
                 self.steamServiceStatus.browsingAPI = .unavailable(error.localizedDescription)
             }
         }
+    }
+
+    func refreshSearch() {
+        search()
+    }
+
+    func submitSearch() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let creator = knownCreators.first(where: {
+            $0.steamId == query || $0.name.caseInsensitiveCompare(query) == .orderedSame
+        }) {
+            openCreatorWorkshop(creator)
+            return
+        }
+        if Self.isSteamUserId(query) {
+            openCreatorWorkshop(WorkshopCreator(steamId: query, name: query))
+            return
+        }
+        currentPage = 1
+        search()
+    }
+
+    func openCreatorWorkshop(_ creator: WorkshopCreator) {
+        guard let url = creator.workshopURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func openCreatorWorkshop(for item: WorkshopItem) {
+        guard let creator = WorkshopCreator(item: item) else { return }
+        openCreatorWorkshop(creator)
+    }
+
+    func searchCreatorOnSteam() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty,
+              var components = URLComponents(string: "https://steamcommunity.com/search/users/") else { return }
+        components.fragment = "text=\(query)"
+        guard let url = components.url else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func loadNextPage() {
@@ -298,12 +412,16 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Discover
 
-    func loadDiscover() {
-        guard !isDiscoverLoading else { return }
+    func loadDiscover(force: Bool = false) {
+        if isDiscoverLoading && !force { return }
+        discoverTask?.cancel()
+        discoverGeneration += 1
+        let generation = discoverGeneration
+        let rating = ageRatingFilter
         isDiscoverLoading = true
 
-        Task { @MainActor in
-            let rating = ageRatingFilter
+        discoverTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             async let trending = SteamWebAPI.shared.fetchTrending(count: 15, ageRating: rating)
             async let recent = SteamWebAPI.shared.fetchMostRecent(count: 10, ageRating: rating)
             async let subscribed = SteamWebAPI.shared.fetchMostSubscribed(count: 10, ageRating: rating)
@@ -314,21 +432,66 @@ class WorkshopViewModel: ObservableObject {
             async let landscape = SteamWebAPI.shared.fetchByTag("Landscape", count: 10, ageRating: rating)
 
             do {
-                self.trendingItems = try await trending
-                self.mostRecentItems = try await recent
-                self.mostSubscribedItems = try await subscribed
-                self.topRatedItems = try await rated
-                self.animeItems = try await anime
-                self.natureItems = try await nature
-                self.abstractItems = try await abstract
-                self.landscapeItems = try await landscape
+                let results = try await (
+                    trending, recent, subscribed, rated,
+                    anime, nature, abstract, landscape
+                )
+                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+                self.trendingItems = results.0
+                self.mostRecentItems = results.1
+                self.mostSubscribedItems = results.2
+                self.topRatedItems = results.3
+                self.animeItems = results.4
+                self.natureItems = results.5
+                self.abstractItems = results.6
+                self.landscapeItems = results.7
 
                 self.bannerItems = Array(self.trendingItems.prefix(5))
+                self.rememberCreators(in: [
+                    results.0, results.1, results.2, results.3,
+                    results.4, results.5, results.6, results.7
+                ].flatMap { $0 })
             } catch {
+                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
                 NSLog("[Mirage] 加载发现页失败: \(error.localizedDescription)")
             }
-            self.isDiscoverLoading = false
+            if generation == self.discoverGeneration {
+                self.isDiscoverLoading = false
+            }
         }
+    }
+
+    func refreshDiscover() {
+        loadDiscover(force: true)
+    }
+
+    private func rememberCreators(in items: [WorkshopItem]) {
+        var creators = Dictionary(uniqueKeysWithValues: knownCreators.map { ($0.id, $0) })
+        for item in items {
+            guard let creator = WorkshopCreator(item: item) else { continue }
+            creators[creator.id] = creator
+        }
+        knownCreators = creators.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private func rememberCreator(_ creator: WorkshopCreator) {
+        var creators = Dictionary(uniqueKeysWithValues: knownCreators.map { ($0.id, $0) })
+        creators[creator.id] = creator
+        knownCreators = creators.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private static func isSteamUserId(_ value: String) -> Bool {
+        value.count == 17 && value.hasPrefix("7656119") && value.allSatisfy(\.isNumber)
+    }
+
+    private static func isPublishedFileId(_ value: String) -> Bool {
+        guard !value.isEmpty, !isSteamUserId(value), value.allSatisfy(\.isNumber),
+              let number = UInt64(value) else { return false }
+        return number > 0
     }
 
     // MARK: - Download

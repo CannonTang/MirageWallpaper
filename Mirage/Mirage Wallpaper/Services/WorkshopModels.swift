@@ -22,12 +22,28 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     var timeCreated: Date
     var timeUpdated: Date
     var creatorSteamId: String
+    var creatorName: String? = nil
+    var creatorAvatarURL: URL? = nil
+    var creatorProfileURL: URL? = nil
+    var consumerAppId: Int? = nil
     var wallpaperType: String
     /// Nil for the rare published file that carries no rating tag, matching how
     /// the local library treats a `project.json` without `contentrating`.
     var ageRating: WorkshopAgeRating? = nil
 
     var id: String { publishedFileId }
+
+    var creatorDisplayName: String {
+        let name = creatorName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !name.isEmpty { return name }
+        if !creatorSteamId.isEmpty { return creatorSteamId }
+        return L("未知作者")
+    }
+
+    var creatorWorkshopURL: URL? {
+        guard !creatorSteamId.isEmpty else { return nil }
+        return URL(string: "https://steamcommunity.com/profiles/\(creatorSteamId)/myworkshopfiles/?appid=431960")
+    }
 
     var kind: WallpaperKind {
         WallpaperKind(rawType: wallpaperType)
@@ -472,6 +488,7 @@ struct SteamPublishedFile: Codable {
     var time_created: Int?
     var time_updated: Int?
     var creator: String?
+    var consumer_app_id: StringOrInt?
 
     func toWorkshopItem() -> WorkshopItem {
         let rawTags = tags?.compactMap { $0.tag } ?? []
@@ -509,10 +526,55 @@ struct SteamPublishedFile: Codable {
             timeCreated: Date(timeIntervalSince1970: TimeInterval(time_created ?? 0)),
             timeUpdated: Date(timeIntervalSince1970: TimeInterval(time_updated ?? 0)),
             creatorSteamId: creator ?? "",
+            consumerAppId: consumer_app_id.map { Int($0.int64Value) },
             wallpaperType: wallpaperType,
             ageRating: ageRating
         )
     }
+}
+
+struct WorkshopCreator: Identifiable, Hashable {
+    var steamId: String
+    var name: String
+    var avatarURL: URL?
+    var profileURL: URL?
+
+    var id: String { steamId }
+
+    var workshopURL: URL? {
+        guard !steamId.isEmpty else { return nil }
+        return URL(string: "https://steamcommunity.com/profiles/\(steamId)/myworkshopfiles/?appid=431960")
+    }
+
+    init?(item: WorkshopItem) {
+        guard !item.creatorSteamId.isEmpty else { return nil }
+        steamId = item.creatorSteamId
+        name = item.creatorDisplayName
+        avatarURL = item.creatorAvatarURL
+        profileURL = item.creatorProfileURL
+    }
+
+    init(steamId: String, name: String, avatarURL: URL? = nil, profileURL: URL? = nil) {
+        self.steamId = steamId
+        self.name = name
+        self.avatarURL = avatarURL
+        self.profileURL = profileURL
+    }
+}
+
+struct SteamPlayerSummariesResponse: Codable {
+    var response: SteamPlayerSummariesBody
+}
+
+struct SteamPlayerSummariesBody: Codable {
+    var players: [SteamPlayerSummary]
+}
+
+struct SteamPlayerSummary: Codable {
+    var steamid: String
+    var personaname: String
+    var profileurl: String?
+    var avatarmedium: String?
 }
 
 struct SteamPreview: Codable {
