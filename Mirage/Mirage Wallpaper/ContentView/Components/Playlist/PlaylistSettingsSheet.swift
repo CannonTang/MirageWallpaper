@@ -90,7 +90,7 @@ struct PlaylistSettingsSheet: View {
                     ForEach(PlaylistTiming.allCases) { Text($0.displayName).tag($0) }
                 }
                 .labelsHidden()
-                .frame(width: 220)
+                .fixedSize()
                 VStack { Divider().overlay(Color.accentColor) }
             }
 
