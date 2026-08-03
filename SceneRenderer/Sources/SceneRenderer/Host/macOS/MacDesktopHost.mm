@@ -29,6 +29,9 @@
 - (BOOL)canBecomeMainWindow {
     return NO;
 }
+- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
+    return frameRect;
+}
 @end
 
 // Weakly-held wrapper to safely pass a C++ host pointer into NSTimer blocks.

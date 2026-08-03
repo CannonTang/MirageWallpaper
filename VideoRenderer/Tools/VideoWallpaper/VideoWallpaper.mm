@@ -245,6 +245,7 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @implementation VideoWallpaperWindow
 - (BOOL)canBecomeKeyWindow { return NO; }
 - (BOOL)canBecomeMainWindow { return NO; }
+- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen { return frameRect; }
 @end
 
 @interface VideoWallpaperAppDelegate : NSObject <NSApplicationDelegate>
