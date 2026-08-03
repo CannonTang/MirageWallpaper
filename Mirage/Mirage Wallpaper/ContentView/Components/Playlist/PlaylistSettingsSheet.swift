@@ -82,30 +82,33 @@ struct PlaylistSettingsSheet: View {
     }
 
     private var timingSection: some View {
-        section(L("更换壁纸")) {
-            VStack(alignment: .leading, spacing: 14) {
-                Picker("", selection: $settings.timing) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text(L("更换壁纸"))
+                    .font(.headline)
+                Picker(L("更换壁纸"), selection: $settings.timing) {
                     ForEach(PlaylistTiming.allCases) { Text($0.displayName).tag($0) }
                 }
                 .labelsHidden()
-                .frame(maxWidth: 220)
+                .frame(width: 220)
+                VStack { Divider().overlay(Color.accentColor) }
+            }
 
-                switch settings.timing {
-                case .timer:
-                    timerControls
-                case .daytime:
-                    daytimeControls
-                case .dayOfWeek:
-                    dayOfWeekControls
-                case .logon:
-                    Text(L("仅在 Mirage 启动时切换到列表中的壁纸。"))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                case .never:
-                    Text(L("壁纸不会自动更换，仅手动点选切换。"))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            switch settings.timing {
+            case .timer:
+                timerControls
+            case .daytime:
+                daytimeControls
+            case .dayOfWeek:
+                dayOfWeekControls
+            case .logon:
+                Text(L("仅在 Mirage 启动时切换到列表中的壁纸。"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            case .never:
+                Text(L("壁纸不会自动更换，仅手动点选切换。"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
