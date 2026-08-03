@@ -15,6 +15,15 @@ class WorkshopViewModel: ObservableObject {
     @Published var selectedTags: Set<String> = []
     @Published var sortOrder: WorkshopSortOrder = .trending
     @Published var typeFilter: WorkshopTypeFilter = .all
+    /// `@Published` + manual persistence rather than `@AppStorage`: SwiftUI does
+    /// not route `@AppStorage` writes inside an `ObservableObject` through
+    /// `objectWillChange`, which would leave the sidebar checkboxes stale.
+    @Published var ageRatingFilter: WorkshopAgeRatingFilter = .default {
+        didSet {
+            guard ageRatingFilter != oldValue else { return }
+            UserDefaults.standard.set(ageRatingFilter.rawValue, forKey: Self.ageRatingStorageKey)
+        }
+    }
     @Published var currentPage: Int = 1
     @Published var totalItems: Int = 0
     @Published var isLoading: Bool = false
@@ -65,12 +74,18 @@ class WorkshopViewModel: ObservableObject {
         }.count
     }
 
+    private static let ageRatingStorageKey = "WorkshopAgeRatingFilter"
+
     private var searchDebounce: AnyCancellable?
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
     private var pendingPresetApplication: (presetID: String, dependencyID: String)?
 
     init() {
+        if let stored = UserDefaults.standard.object(forKey: Self.ageRatingStorageKey) as? Int {
+            ageRatingFilter = WorkshopAgeRatingFilter(rawValue: stored)
+        }
+
         searchDebounce = $searchText
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .removeDuplicates()
@@ -208,12 +223,14 @@ class WorkshopViewModel: ObservableObject {
                     tags: Array(selectedTags),
                     sortOrder: sortOrder,
                     typeFilter: typeFilter,
+                    ageRating: ageRatingFilter,
                     page: currentPage,
                     perPage: itemsPerPage
                 )
 
                 // 创意工坊在线数据不含 approved/mobile/audio/customizable 标志，
                 // "仅显示"分区仅为与「已安装」保持 UI 一致，不收窄结果，避免空列表。
+                // 分级不同：它是真实的工坊标签，由 excludedtags 在服务端收窄。
                 self.items = result.items
                 self.totalItems = result.total
                 self.isLoading = false
@@ -255,11 +272,26 @@ class WorkshopViewModel: ObservableObject {
         search()
     }
 
+    func applyAgeRatingFilter(_ rating: WorkshopAgeRating, isOn: Bool) {
+        let bit = WorkshopAgeRatingFilter.bit(for: rating)
+        var updated = ageRatingFilter
+        if isOn {
+            updated.insert(bit)
+        } else {
+            updated.remove(bit)
+        }
+        guard updated != ageRatingFilter else { return }
+        ageRatingFilter = updated
+        currentPage = 1
+        search()
+    }
+
     func clearFilters() {
         selectedTags.removeAll()
         searchText = ""
         typeFilter = .all
         sortOrder = .trending
+        ageRatingFilter = .default
         currentPage = 1
         search()
     }
@@ -271,14 +303,15 @@ class WorkshopViewModel: ObservableObject {
         isDiscoverLoading = true
 
         Task { @MainActor in
-            async let trending = SteamWebAPI.shared.fetchTrending(count: 15)
-            async let recent = SteamWebAPI.shared.fetchMostRecent(count: 10)
-            async let subscribed = SteamWebAPI.shared.fetchMostSubscribed(count: 10)
-            async let rated = SteamWebAPI.shared.fetchTopRated(count: 10)
-            async let anime = SteamWebAPI.shared.fetchByTag("Anime", count: 10)
-            async let nature = SteamWebAPI.shared.fetchByTag("Nature", count: 10)
-            async let abstract = SteamWebAPI.shared.fetchByTag("Abstract", count: 10)
-            async let landscape = SteamWebAPI.shared.fetchByTag("Landscape", count: 10)
+            let rating = ageRatingFilter
+            async let trending = SteamWebAPI.shared.fetchTrending(count: 15, ageRating: rating)
+            async let recent = SteamWebAPI.shared.fetchMostRecent(count: 10, ageRating: rating)
+            async let subscribed = SteamWebAPI.shared.fetchMostSubscribed(count: 10, ageRating: rating)
+            async let rated = SteamWebAPI.shared.fetchTopRated(count: 10, ageRating: rating)
+            async let anime = SteamWebAPI.shared.fetchByTag("Anime", count: 10, ageRating: rating)
+            async let nature = SteamWebAPI.shared.fetchByTag("Nature", count: 10, ageRating: rating)
+            async let abstract = SteamWebAPI.shared.fetchByTag("Abstract", count: 10, ageRating: rating)
+            async let landscape = SteamWebAPI.shared.fetchByTag("Landscape", count: 10, ageRating: rating)
 
             do {
                 self.trendingItems = try await trending

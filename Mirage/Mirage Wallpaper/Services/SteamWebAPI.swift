@@ -62,6 +62,7 @@ final class SteamWebAPI {
         tags: [String] = [],
         sortOrder: WorkshopSortOrder = .trending,
         typeFilter: WorkshopTypeFilter = .all,
+        ageRating: WorkshopAgeRatingFilter = .all,
         page: Int = 1,
         perPage: Int = 30
     ) async throws -> (items: [WorkshopItem], total: Int) {
@@ -94,6 +95,14 @@ final class SteamWebAPI {
         }
         for (index, tag) in allTags.enumerated() {
             params["requiredtags[\(index)]"] = tag
+        }
+
+        // Ratings are mutually exclusive, so AND-ing them as `requiredtags`
+        // would match nothing; the unchecked ones are excluded instead.
+        // `excludedtags` is orthogonal, so type/genre keep their AND semantics.
+        let excluded = ageRating.excludedRatings
+        for (index, rating) in excluded.enumerated() {
+            params["excludedtags[\(index)]"] = rating.steamTag
         }
 
         var components = URLComponents(string: baseURL + "IPublishedFileService/QueryFiles/v1/")!
@@ -156,28 +165,34 @@ final class SteamWebAPI {
 
     // MARK: - Trending / Featured
 
-    func fetchTrending(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .trending, page: 1, perPage: count)
+    func fetchTrending(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .trending, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchMostRecent(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .mostRecent, page: 1, perPage: count)
+    func fetchMostRecent(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .mostRecent, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchMostSubscribed(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .mostSubscribed, page: 1, perPage: count)
+    func fetchMostSubscribed(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .mostSubscribed, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchTopRated(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .topRated, page: 1, perPage: count)
+    func fetchTopRated(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .topRated, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchByTag(_ tag: String, sortOrder: WorkshopSortOrder = .trending, count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(tags: [tag], sortOrder: sortOrder, page: 1, perPage: count)
+    func fetchByTag(
+        _ tag: String,
+        sortOrder: WorkshopSortOrder = .trending,
+        count: Int = 10,
+        ageRating: WorkshopAgeRatingFilter = .all
+    ) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(
+            tags: [tag], sortOrder: sortOrder, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 

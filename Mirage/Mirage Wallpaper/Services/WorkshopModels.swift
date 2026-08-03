@@ -22,6 +22,9 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     var timeUpdated: Date
     var creatorSteamId: String
     var wallpaperType: String
+    /// Nil for the rare published file that carries no rating tag, matching how
+    /// the local library treats a `project.json` without `contentrating`.
+    var ageRating: WorkshopAgeRating? = nil
 
     var id: String { publishedFileId }
 
@@ -81,7 +84,8 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
         timeCreated: Date(),
         timeUpdated: Date(),
         creatorSteamId: "",
-        wallpaperType: "scene"
+        wallpaperType: "scene",
+        ageRating: nil
     )
 
     static func dependencyPlaceholder(id: String) -> WorkshopItem {
@@ -98,8 +102,87 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
             timeCreated: .distantPast,
             timeUpdated: .distantPast,
             creatorSteamId: "",
-            wallpaperType: "scene"
+            wallpaperType: "scene",
+            ageRating: nil
         )
+    }
+}
+
+// MARK: - Age Rating
+
+/// The three mutually exclusive rating tags Steam exposes for Wallpaper Engine.
+/// Raw values match `project.json`'s `contentrating`, so a Workshop item and an
+/// installed wallpaper name the same rating the same way.
+enum WorkshopAgeRating: String, CaseIterable, Identifiable, Codable, Hashable {
+    case everyone = "Everyone"
+    case questionable = "Questionable"
+    case mature = "Mature"
+
+    var id: String { rawValue }
+
+    var steamTag: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .everyone: return L("所有人")
+        case .questionable: return L("轻度裸露")
+        case .mature: return L("成人")
+        }
+    }
+
+    init?(steamTag: String) {
+        guard let match = Self.allCases.first(where: {
+            $0.rawValue.caseInsensitiveCompare(steamTag) == .orderedSame
+        }) else { return nil }
+        self = match
+    }
+
+    init?(contentRating: String?) {
+        guard let contentRating else { return nil }
+        self.init(steamTag: contentRating)
+    }
+}
+
+// MARK: - Age Rating Filter
+
+/// Mirrors `FRAgeRating` so the Workshop browser and the local library express
+/// the same filter the same way.
+struct WorkshopAgeRatingFilter: OptionSet, Codable, Equatable {
+    let rawValue: Int
+
+    static let everyone     = WorkshopAgeRatingFilter(rawValue: 1 << 0)
+    static let questionable = WorkshopAgeRatingFilter(rawValue: 1 << 1)
+    static let mature       = WorkshopAgeRatingFilter(rawValue: 1 << 2)
+
+    static let all: WorkshopAgeRatingFilter = [.everyone, .questionable, .mature]
+    static let none: WorkshopAgeRatingFilter = []
+
+    /// Adult content stays opt-in: a fresh install browses the all-ages subset.
+    static let `default`: WorkshopAgeRatingFilter = [.everyone]
+
+    static func bit(for rating: WorkshopAgeRating) -> WorkshopAgeRatingFilter {
+        switch rating {
+        case .everyone: return .everyone
+        case .questionable: return .questionable
+        case .mature: return .mature
+        }
+    }
+
+    func contains(_ rating: WorkshopAgeRating) -> Bool {
+        contains(Self.bit(for: rating))
+    }
+
+    var selectedRatings: [WorkshopAgeRating] {
+        WorkshopAgeRating.allCases.filter { contains($0) }
+    }
+
+    /// Ratings to hand to Steam's `excludedtags`.  Empty when everything is
+    /// selected, and also when nothing is: excluding all three would return an
+    /// empty page, so a cleared filter stops narrowing rather than showing
+    /// nothing.
+    var excludedRatings: [WorkshopAgeRating] {
+        if self == .all || isEmpty { return [] }
+        return WorkshopAgeRating.allCases.filter { !contains($0) }
     }
 }
 
@@ -389,19 +472,23 @@ struct SteamPublishedFile: Codable {
     var creator: String?
 
     func toWorkshopItem() -> WorkshopItem {
-        let wallpaperType = tags?.first(where: {
-            let v = ($0.tag ?? "").lowercased()
-            return v == "scene" || v == "web" || v == "video"
-        })?.tag ?? "scene"
+        let rawTags = tags?.compactMap { $0.tag } ?? []
 
-        let tagStrings = tags?
-            .compactMap { $0.tag }
-            .filter { t in
-                let l = t.lowercased()
-                return l != "scene" && l != "web" && l != "video" &&
-                       l != "wallpaper" && l != "approved" &&
-                       l != "everyone" && l != "questionable" && l != "mature"
-            } ?? []
+        let wallpaperType = rawTags.first(where: {
+            let v = $0.lowercased()
+            return v == "scene" || v == "web" || v == "video"
+        }) ?? "scene"
+
+        // Read before the tags are stripped below, which is where the rating
+        // used to be discarded along with the other bookkeeping tags.
+        let ageRating = rawTags.lazy.compactMap { WorkshopAgeRating(steamTag: $0) }.first
+
+        let tagStrings = rawTags.filter { t in
+            let l = t.lowercased()
+            return l != "scene" && l != "web" && l != "video" &&
+                   l != "wallpaper" && l != "approved" &&
+                   l != "everyone" && l != "questionable" && l != "mature"
+        }
 
         return WorkshopItem(
             publishedFileId: publishedfileid ?? "",
@@ -416,7 +503,8 @@ struct SteamPublishedFile: Codable {
             timeCreated: Date(timeIntervalSince1970: TimeInterval(time_created ?? 0)),
             timeUpdated: Date(timeIntervalSince1970: TimeInterval(time_updated ?? 0)),
             creatorSteamId: creator ?? "",
-            wallpaperType: wallpaperType
+            wallpaperType: wallpaperType,
+            ageRating: ageRating
         )
     }
 }

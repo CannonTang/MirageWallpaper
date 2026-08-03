@@ -411,6 +411,7 @@
 "未知来源" = "Unknown Source";
 "未知错误" = "Unknown Error";
 "未选择" = "Not selected";
+"未选择任何分级，当前显示全部分级" = "No rating selected; showing all ratings";
 "本周最热" = "Trending This Week";
 "来源" = "Source";
 "极简" = "Minimal";

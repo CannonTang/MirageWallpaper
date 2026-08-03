@@ -83,12 +83,27 @@ struct WorkshopItemCard: View {
                         .background(.purple, in: Capsule())
                         .foregroundStyle(.white)
                 }
+                ageRatingBadge
                 Spacer(minLength: 0)
                 statusBadge
             }
             Spacer(minLength: 0)
         }
         .padding(8)
+    }
+
+    /// Only restricted ratings are called out; badging every all-ages wallpaper
+    /// would mark almost the whole grid.
+    @ViewBuilder
+    private var ageRatingBadge: some View {
+        if let rating = item.ageRating, rating != .everyone {
+            Text(rating.displayName)
+                .font(.caption2.bold())
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(rating == .mature ? .red : .orange, in: Capsule())
+                .foregroundStyle(.white)
+        }
     }
 
     @ViewBuilder

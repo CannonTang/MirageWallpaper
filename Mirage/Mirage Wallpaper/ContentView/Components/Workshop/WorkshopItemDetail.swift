@@ -94,6 +94,13 @@ struct WorkshopItemDetail: View {
                 HStack(spacing: 12) {
                     Label(item.displayTypeName, systemImage: "tag.fill")
                     Label(item.formattedFileSize, systemImage: "doc.fill")
+                    if let rating = item.ageRating {
+                        let tint: Color = rating == .everyone
+                            ? .secondary
+                            : (rating == .mature ? .red : .orange)
+                        Label(rating.displayName, systemImage: rating == .everyone ? "checkmark.seal" : "exclamationmark.triangle")
+                            .foregroundStyle(tint)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)

@@ -38,6 +38,25 @@ struct WorkshopFilterSidebar: View {
                         }
                     }
 
+                    FilterSection("分级", alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(WorkshopAgeRating.allCases) { rating in
+                                Toggle(rating.displayName, isOn: Binding(
+                                    get: { workshopViewModel.ageRatingFilter.contains(rating) },
+                                    set: { workshopViewModel.applyAgeRatingFilter(rating, isOn: $0) }
+                                ))
+                                .toggleStyle(.checkbox)
+                            }
+
+                            if workshopViewModel.ageRatingFilter.isEmpty {
+                                Text("未选择任何分级，当前显示全部分级")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+
                     FilterSection("标签", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
