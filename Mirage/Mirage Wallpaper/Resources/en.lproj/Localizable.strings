@@ -53,6 +53,7 @@
 "Steam Web API Key 格式无效" = "Steam Web API Key format is invalid";
 "Steam Web API 可用" = "Steam Web API is available";
 "Steam Web API 请求过于频繁，请稍后重试或设置专属 API Key" = "Too many Steam Web API requests. Try again later or configure a personal API key.";
+"Steam 没有返回第 %d 页，已保留第 %d 页。" = "Steam did not return page %d. Page %d remains displayed.";
 "Steam 会话不可用，请重新登录" = "The Steam session is unavailable. Sign in again.";
 "Steam 会话已失效，请重新登录后再试" = "The Steam session has expired. Sign in again and retry.";
 "Steam 会话未验证，请重新登录后再下载" = "The Steam session has not been verified. Sign in again before downloading.";

@@ -53,6 +53,7 @@
 "Steam Web API Key 格式无效" = "Steam Web API Key 格式无效";
 "Steam Web API 可用" = "Steam Web API 可用";
 "Steam Web API 请求过于频繁，请稍后重试或设置专属 API Key" = "Steam Web API 请求过于频繁，请稍后重试或设置专属 API Key";
+"Steam 没有返回第 %d 页，已保留第 %d 页。" = "Steam 没有返回第 %d 页，已保留第 %d 页。";
 "Steam 会话不可用，请重新登录" = "Steam 会话不可用，请重新登录";
 "Steam 会话已失效，请重新登录后再试" = "Steam 会话已失效，请重新登录后再试";
 "Steam 会话未验证，请重新登录后再下载" = "Steam 会话未验证，请重新登录后再下载";

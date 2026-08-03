@@ -81,12 +81,44 @@ struct WorkshopView: View {
                 steamSetupBanner
             }
 
+            if let message = workshopViewModel.pageNavigationMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .font(.caption)
+                    Spacer()
+                    Button {
+                        workshopViewModel.pageNavigationMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .help("关闭")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.orange.opacity(0.1))
+            }
+
             if workshopViewModel.isLoading && workshopViewModel.items.isEmpty {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("正在搜索创意工坊...")
-                        .foregroundStyle(.secondary)
+                ZStack(alignment: .bottom) {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("正在搜索创意工坊...")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if workshopViewModel.totalPages > 1 {
+                        PageNavigator(
+                            currentPage: workshopViewModel.currentPage,
+                            pageCount: workshopViewModel.totalPages,
+                            onSelect: workshopViewModel.goToPage
+                        )
+                        .padding(.bottom, 12)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if workshopViewModel.items.isEmpty && !workshopViewModel.isLoading {

@@ -28,12 +28,14 @@ class WorkshopViewModel: ObservableObject {
     @Published var totalItems: Int = 0
     @Published var isLoading: Bool = false
     @Published var error: String?
+    @Published var pageNavigationMessage: String?
     @Published private(set) var knownCreators: [WorkshopCreator] = []
 
     @Published var selectedItem: WorkshopItem?
     @Published var showCustomization: Bool = false
 
-    let itemsPerPage = 30
+    let itemsPerPage = 50
+    let maximumPages = 1000
 
     // MARK: - Discover State
 
@@ -63,7 +65,7 @@ class WorkshopViewModel: ObservableObject {
     @Published var isLoggingOut = false
 
     var totalPages: Int {
-        max(1, Int(ceil(Double(totalItems) / Double(itemsPerPage))))
+        min(maximumPages, max(1, Int(ceil(Double(totalItems) / Double(itemsPerPage)))))
     }
 
     var activeDownloadCount: Int {
@@ -102,6 +104,7 @@ class WorkshopViewModel: ObservableObject {
     private var discoverTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var discoverGeneration = 0
+    private var loadedPage = 1
 
     init() {
         if let stored = UserDefaults.standard.object(forKey: Self.ageRatingStorageKey) as? Int {
@@ -272,6 +275,7 @@ class WorkshopViewModel: ObservableObject {
         let requestPage = currentPage
         isLoading = true
         error = nil
+        pageNavigationMessage = nil
         steamServiceStatus.browsingAPI = .checking
 
         searchTask = Task { @MainActor [weak self] in
@@ -301,8 +305,24 @@ class WorkshopViewModel: ObservableObject {
                 }
 
                 guard !Task.isCancelled, generation == self.searchGeneration else { return }
+                if requestPage > 1, result.items.isEmpty, !self.items.isEmpty {
+                    let retainedPage = self.loadedPage
+                    if result.total > 0 {
+                        self.totalItems = result.total
+                    }
+                    self.currentPage = retainedPage
+                    self.pageNavigationMessage = L(
+                        "Steam 没有返回第 %d 页，已保留第 %d 页。",
+                        requestPage,
+                        retainedPage
+                    )
+                    self.isLoading = false
+                    self.steamServiceStatus.browsingAPI = .available("Steam Web API 可用")
+                    return
+                }
                 self.items = result.items
                 self.totalItems = result.total
+                self.loadedPage = requestPage
                 self.rememberCreators(in: result.items)
                 if let matchedCreator {
                     self.rememberCreator(matchedCreator)
