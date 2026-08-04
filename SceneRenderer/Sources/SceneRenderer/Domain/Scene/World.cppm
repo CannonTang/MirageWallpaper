@@ -893,6 +893,12 @@ enum class SceneRenderViewKind
     Reflection,
 };
 
+enum class SceneRenderAlphaMode
+{
+    Composite,
+    DependencyCapture,
+};
+
 // ============================================================================
 // SceneCamera.h
 // ============================================================================
@@ -1232,14 +1238,18 @@ public:
     //
     // Visibility writes are runtime alpha updates too: hidden nodes force 0,
     // and visible nodes restore the baked alpha after a prior hide.
-    bool IsAlphaOverridden() const {
-        return m_alpha_overridden || m_visible_overridden ||
-               (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden());
+    bool IsAlphaOverridden(SceneRenderAlphaMode mode = SceneRenderAlphaMode::Composite) const {
+        return m_alpha_overridden ||
+               (mode == SceneRenderAlphaMode::Composite && m_visible_overridden) ||
+               (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden(mode));
     }
-    float EffectiveAlpha() const {
-        float alpha = m_visible ? (m_alpha_overridden ? m_user_alpha : m_base_alpha) : 0.0f;
-        if (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden())
-            alpha *= m_alpha_source->EffectiveAlpha();
+    float EffectiveAlpha(SceneRenderAlphaMode mode = SceneRenderAlphaMode::Composite) const {
+        const bool apply_visibility = mode == SceneRenderAlphaMode::Composite;
+        float alpha = (! apply_visibility || m_visible)
+                          ? (m_alpha_overridden ? m_user_alpha : m_base_alpha)
+                          : 0.0f;
+        if (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden(mode))
+            alpha *= m_alpha_source->EffectiveAlpha(mode);
         return alpha;
     }
     bool  Visible() const { return m_visible; }
@@ -1610,6 +1620,18 @@ public:
         m_resolved     = false;
     }
     const auto& FinalTarget() const { return m_final_target; }
+    void SetFinalOutputOverride(std::string target, bool local) {
+        if (m_final_target_override == target && m_final_local_override == local) return;
+        m_final_target_override = std::move(target);
+        m_final_local_override  = local;
+        m_resolved              = false;
+    }
+    void ClearFinalOutputOverride() {
+        if (! m_final_target_override && ! m_final_local_override) return;
+        m_final_target_override.reset();
+        m_final_local_override.reset();
+        m_resolved = false;
+    }
     void        SetFinalCamera(std::string camera) {
         if (m_final_camera == camera) return;
         m_final_camera = std::move(camera);
@@ -1656,12 +1678,14 @@ private:
 
     bool                       fullscreen { false };
     bool                       m_final_local { false };
+    std::optional<bool>        m_final_local_override;
     std::unique_ptr<SceneMesh> m_final_mesh;
     BlendMode                  m_final_blend;
     bool                       m_final_depth_test { false };
     bool                       m_final_depth_write { false };
     CullMode                   m_final_cull_mode { CullMode::None };
     std::string                m_final_target { SpecTex_Default };
+    std::optional<std::string> m_final_target_override;
     std::string                m_final_camera;
     bool                       m_skip_when_no_runtime_effect { false };
     bool                       m_requires_source_draw { true };
@@ -2333,7 +2357,8 @@ public:
     virtual void FrameBegin()                                                      = 0;
     virtual void InitUniforms(SceneNode*, const ExistsUniformOp&)                  = 0;
     virtual void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&,
-                                SceneRenderViewKind = SceneRenderViewKind::Primary) = 0;
+                                SceneRenderViewKind  = SceneRenderViewKind::Primary,
+                                SceneRenderAlphaMode = SceneRenderAlphaMode::Composite) = 0;
     virtual void FrameEnd()                                                        = 0;
 
     virtual void MouseInput(double x, double y)                     = 0;

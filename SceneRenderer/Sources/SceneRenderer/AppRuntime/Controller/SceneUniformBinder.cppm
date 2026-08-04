@@ -101,8 +101,8 @@ public:
     void FrameBegin() override;
 
     void InitUniforms(SceneNode*, const ExistsUniformOp&) override;
-    void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&,
-                        SceneRenderViewKind) override;
+    void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&, SceneRenderViewKind,
+                        SceneRenderAlphaMode) override;
     void FrameEnd() override;
     void MouseInput(double, double) override;
     void SetTexelSize(float x, float y) override;

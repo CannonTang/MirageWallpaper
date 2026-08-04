@@ -246,11 +246,13 @@ static rg::TextureNodeRef AddMipFramebufferCopy(ExtraInfo& extra, rg::RenderGrap
 
 static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, ExtraInfo& extra,
                         bool defer_effect = false,
-                        SceneRenderViewKind render_view = SceneRenderViewKind::Primary) {
+                        SceneRenderViewKind render_view = SceneRenderViewKind::Primary,
+                        SceneRenderAlphaMode alpha_mode = SceneRenderAlphaMode::Composite) {
     auto& rgraph = *extra.rgraph;
     auto& scene  = *extra.scene;
 
-    auto loadEffect = [node, &rgraph, &scene, &extra](SceneImageEffectLayer* effs) {
+    auto loadEffect = [node, render_view, alpha_mode, &rgraph, &scene,
+                       &extra](SceneImageEffectLayer* effs) {
         effs->ResolveEffect(scene.default_effect_mesh, "effect");
 
         for (usize i = 0; i < effs->EffectCount(); i++) {
@@ -266,7 +268,8 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                     cmdItor++;
                 }
                 auto& name = n.output;
-                ToGraphPass(n.sceneNode.as_ptr(), name, node->ID(), extra);
+                ToGraphPass(
+                    n.sceneNode.as_ptr(), name, node->ID(), extra, false, render_view, alpha_mode);
                 nodePos++;
             }
         }
@@ -297,7 +300,13 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
         for (auto& prefill : imgeff->PrefillNodes()) {
             std::string_view prefill_output =
                 prefill.output.empty() ? output : std::string_view(prefill.output);
-            ToGraphPass(prefill.sceneNode.as_ptr(), prefill_output, node->ID(), extra);
+            ToGraphPass(prefill.sceneNode.as_ptr(),
+                        prefill_output,
+                        node->ID(),
+                        extra,
+                        false,
+                        render_view,
+                        alpha_mode);
         }
     }
 
@@ -316,12 +325,13 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
             passName,
             rg::PassNode::Type::CustomShader,
             [material, node, smi, pass_output, preserve_output = submesh.preserve_output,
-             render_view, &output, &imgId, &rgraph, &scene, &extra](
+             render_view, alpha_mode, &output, &imgId, &rgraph, &scene, &extra](
                 rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 const auto& pass    = builder.workPassNode();
                 pdesc.node          = node;
                 pdesc.submesh_index = smi;
                 pdesc.render_view   = render_view;
+                pdesc.alpha_mode    = alpha_mode;
                 if (auto node_id = scene.ResourceIndex().nodeId(*node)) {
                     if (auto draw_item = scene.ResourceIndex().drawItemFor(*node_id, smi)) {
                         pdesc.draw_item = *draw_item;
@@ -523,6 +533,12 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene&                  
             const i32  nid      = node->ID();
             const bool elidable = scene.elidable_layer_ids.count(nid) != 0;
             const bool linked   = linked_ids.count(nid) != 0;
+            SceneImageEffectLayer* image_effect { nullptr };
+            if (! node->Camera().empty()) {
+                auto cit = scene.cameras.find(node->Camera());
+                if (cit != scene.cameras.end() && cit->second->HasImgEffect())
+                    image_effect = cit->second->GetImgEffect().get();
+            }
             if (! linked && ShouldSkipNoRuntimeEffect(node, scene)) return;
             if (elidable) {
                 if (! linked) return;
@@ -533,15 +549,16 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene&                  
                     return;
                 }
                 std::string link_key = link_source->render_target_key;
-                if (! node->Camera().empty()) {
-                    auto cit = scene.cameras.find(node->Camera());
-                    if (cit != scene.cameras.end() && cit->second->HasImgEffect()) {
-                        cit->second->GetImgEffect()->SetFinalTarget(link_key);
-                        cit->second->GetImgEffect()->SetFinalLocal(true);
-                    }
-                }
-                ToGraphPass(node, link_key, nid, extra);
+                if (image_effect) image_effect->SetFinalOutputOverride(link_key, true);
+                ToGraphPass(node,
+                            link_key,
+                            nid,
+                            extra,
+                            false,
+                            SceneRenderViewKind::Primary,
+                            SceneRenderAlphaMode::DependencyCapture);
             } else {
+                if (image_effect) image_effect->ClearFinalOutputOverride();
                 ToGraphPass(node, SpecTex_Default, nid, extra);
             }
         },

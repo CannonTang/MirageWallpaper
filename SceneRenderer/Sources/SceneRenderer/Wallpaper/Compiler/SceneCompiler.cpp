@@ -2797,7 +2797,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             : AlignmentOffset(wpimgobj.alignment, { geometry_size[0], geometry_size[1] });
     const bool solid_scene_context = HasSolidCompositeContext(context, wpimgobj);
     spImgNode->SetSize({ geometry_size[0], geometry_size[1] });
-    spImgNode->SetPerspective(wpimgobj.perspective || solid_scene_context);
+    spImgNode->SetPerspective(wpimgobj.perspective);
     spImgNode->SetReflected(wpimgobj.reflected);
     spImgNode->SetBaseColor(Vector3f(wpimgobj.color.data()), wpimgobj.alpha);
     spImgNode->ID() = wpimgobj.id;

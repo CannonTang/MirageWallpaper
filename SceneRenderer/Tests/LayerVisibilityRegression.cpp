@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -6,6 +7,7 @@
 import sr.scene;
 import sr.json;
 import rstd;
+import eigen;
 
 namespace
 {
@@ -119,12 +121,73 @@ void TestContainerSurvivesChildBinding() {
     Check(! Elidable(f.scene, 1), "container is released when its gate turns on");
 }
 
+void TestDependencyCaptureAlpha() {
+    sr::SceneNode source;
+    source.SetBaseColor(Eigen::Vector3f::Ones(), 0.6f);
+    source.SetVisible(false);
+
+    Check(source.IsAlphaOverridden(), "hidden source overrides composite alpha");
+    Check(std::abs(source.EffectiveAlpha()) < 0.0001f,
+          "hidden source is transparent in the main composite");
+    Check(! source.IsAlphaOverridden(sr::SceneRenderAlphaMode::DependencyCapture),
+          "visibility alone does not override dependency alpha");
+    Check(std::abs(source.EffectiveAlpha(sr::SceneRenderAlphaMode::DependencyCapture) - 0.6f) <
+              0.0001f,
+          "dependency capture preserves authored opacity");
+
+    source.SetUserAlpha(0.25f);
+    Check(source.IsAlphaOverridden(sr::SceneRenderAlphaMode::DependencyCapture),
+          "dependency capture retains explicit opacity overrides");
+    Check(std::abs(source.EffectiveAlpha(sr::SceneRenderAlphaMode::DependencyCapture) - 0.25f) <
+              0.0001f,
+          "dependency capture uses explicit opacity");
+
+    sr::SceneNode final;
+    final.SetBaseColor(Eigen::Vector3f::Ones(), 1.0f);
+    final.SetAlphaSource(&source);
+    Check(std::abs(final.EffectiveAlpha()) < 0.0001f,
+          "final composite inherits hidden source visibility");
+    Check(std::abs(final.EffectiveAlpha(sr::SceneRenderAlphaMode::DependencyCapture) - 0.25f) <
+              0.0001f,
+          "dependency final pass inherits source opacity without visibility");
+}
+
+void TestFinalOutputOverrideRestoresAuthoredTarget() {
+    sr::SceneNode owner;
+    sr::SceneImageEffectLayer layer(
+        &owner, 100.0f, 100.0f, "_rt_effect_pingpong_a_test", "_rt_effect_pingpong_b_test");
+    auto effect      = std::make_shared<sr::SceneImageEffect>();
+    auto effect_node = rstd::sync::Arc<sr::SceneNode>::make();
+    auto effect_mesh = std::make_shared<sr::SceneMesh>();
+    effect_mesh->AddMaterial(sr::SceneMaterial {});
+    effect_node->AddMesh(effect_mesh);
+    effect->nodes.push_back(sr::SceneImageEffectNode {
+        .output    = "_rt_effect_pingpong_b_test",
+        .sceneNode = effect_node.clone(),
+    });
+    layer.AddEffect(effect);
+    layer.SetFinalTarget("_rt_authored");
+
+    sr::SceneMesh default_mesh;
+    layer.SetFinalOutputOverride("_rt_link_25", true);
+    layer.ResolveEffect(default_mesh, "effect");
+    Check(effect->nodes.back().output == "_rt_link_25",
+          "dependency graph overrides the final target");
+
+    layer.ClearFinalOutputOverride();
+    layer.ResolveEffect(default_mesh, "effect");
+    Check(effect->nodes.back().output == "_rt_authored",
+          "visible graph restores the authored final target");
+}
+
 } // namespace
 
 int main() {
     TestResolution();
     TestElisionRepair();
     TestContainerSurvivesChildBinding();
+    TestDependencyCaptureAlpha();
+    TestFinalOutputOverrideRestoresAuthoredTarget();
     if (g_failures == 0) std::cout << "LayerVisibilityRegression: ok\n";
     return g_failures == 0 ? 0 : 1;
 }

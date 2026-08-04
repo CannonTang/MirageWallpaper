@@ -19,6 +19,7 @@ CustomShaderPass::CustomShaderPass(const Desc& desc) {
     m_desc.draw_item           = desc.draw_item;
     m_desc.render_item         = desc.render_item;
     m_desc.render_view         = desc.render_view;
+    m_desc.alpha_mode          = desc.alpha_mode;
     m_desc.submesh_index       = desc.submesh_index;
     m_desc.texture_bindings    = desc.texture_bindings;
     m_desc.output              = desc.output;
@@ -670,6 +671,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
 
         auto* node           = m_desc.node;
         auto  render_view    = m_desc.render_view;
+        auto  alpha_mode     = m_desc.alpha_mode;
         auto* shader_updater = scene.shaderValueUpdater.get();
         auto& sprites        = m_desc.sprites_map;
         auto& vk_textures    = m_desc.vk_textures;
@@ -680,6 +682,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                             bufref,
                             node,
                             render_view,
+                            alpha_mode,
                             &sprites,
                             &vk_textures,
                             update_dyn_buf_op,
@@ -697,7 +700,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                                                         sr::ShaderValue value) {
                 UpdateUniform(buf, *bufref, blocks, name, value);
             };
-            shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view);
+            shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view, alpha_mode);
             // update image slot for sprites
             {
                 for (auto& [i, sp] : sprites) {

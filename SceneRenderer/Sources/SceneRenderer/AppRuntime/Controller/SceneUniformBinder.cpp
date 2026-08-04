@@ -171,7 +171,8 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
 
 void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites,
                                          const UpdateUniformOp& updateOp,
-                                         SceneRenderViewKind render_view) {
+                                         SceneRenderViewKind render_view,
+                                         SceneRenderAlphaMode alpha_mode) {
     if (! pNode->Mesh()) return;
 
     pNode->UpdateTrans();
@@ -524,8 +525,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     auto push_color = [&updateOp](const Eigen::Vector3f& color) {
         updateOp(G_COLOR, std::array<float, 3> { color.x(), color.y(), color.z() });
     };
-    if (pNode->IsAlphaOverridden()) {
-        const float eff_alpha = pNode->EffectiveAlpha();
+    if (pNode->IsAlphaOverridden(alpha_mode)) {
+        const float eff_alpha = pNode->EffectiveAlpha(alpha_mode);
         if (info.has_USERALPHA) {
             updateOp(G_USERALPHA, eff_alpha);
         }

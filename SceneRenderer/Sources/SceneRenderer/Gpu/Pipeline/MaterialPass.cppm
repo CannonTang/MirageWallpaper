@@ -21,6 +21,7 @@ public:
         SceneDrawItemId draw_item;
         RenderItemId    render_item;
         SceneRenderViewKind render_view { SceneRenderViewKind::Primary };
+        SceneRenderAlphaMode alpha_mode { SceneRenderAlphaMode::Composite };
         // Which submesh of node->Mesh() this pass renders. SceneToRenderGraph
         // emits one pass per (node, submesh).
         uint32_t                           submesh_index { 0 };
