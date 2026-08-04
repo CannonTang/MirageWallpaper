@@ -12,6 +12,7 @@
 #import "VideoRendererEngine.h"
 
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -30,6 +31,7 @@ struct WallpaperArgs {
     int runSeconds = 0;
     VRVideoFillMode fillMode = VRVideoFillModeCover;
     BOOL controlStdin = NO;
+    BOOL deferredShow = NO;
     BOOL loadFromMemory = NO;
 };
 
@@ -162,6 +164,7 @@ static void PrintUsage(const char *argv0) {
         "  --muted                start muted\n"
         "  --fill MODE            cover | contain | stretch (default cover)\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
+        "  --deferred-show        keep the window hidden until an activate command\n"
         "  --load-from-memory     keep the video bytes in memory\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  -h, --help             show this help\n",
@@ -215,6 +218,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             const char *v = take(i, arg); if (!v) return NO; out.runSeconds = atoi(v);
         } else if (strcmp(arg, "--control-stdin") == 0) {
             out.controlStdin = YES;
+        } else if (strcmp(arg, "--deferred-show") == 0) {
+            out.deferredShow = YES;
         } else if (strcmp(arg, "--load-from-memory") == 0) {
             out.loadFromMemory = YES;
         } else if (arg[0] == '-') {
@@ -253,7 +258,16 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) VRVideoRendererEngine *engine;
 @property (nonatomic, strong) MirageControlChannel *control;
 @property (nonatomic, assign) CGDirectDisplayID displayID;
+@property (nonatomic, assign) BOOL deferredShow;
+@property (nonatomic, assign) BOOL prepared;
+@property (nonatomic, assign) NSUInteger visibilityEpoch;
 - (void)observeScreenParameterChanges;
+- (void)contentDidBecomeReady;
+- (void)activateWindow;
+- (void)deactivateWindow;
+- (void)prepareActivationForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts;
+- (void)beginActivationFailureForEpoch:(NSUInteger)epoch;
+- (void)confirmActivationFailureForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts;
 @end
 
 @implementation VideoWallpaperAppDelegate
@@ -264,6 +278,169 @@ static NSScreen *MirageScreenForDisplayID(CGDirectDisplayID displayID) {
         if (number != nil && number.unsignedIntValue == displayID) return screen;
     }
     return nil;
+}
+
+static BOOL MirageNearlyEqual(CGFloat lhs, CGFloat rhs) {
+    return std::abs(lhs - rhs) <= 0.5;
+}
+
+static BOOL MirageRectMatches(CGRect lhs, CGRect rhs) {
+    return MirageNearlyEqual(CGRectGetMinX(lhs), CGRectGetMinX(rhs)) &&
+           MirageNearlyEqual(CGRectGetMinY(lhs), CGRectGetMinY(rhs)) &&
+           MirageNearlyEqual(CGRectGetWidth(lhs), CGRectGetWidth(rhs)) &&
+           MirageNearlyEqual(CGRectGetHeight(lhs), CGRectGetHeight(rhs));
+}
+
+static BOOL MirageNSRectMatches(NSRect lhs, NSRect rhs) {
+    return MirageNearlyEqual(NSMinX(lhs), NSMinX(rhs)) &&
+           MirageNearlyEqual(NSMinY(lhs), NSMinY(rhs)) &&
+           MirageNearlyEqual(NSWidth(lhs), NSWidth(rhs)) &&
+           MirageNearlyEqual(NSHeight(lhs), NSHeight(rhs));
+}
+
+static BOOL MirageSizeMatches(NSSize lhs, NSSize rhs) {
+    return MirageNearlyEqual(lhs.width, rhs.width) &&
+           MirageNearlyEqual(lhs.height, rhs.height);
+}
+
+static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
+                                    BOOL *onscreen, double *alpha) {
+    if (window == nil || window.windowNumber <= 0) return NO;
+    CFArrayRef windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionIncludingWindow, (CGWindowID)window.windowNumber);
+    if (windows == NULL || CFArrayGetCount(windows) != 1) {
+        if (windows != NULL) CFRelease(windows);
+        return NO;
+    }
+    CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, 0);
+    CFDictionaryRef encoded = (CFDictionaryRef)CFDictionaryGetValue(info, kCGWindowBounds);
+    BOOL hasBounds = encoded != NULL && CGRectMakeWithDictionaryRepresentation(encoded, bounds);
+    CFBooleanRef visible = (CFBooleanRef)CFDictionaryGetValue(info, kCGWindowIsOnscreen);
+    *onscreen = visible != NULL && CFBooleanGetValue(visible);
+    CFNumberRef opacity = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowAlpha);
+    *alpha = 0.0;
+    if (opacity != NULL) CFNumberGetValue(opacity, kCFNumberDoubleType, alpha);
+    CFRelease(windows);
+    return hasBounds;
+}
+
+- (BOOL)normalizeGeometry {
+    NSScreen *screen = MirageScreenForDisplayID(self.displayID);
+    if (screen == nil || NSWidth(screen.frame) <= 0 || NSHeight(screen.frame) <= 0) return NO;
+    if (!MirageNSRectMatches(self.window.frame, screen.frame)) {
+        [self.window setFrame:screen.frame display:YES];
+    }
+    NSView *content = self.window.contentView;
+    if (content == nil) return NO;
+    content.frame = NSMakeRect(0, 0, NSWidth(screen.frame), NSHeight(screen.frame));
+    [content layoutSubtreeIfNeeded];
+    CGRect bounds = CGRectZero;
+    BOOL onscreen = NO;
+    double alpha = 0.0;
+    return MirageNSRectMatches(self.window.frame, screen.frame) &&
+           MirageSizeMatches(content.bounds.size, screen.frame.size) &&
+           MirageWindowServerState(self.window, &bounds, &onscreen, &alpha) &&
+           MirageRectMatches(bounds, CGDisplayBounds(self.displayID));
+}
+
+- (BOOL)visibleStateMatches:(BOOL)visible {
+    if (visible && ![self normalizeGeometry]) return NO;
+    if (!visible && (self.window.isVisible || self.window.alphaValue > 0.001)) return NO;
+    CGRect bounds = CGRectZero;
+    BOOL onscreen = NO;
+    double alpha = 0.0;
+    if (!MirageWindowServerState(self.window, &bounds, &onscreen, &alpha)) return !visible;
+    if (visible) {
+        return self.window.isVisible && onscreen && self.window.alphaValue >= 0.999 && alpha >= 0.999;
+    }
+    return !self.window.isVisible && !onscreen && self.window.alphaValue <= 0.001 && alpha <= 0.001;
+}
+
+- (void)confirmVisible:(BOOL)visible epoch:(NSUInteger)epoch attempts:(NSInteger)attempts {
+    if (epoch != self.visibilityEpoch) return;
+    if ([self visibleStateMatches:visible]) {
+        MirageEmitEvent(@{ @"event": visible ? @"activated" : @"deactivated" });
+        return;
+    }
+    if (attempts <= 0) {
+        if (visible) {
+            [self beginActivationFailureForEpoch:epoch];
+        }
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        [self confirmVisible:visible epoch:epoch attempts:attempts - 1];
+    });
+}
+
+- (void)beginActivationFailureForEpoch:(NSUInteger)epoch {
+    if (epoch != self.visibilityEpoch) return;
+    [self.engine setMuted:YES];
+    [self.engine pause];
+    self.window.alphaValue = 0.0;
+    [self.window orderOut:nil];
+    [self confirmActivationFailureForEpoch:epoch attempts:200];
+}
+
+- (void)confirmActivationFailureForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts {
+    if (epoch != self.visibilityEpoch) return;
+    if ([self visibleStateMatches:NO]) {
+        MirageEmitEvent(@{ @"event": @"activation-failed" });
+        return;
+    }
+    if (attempts <= 0) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        [self confirmActivationFailureForEpoch:epoch attempts:attempts - 1];
+    });
+}
+
+- (void)contentDidBecomeReady {
+    if (self.prepared) return;
+    self.prepared = YES;
+    MirageEmitEvent(@{ @"event": @"prepared" });
+}
+
+- (void)activateWindow {
+    if (!self.prepared) {
+        self.visibilityEpoch += 1;
+        [self beginActivationFailureForEpoch:self.visibilityEpoch];
+        return;
+    }
+    self.visibilityEpoch += 1;
+    NSUInteger epoch = self.visibilityEpoch;
+    self.window.alphaValue = 0.0;
+    [self.window orderFrontRegardless];
+    [self prepareActivationForEpoch:epoch attempts:200];
+}
+
+- (void)prepareActivationForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts {
+    if (epoch != self.visibilityEpoch) return;
+    if ([self normalizeGeometry]) {
+        self.window.alphaValue = 1.0;
+        [self.window displayIfNeeded];
+        [self confirmVisible:YES epoch:epoch attempts:200];
+        return;
+    }
+    if (attempts <= 0) {
+        [self beginActivationFailureForEpoch:epoch];
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        [self prepareActivationForEpoch:epoch attempts:attempts - 1];
+    });
+}
+
+- (void)deactivateWindow {
+    self.visibilityEpoch += 1;
+    NSUInteger epoch = self.visibilityEpoch;
+    [self.engine setMuted:YES];
+    [self.engine pause];
+    self.window.alphaValue = 0.0;
+    [self.window orderOut:nil];
+    [self confirmVisible:NO epoch:epoch attempts:200];
 }
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
@@ -339,7 +516,9 @@ int main(int argc, char *argv[]) {
         VRVideoEngineConfig config = [VRVideoRendererEngine defaultConfig];
         config.fillMode = args.fillMode;
         config.initialVolume = args.volume;
-        config.muted = args.muted;
+        // A deferred candidate must decode while remaining inaudible. Mirage
+        // replays the user's actual mute/volume policy only after activation.
+        config.muted = args.deferredShow ? YES : args.muted;
         config.autoplay = YES;
         config.loadFromMemory = args.loadFromMemory;
 
@@ -361,14 +540,13 @@ int main(int argc, char *argv[]) {
                                @"progress": @(fraction),
                                @"done": @(done) });
         };
-
-        NSError *openError = nil;
-        if (![engine openWallpaper:manifest error:&openError]) {
-            fprintf(stderr, "VideoWallpaper: %s\n",
-                    openError.localizedDescription.UTF8String ?: "failed to open video");
-            return 3;
-        }
         delegate.engine = engine;
+        delegate.displayID = displayID;
+        delegate.deferredShow = args.deferredShow;
+        __weak VideoWallpaperAppDelegate *weakDelegate = delegate;
+        engine.firstFrameReadyBlock = ^{
+            [weakDelegate contentDidBecomeReady];
+        };
 
         VideoWallpaperWindow *window = [[VideoWallpaperWindow alloc]
             initWithContentRect:screenFrame
@@ -383,15 +561,25 @@ int main(int argc, char *argv[]) {
                                     NSWindowCollectionBehaviorIgnoresCycle;
         window.opaque = YES;
         window.backgroundColor = NSColor.blackColor;
+        window.alphaValue = args.deferredShow ? 0.0 : 1.0;
         window.hasShadow = NO;
         window.ignoresMouseEvents = YES;
         window.acceptsMouseMovedEvents = NO;
         window.releasedWhenClosed = NO;
         window.canHide = NO;
         window.contentView = engine;
-        [window orderFrontRegardless];
         delegate.window = window;
-        delegate.displayID = displayID;
+
+        // Install every lifecycle callback and the window target before
+        // playback starts. A very short local video can otherwise yield its
+        // first decoded frame before the delegate is able to validate it.
+        NSError *openError = nil;
+        if (![engine openWallpaper:manifest error:&openError]) {
+            fprintf(stderr, "VideoWallpaper: %s\n",
+                    openError.localizedDescription.UTF8String ?: "failed to open video");
+            return 3;
+        }
+        [window orderFrontRegardless];
         [delegate observeScreenParameterChanges];
 
         // Live control channel: Mirage.app pipes JSON commands on stdin.
@@ -401,7 +589,11 @@ int main(int argc, char *argv[]) {
                 initWithHandler:^(NSDictionary *cmd) {
                     NSString *name = cmd[@"cmd"];
                     id value = cmd[@"value"];
-                    if ([name isEqualToString:@"pause"]) {
+                    if ([name isEqualToString:@"activate"]) {
+                        [delegate activateWindow];
+                    } else if ([name isEqualToString:@"deactivate"]) {
+                        [delegate deactivateWindow];
+                    } else if ([name isEqualToString:@"pause"]) {
                         [eng pause];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
                         [eng play];

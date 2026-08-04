@@ -23,9 +23,17 @@ struct SceneRendererMacDesktopCallbacks {
     // Fired once, from Metal's drawable-presented callback, after the first
     // real scene frame has reached the presentation path.
     void (*first_frame_presented)(void* userdata);
-    // Fired once after activation and a subsequent drawable presentation.
+    // Fired once AppKit and WindowServer confirm that an already-prepared
+    // wallpaper window is visible with the validated display geometry.
     // The parent can safely retire the previous wallpaper at this point.
     void (*activated)(void* userdata);
+    // Fired only after a failed activation has been hidden again and that
+    // hidden state is confirmed by AppKit and WindowServer.
+    void (*activation_failed)(void* userdata);
+    // Fired after AppKit and WindowServer both report the wallpaper window hidden.
+    // The parent may then reveal a prepared replacement without two live desktop
+    // surfaces being visible at the same time.
+    void (*deactivated)(void* userdata);
     void* userdata;
 };
 

@@ -57,6 +57,10 @@ typedef struct {
 
 @property (nonatomic, copy, nullable) void (^videoDidEndBlock)(void);
 
+// Called once when the current AVPlayer item has yielded a decoded pixel buffer.
+// A hidden desktop candidate is not eligible for activation before this fires.
+@property (nonatomic, copy, nullable) void (^firstFrameReadyBlock)(void);
+
 // Called on the main thread the first time playback of the current wallpaper
 // fails. -openWallpaper:error: cannot detect an undecodable file — queueing
 // only validates queue constraints — so without this a malformed video is a

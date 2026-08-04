@@ -26,6 +26,7 @@
 #import "WRDesktopInputForwarder.h"
 
 #include <cerrno>
+#include <cmath>
 #include <fcntl.h>
 #include <pthread.h>
 #include <string>
@@ -46,6 +47,7 @@ struct WallpaperArgs {
     int   runSeconds = 0;
     BOOL  diag = NO;
     BOOL  controlStdin = NO;
+    BOOL  deferredShow = NO;
     BOOL  loadFromMemory = NO;
     WRNetworkPolicy networkPolicy = WRNetworkPolicyObserve;
     std::vector<std::string> assetOverlays;
@@ -193,6 +195,7 @@ static void PrintUsage(const char *argv0) {
         "                         the wallpaper's own we-wallpaper: resources\n"
         "  --asset-overlay DIR    serve preset assets before base assets\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
+        "  --deferred-show        keep the window hidden until an activate command\n"
         "  --load-from-memory     cache wallpaper resources in memory\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  --diag                 test the click-forward path (synthetic click)\n"
@@ -238,6 +241,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.diag = YES;
         } else if (strcmp(arg, "--control-stdin") == 0) {
             out.controlStdin = YES;
+        } else if (strcmp(arg, "--deferred-show") == 0) {
+            out.deferredShow = YES;
         } else if (strcmp(arg, "--load-from-memory") == 0) {
             out.loadFromMemory = YES;
         } else if (arg[0] == '-') {
@@ -270,7 +275,19 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) WRDesktopInputForwarder *inputForwarder;
 @property (nonatomic, strong) MirageControlChannel *control;
 @property (nonatomic, assign) CGDirectDisplayID displayID;
+@property (nonatomic, assign) BOOL deferredShow;
+@property (nonatomic, assign) BOOL prepared;
+@property (nonatomic, assign) BOOL windowActivated;
+@property (nonatomic, assign) BOOL playbackPaused;
+@property (nonatomic, assign) NSUInteger visibilityEpoch;
 - (void)observeScreenParameterChanges;
+- (void)contentDidBecomeReady;
+- (void)activateWindow;
+- (void)deactivateWindow;
+- (void)prepareActivationForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts;
+- (void)beginActivationFailureForEpoch:(NSUInteger)epoch;
+- (void)confirmActivationFailureForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts;
+- (void)syncInputForwarder;
 @end
 @implementation WebWallpaperAppDelegate
 
@@ -280,6 +297,209 @@ static NSScreen *MirageScreenForDisplayID(CGDirectDisplayID displayID) {
         if (number != nil && number.unsignedIntValue == displayID) return screen;
     }
     return nil;
+}
+
+static BOOL MirageNearlyEqual(CGFloat lhs, CGFloat rhs) {
+    return std::abs(lhs - rhs) <= 0.5;
+}
+
+static BOOL MirageRectMatches(CGRect lhs, CGRect rhs) {
+    return MirageNearlyEqual(CGRectGetMinX(lhs), CGRectGetMinX(rhs)) &&
+           MirageNearlyEqual(CGRectGetMinY(lhs), CGRectGetMinY(rhs)) &&
+           MirageNearlyEqual(CGRectGetWidth(lhs), CGRectGetWidth(rhs)) &&
+           MirageNearlyEqual(CGRectGetHeight(lhs), CGRectGetHeight(rhs));
+}
+
+static BOOL MirageNSRectMatches(NSRect lhs, NSRect rhs) {
+    return MirageNearlyEqual(NSMinX(lhs), NSMinX(rhs)) &&
+           MirageNearlyEqual(NSMinY(lhs), NSMinY(rhs)) &&
+           MirageNearlyEqual(NSWidth(lhs), NSWidth(rhs)) &&
+           MirageNearlyEqual(NSHeight(lhs), NSHeight(rhs));
+}
+
+static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
+                                    BOOL *onscreen, double *alpha) {
+    if (window == nil || window.windowNumber <= 0) return NO;
+    CFArrayRef windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionIncludingWindow, (CGWindowID)window.windowNumber);
+    if (windows == NULL || CFArrayGetCount(windows) != 1) {
+        if (windows != NULL) CFRelease(windows);
+        return NO;
+    }
+    CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, 0);
+    CFDictionaryRef encoded = (CFDictionaryRef)CFDictionaryGetValue(info, kCGWindowBounds);
+    BOOL hasBounds = encoded != NULL && CGRectMakeWithDictionaryRepresentation(encoded, bounds);
+    CFBooleanRef visible = (CFBooleanRef)CFDictionaryGetValue(info, kCGWindowIsOnscreen);
+    *onscreen = visible != NULL && CFBooleanGetValue(visible);
+    CFNumberRef opacity = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowAlpha);
+    *alpha = 0.0;
+    if (opacity != NULL) CFNumberGetValue(opacity, kCFNumberDoubleType, alpha);
+    CFRelease(windows);
+    return hasBounds;
+}
+
+- (BOOL)normalizeGeometry {
+    NSScreen *screen = MirageScreenForDisplayID(self.displayID);
+    if (screen == nil || NSWidth(screen.frame) <= 0 || NSHeight(screen.frame) <= 0) return NO;
+    if (!MirageNSRectMatches(self.window.frame, screen.frame)) {
+        [self.window setFrame:screen.frame display:YES];
+    }
+    NSView *content = self.window.contentView;
+    if (content == nil) return NO;
+    content.frame = NSMakeRect(0, 0, NSWidth(screen.frame), NSHeight(screen.frame));
+    [content layoutSubtreeIfNeeded];
+    [self.inputForwarder updateScreen:screen];
+    CGRect bounds = CGRectZero;
+    BOOL onscreen = NO;
+    double alpha = 0.0;
+    return MirageNSRectMatches(self.window.frame, screen.frame) &&
+           MirageWindowServerState(self.window, &bounds, &onscreen, &alpha) &&
+           MirageRectMatches(bounds, CGDisplayBounds(self.displayID));
+}
+
+- (BOOL)visibleStateMatches:(BOOL)visible {
+    if (visible && ![self normalizeGeometry]) return NO;
+    if (!visible && (self.window.isVisible || self.window.alphaValue > 0.001)) return NO;
+    CGRect bounds = CGRectZero;
+    BOOL onscreen = NO;
+    double alpha = 0.0;
+    if (!MirageWindowServerState(self.window, &bounds, &onscreen, &alpha)) return !visible;
+    if (visible) {
+        return self.window.isVisible && onscreen && self.window.alphaValue >= 0.999 && alpha >= 0.999;
+    }
+    return !self.window.isVisible && !onscreen && self.window.alphaValue <= 0.001 && alpha <= 0.001;
+}
+
+- (void)confirmVisible:(BOOL)visible epoch:(NSUInteger)epoch attempts:(NSInteger)attempts {
+    if (epoch != self.visibilityEpoch) return;
+    if ([self visibleStateMatches:visible]) {
+        if (visible) {
+            // Keep WebKit's host barrier engaged while the alpha-zero window is
+            // registered and its target-display geometry is validated. Only a
+            // WindowServer-visible window may resume media, and `activated` is
+            // not true until WebKit confirms that paired resume completed.
+            __weak WebWallpaperAppDelegate *weakSelf = self;
+            [self.engine setHostMediaPlaybackSuspended:NO completion:^{
+                WebWallpaperAppDelegate *strongSelf = weakSelf;
+                if (strongSelf == nil || epoch != strongSelf.visibilityEpoch) return;
+                if (![strongSelf visibleStateMatches:YES]) {
+                    [strongSelf beginActivationFailureForEpoch:epoch];
+                    return;
+                }
+                strongSelf.windowActivated = YES;
+                [strongSelf syncInputForwarder];
+                MirageEmitEvent(@{ @"event": @"activated" });
+            }];
+            return;
+        }
+        self.windowActivated = visible;
+        [self syncInputForwarder];
+        MirageEmitEvent(@{ @"event": @"deactivated" });
+        return;
+    }
+    if (attempts <= 0) {
+        if (visible) {
+            [self beginActivationFailureForEpoch:epoch];
+        }
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        [self confirmVisible:visible epoch:epoch attempts:attempts - 1];
+    });
+}
+
+- (void)beginActivationFailureForEpoch:(NSUInteger)epoch {
+    if (epoch != self.visibilityEpoch) return;
+    [self.engine setMuted:YES];
+    [self.engine setPaused:YES];
+    self.playbackPaused = YES;
+    self.windowActivated = NO;
+    [self syncInputForwarder];
+    __weak WebWallpaperAppDelegate *weakSelf = self;
+    [self.engine setHostMediaPlaybackSuspended:YES completion:^{
+        WebWallpaperAppDelegate *strongSelf = weakSelf;
+        if (strongSelf == nil || epoch != strongSelf.visibilityEpoch) return;
+        strongSelf.window.alphaValue = 0.0;
+        [strongSelf.window orderOut:nil];
+        [strongSelf confirmActivationFailureForEpoch:epoch attempts:200];
+    }];
+}
+
+- (void)confirmActivationFailureForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts {
+    if (epoch != self.visibilityEpoch) return;
+    if ([self visibleStateMatches:NO]) {
+        MirageEmitEvent(@{ @"event": @"activation-failed" });
+        return;
+    }
+    if (attempts <= 0) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        [self confirmActivationFailureForEpoch:epoch attempts:attempts - 1];
+    });
+}
+
+- (void)syncInputForwarder {
+    if (self.windowActivated && !self.playbackPaused) {
+        [self.inputForwarder start];
+    } else {
+        [self.inputForwarder stop];
+    }
+}
+
+- (void)contentDidBecomeReady {
+    if (self.prepared) return;
+    self.prepared = YES;
+    MirageEmitEvent(@{ @"event": @"prepared" });
+}
+
+- (void)activateWindow {
+    if (!self.prepared) {
+        self.visibilityEpoch += 1;
+        [self beginActivationFailureForEpoch:self.visibilityEpoch];
+        return;
+    }
+    self.visibilityEpoch += 1;
+    NSUInteger epoch = self.visibilityEpoch;
+    self.window.alphaValue = 0.0;
+    [self.window orderFrontRegardless];
+    [self prepareActivationForEpoch:epoch attempts:200];
+}
+
+- (void)prepareActivationForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts {
+    if (epoch != self.visibilityEpoch) return;
+    if ([self normalizeGeometry]) {
+        self.window.alphaValue = 1.0;
+        [self.window displayIfNeeded];
+        [self confirmVisible:YES epoch:epoch attempts:200];
+        return;
+    }
+    if (attempts <= 0) {
+        [self beginActivationFailureForEpoch:epoch];
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        [self prepareActivationForEpoch:epoch attempts:attempts - 1];
+    });
+}
+
+- (void)deactivateWindow {
+    self.visibilityEpoch += 1;
+    NSUInteger epoch = self.visibilityEpoch;
+    [self.engine setMuted:YES];
+    [self.engine setPaused:YES];
+    self.playbackPaused = YES;
+    self.windowActivated = NO;
+    [self syncInputForwarder];
+    __weak WebWallpaperAppDelegate *weakSelf = self;
+    [self.engine setHostMediaPlaybackSuspended:YES completion:^{
+        WebWallpaperAppDelegate *strongSelf = weakSelf;
+        if (strongSelf == nil || epoch != strongSelf.visibilityEpoch) return;
+        strongSelf.window.alphaValue = 0.0;
+        [strongSelf.window orderOut:nil];
+        [strongSelf confirmVisible:NO epoch:epoch attempts:200];
+    }];
 }
 
 // Resolution changes, display rearrangement and unplug/replug all leave the
@@ -350,7 +570,8 @@ int main(int argc, char *argv[]) {
         WREngineConfig cfg = [WebRendererEngine defaultConfig];
         cfg.enableInspector = NO;
         cfg.enableAudioSpectrum = args.spectrum && !args.externalSpectrum;
-        cfg.initialVolume = args.volume;
+        cfg.initiallySuspendsMediaPlayback = args.deferredShow;
+        cfg.initialVolume = args.deferredShow ? 0.0f : args.volume;
         cfg.frameRate = args.fps;
         cfg.loadFromMemory = args.loadFromMemory;
         cfg.networkPolicy = args.networkPolicy;
@@ -364,8 +585,16 @@ int main(int argc, char *argv[]) {
         NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame), NSHeight(screenFrame));
         WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:contentFrame config:cfg];
         delegate.engine = engine;
+        delegate.displayID = displayID;
+        delegate.deferredShow = args.deferredShow;
+        delegate.windowActivated = !args.deferredShow;
+        delegate.playbackPaused = NO;
         engine.audioSpectrumDemandHandler = ^(BOOL needed) {
             MirageEmitEvent(@{ @"event": @"audio-demand", @"needed": @(needed) });
+        };
+        __weak WebWallpaperAppDelegate *weakDelegate = delegate;
+        engine.contentReadyHandler = ^{
+            [weakDelegate contentDidBecomeReady];
         };
 
         WebWallpaperWindow *window = [[WebWallpaperWindow alloc]
@@ -381,6 +610,7 @@ int main(int argc, char *argv[]) {
                                     NSWindowCollectionBehaviorIgnoresCycle;
         window.opaque = YES;
         window.backgroundColor = NSColor.blackColor;
+        window.alphaValue = args.deferredShow ? 0.0 : 1.0;
         window.hasShadow = NO;
         // The wallpaper renders below Finder's full-screen desktop window, which
         // absorbs all desktop clicks. So the wallpaper window itself is display-
@@ -396,7 +626,6 @@ int main(int argc, char *argv[]) {
         engine.webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
         delegate.window = window;
-        delegate.displayID = displayID;
         [window orderFrontRegardless];
 
         [engine openWallpaper:manifest];
@@ -405,7 +634,7 @@ int main(int argc, char *argv[]) {
         // Forward desktop mouse clicks/moves to the page (icons + app windows
         // stay fully interactive with Finder / their owner).
         delegate.inputForwarder = [[WRDesktopInputForwarder alloc] initWithWebView:engine.webView screen:screen];
-        [delegate.inputForwarder start];
+        if (!args.deferredShow) [delegate.inputForwarder start];
 
         [delegate observeScreenParameterChanges];
 
@@ -416,7 +645,11 @@ int main(int argc, char *argv[]) {
                 initWithHandler:^(NSDictionary *cmd) {
                     NSString *name = cmd[@"cmd"];
                     id value = cmd[@"value"];
-                    if ([name isEqualToString:@"setProperty"]) {
+                    if ([name isEqualToString:@"activate"]) {
+                        [delegate activateWindow];
+                    } else if ([name isEqualToString:@"deactivate"]) {
+                        [delegate deactivateWindow];
+                    } else if ([name isEqualToString:@"setProperty"]) {
                         NSString *key = cmd[@"key"];
                         if ([key isKindOfClass:[NSString class]] && value != nil) {
                             // WE property listener expects {key:{value:...}}.
@@ -432,10 +665,12 @@ int main(int argc, char *argv[]) {
                         }
                     } else if ([name isEqualToString:@"pause"]) {
                         [eng setPaused:YES];
-                        [delegate.inputForwarder setPaused:YES];
+                        delegate.playbackPaused = YES;
+                        [delegate syncInputForwarder];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
                         [eng setPaused:NO];
-                        [delegate.inputForwarder setPaused:NO];
+                        delegate.playbackPaused = NO;
+                        [delegate syncInputForwarder];
                     } else if ([name isEqualToString:@"power"]) {
                         // Authoritative playback state from the app. This window
                         // is canHide=NO + orderFrontRegardless, so AppKit never
@@ -456,7 +691,8 @@ int main(int argc, char *argv[]) {
                             }
                         }
                         [eng setPaused:shouldPause];
-                        [delegate.inputForwarder setPaused:shouldPause];
+                        delegate.playbackPaused = shouldPause;
+                        [delegate syncInputForwarder];
                     } else if ([name isEqualToString:@"volume"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
                     } else if ([name isEqualToString:@"muted"]) {

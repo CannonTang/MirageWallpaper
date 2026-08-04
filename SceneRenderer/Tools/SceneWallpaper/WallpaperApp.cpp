@@ -427,6 +427,16 @@ void ActivatedCallback(void* userdata) {
     EmitLifecycleEvent(state, "activated");
 }
 
+void ActivationFailedCallback(void* userdata) {
+    auto* state = static_cast<AppState*>(userdata);
+    EmitLifecycleEvent(state, "activation-failed");
+}
+
+void DeactivatedCallback(void* userdata) {
+    auto* state = static_cast<AppState*>(userdata);
+    EmitLifecycleEvent(state, "deactivated");
+}
+
 std::uint32_t ClampRenderExtent(std::uint32_t value, std::uint32_t fallback) {
     if (value == 0) value = fallback;
     return std::clamp<std::uint32_t>(value, 500u, 65535u);
@@ -470,6 +480,8 @@ int main(int argc, char** argv) {
         .closed       = nullptr,
         .first_frame_presented = FirstFramePresentedCallback,
         .activated    = ActivatedCallback,
+        .activation_failed = ActivationFailedCallback,
+        .deactivated  = DeactivatedCallback,
         .userdata     = &state,
     };
     state.desktop = SceneRendererMacDesktopCreate(&desktop_config, callbacks);

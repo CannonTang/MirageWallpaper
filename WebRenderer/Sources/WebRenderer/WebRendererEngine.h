@@ -26,6 +26,7 @@ typedef struct {
     BOOL enableInspector;            // webView.inspectable — Safari Web Inspector
     BOOL enableAudioSpectrum;        // start WRAudioTap for wallpaperRegisterAudioListener
     BOOL enableAudioPlayback;        // allow media autoplay with sound
+    BOOL initiallySuspendsMediaPlayback; // host barrier completed before first navigation
     float initialVolume;             // master volume 0..1 (applied via "audio" property)
     int  frameRate;                  // target fps (0 or ≥60 ⇒ no throttle)
     BOOL loadFromMemory;             // cache wallpaper resource bytes for process lifetime
@@ -53,6 +54,10 @@ typedef struct {
 @property (nonatomic, strong, readonly) WKWebView *webView;
 /// Called when page listener demand changes. The value is false while paused.
 @property (nonatomic, copy, nullable) void (^audioSpectrumDemandHandler)(BOOL needed);
+/// Called once after navigation has finished and WebKit has produced a composited
+/// snapshot. Desktop hosts use this to keep replacement windows hidden until the
+/// page can actually be presented.
+@property (nonatomic, copy, nullable) void (^contentReadyHandler)(void);
 
 // Load via we-wallpaper://wallpaper/<entry> (served by WRURLSchemeHandler).
 - (void)openWallpaper:(WRManifest *)manifest;
@@ -68,6 +73,12 @@ typedef struct {
 // Master volume: applies the "audio" property + mutes/unmutes registered streams.
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
+
+// Host-level media barrier. Unlike JavaScript muting, WebKit guarantees that a
+// suspended page cannot resume HTML media or WebAudio until the paired NO call
+// completes. Desktop lifecycle events must wait for this completion.
+- (void)setHostMediaPlaybackSuspended:(BOOL)suspended
+                            completion:(void (^ _Nullable)(void))completion;
 
 // Injects a requestAnimationFrame throttle shim when fps < 60 (no native
 // equivalent of CEF's SetWindowlessFrameRate).

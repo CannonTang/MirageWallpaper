@@ -32,6 +32,19 @@ class WallpaperViewModel: ObservableObject {
         let fps: Int
     }
 
+    private struct PendingAssignmentProposal {
+        let id: UUID
+        let key: DisplayKey
+        let state: DisplayWallpaperState
+    }
+
+    private struct FailedAssignmentRecovery {
+        let proposalID: UUID
+        let committedAssignmentID: UUID
+        let displayID: CGDirectDisplayID
+        var waiterID: UUID?
+    }
+
     private static let assignmentsDefaultsKey = "DisplayAssignments"
     private static let selectedDisplayDefaultsKey = "SelectedDisplay"
     private static let legacyWallpaperDefaultsKey = "CurrentWallpaper"
@@ -50,6 +63,9 @@ class WallpaperViewModel: ObservableObject {
     @Published var currentByScreen: [Int: WEWallpaper] = [:]
 
     private var pendingScreenAssignments: [CGDirectDisplayID: UUID] = [:]
+    private var pendingAssignmentProposals: [CGDirectDisplayID: [PendingAssignmentProposal]] = [:]
+    private var failedAssignmentRecoveries: [DisplayKey: FailedAssignmentRecovery] = [:]
+    private var committedAssignmentIDs: [DisplayKey: UUID] = [:]
     private var lastAppliedPlayback: [DisplayKey: AppliedPlaybackState] = [:]
     private var stoppedByPlaybackPolicy = false
     private var statesSaveWorkItem: DispatchWorkItem?
@@ -83,6 +99,7 @@ class WallpaperViewModel: ObservableObject {
             loaded[mainKey] = migrated
         }
         displayStates = loaded
+        committedAssignmentIDs = Dictionary(uniqueKeysWithValues: loaded.keys.map { ($0, UUID()) })
 
         renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
         NotificationCenter.default.addObserver(
@@ -238,10 +255,6 @@ class WallpaperViewModel: ObservableObject {
             return
         }
         let previous = displayStates[key]
-        if let previous, previous.wallpaper.id != wallpaper.id {
-            cancelRuntimeSave(for: key)
-            persistRuntime(previous.runtime, for: previous.wallpaper)
-        }
         let resolved: WallpaperRuntimeState
         if let previous, previous.wallpaper.id == wallpaper.id {
             resolved = previous.runtime
@@ -249,23 +262,121 @@ class WallpaperViewModel: ObservableObject {
             resolved = Self.loadPersistedRuntime(for: wallpaper)
         }
         let state = DisplayWallpaperState(wallpaper: wallpaper, runtime: resolved)
-        displayStates[key] = state
-        lastAppliedPlayback[key] = nil
-        persistStates()
         cancelPendingProperties(for: key)
 
         guard let displayID = DisplayRegistry.shared.displayID(for: key) else {
+            discardPendingAssignment(for: key)
+            commitAssignmentState(state, assignmentID: UUID(), for: key)
             syncStatusItems()
             return
         }
         if currentPlaybackPolicy == .stop {
             pendingScreenAssignments[displayID] = nil
-            commit(state, to: displayID, key: key)
+            pendingAssignmentProposals[displayID] = nil
+            commitAssignmentState(state, assignmentID: UUID(), for: key)
         } else {
-            apply(state, to: displayID, key: key, reuseActive: true)
+            submitAssignment(state, to: displayID, key: key, reuseActive: true)
         }
-        applyPlaybackPolicy(currentPlaybackPolicy, for: key, force: true)
         syncStatusItems()
+    }
+
+    private func submitAssignment(_ state: DisplayWallpaperState,
+                                  to displayID: CGDirectDisplayID,
+                                  key: DisplayKey,
+                                  reuseActive: Bool) {
+        let requestID = UUID()
+        let proposal = PendingAssignmentProposal(id: requestID, key: key, state: state)
+        cancelFailedAssignmentRecovery(for: key)
+        pendingAssignmentProposals[displayID, default: []].append(proposal)
+        apply(state, to: displayID, key: key, reuseActive: reuseActive,
+              assignmentID: proposal.id, requestID: requestID) { [weak self] success in
+            self?.completeAssignment(proposal, on: displayID, success: success)
+        }
+    }
+
+    private func completeAssignment(_ proposal: PendingAssignmentProposal,
+                                    on displayID: CGDirectDisplayID,
+                                    success: Bool) {
+        guard var proposals = pendingAssignmentProposals[displayID],
+              let index = proposals.firstIndex(where: { $0.id == proposal.id }) else { return }
+        let wasLatest = proposals.last?.id == proposal.id
+        proposals.remove(at: index)
+        if proposals.isEmpty {
+            pendingAssignmentProposals[displayID] = nil
+        } else {
+            pendingAssignmentProposals[displayID] = proposals
+        }
+
+        if success {
+            let committed = assignmentStateMergingCurrentRuntime(
+                proposal.state, for: proposal.key)
+            commitAssignmentState(committed, assignmentID: proposal.id, for: proposal.key)
+            commit(committed, to: displayID, key: proposal.key)
+            applyPlaybackPolicy(currentPlaybackPolicy, for: proposal.key, force: true)
+        } else if wasLatest && proposals.isEmpty {
+            reconcileCurrentWallpaper(on: displayID, key: proposal.key)
+            recoverCommittedAssignmentIfUncovered(
+                on: displayID, key: proposal.key, failedProposalID: proposal.id)
+            if displayStates[proposal.key] != nil {
+                applyPlaybackPolicy(currentPlaybackPolicy, for: proposal.key, force: true)
+            }
+        }
+        syncStatusItems()
+    }
+
+    private func assignmentStateMergingCurrentRuntime(
+        _ proposed: DisplayWallpaperState,
+        for key: DisplayKey
+    ) -> DisplayWallpaperState {
+        var committed = proposed
+        if let current = displayStates[key],
+           current.wallpaper.id == committed.wallpaper.id {
+            // Runtime controls may have changed while a same-wallpaper restart
+            // was preparing. Never overwrite those newer edits with the
+            // immutable snapshot captured when the request started.
+            committed.runtime = current.runtime
+        }
+        return committed
+    }
+
+    private func hasPendingAssignment(on displayID: CGDirectDisplayID,
+                                      for key: DisplayKey) -> Bool {
+        pendingAssignmentProposals[displayID]?.contains { $0.key == key } ?? false
+    }
+
+    private func commitAssignmentState(_ state: DisplayWallpaperState,
+                                       assignmentID: UUID,
+                                       for key: DisplayKey) {
+        if let previous = displayStates[key], previous.wallpaper.id != state.wallpaper.id {
+            cancelRuntimeSave(for: key)
+            persistRuntime(previous.runtime, for: previous.wallpaper)
+        }
+        displayStates[key] = state
+        cancelFailedAssignmentRecovery(for: key)
+        committedAssignmentIDs[key] = assignmentID
+        lastAppliedPlayback[key] = nil
+        persistStates()
+    }
+
+    private func ensureCommittedAssignmentID(for key: DisplayKey) -> UUID {
+        if let assignmentID = committedAssignmentIDs[key] { return assignmentID }
+        let assignmentID = UUID()
+        committedAssignmentIDs[key] = assignmentID
+        return assignmentID
+    }
+
+    private func discardPendingAssignment(for key: DisplayKey) {
+        let displayIDs = Array(pendingAssignmentProposals.keys)
+        for displayID in displayIDs {
+            guard let proposals = pendingAssignmentProposals[displayID] else { continue }
+            let removedIDs = Set(proposals.lazy.filter { $0.key == key }.map(\.id))
+            guard !removedIDs.isEmpty else { continue }
+            let remaining = proposals.filter { !removedIDs.contains($0.id) }
+            pendingAssignmentProposals[displayID] = remaining.isEmpty ? nil : remaining
+            if let pending = pendingScreenAssignments[displayID], removedIDs.contains(pending) {
+                pendingScreenAssignments[displayID] = nil
+            }
+        }
     }
 
     func applyOnDisplay(_ w: WEWallpaper, displayID targetDisplayID: CGDirectDisplayID) {
@@ -291,11 +402,14 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func clear(_ key: DisplayKey) {
+        discardPendingAssignment(for: key)
         if let state = displayStates[key] {
             cancelRuntimeSave(for: key)
             persistRuntime(state.runtime, for: state.wallpaper)
         }
         displayStates[key] = nil
+        cancelFailedAssignmentRecovery(for: key)
+        committedAssignmentIDs[key] = nil
         lastAppliedPlayback[key] = nil
         cancelPendingProperties(for: key)
         persistStates()
@@ -304,6 +418,7 @@ class WallpaperViewModel: ObservableObject {
         }
         if let displayID = DisplayRegistry.shared.displayID(for: key) {
             pendingScreenAssignments[displayID] = nil
+            pendingAssignmentProposals[displayID] = nil
             renderer.stop(displayID: displayID)
         }
         syncStatusItems()
@@ -319,8 +434,11 @@ class WallpaperViewModel: ObservableObject {
             persistRuntime(state.runtime, for: state.wallpaper)
             cancelPendingProperties(for: key)
         }
+        cancelAllFailedAssignmentRecoveries()
         renderer.stopAll()
         pendingScreenAssignments.removeAll()
+        pendingAssignmentProposals.removeAll()
+        committedAssignmentIDs.removeAll()
         displayStates.removeAll()
         lastAppliedPlayback.removeAll()
         currentByScreen.removeAll()
@@ -340,10 +458,10 @@ class WallpaperViewModel: ObservableObject {
     func restoreAllDisplays() {
         guard currentPlaybackPolicy != .stop else { return }
         for info in DisplayRegistry.shared.connected {
-            guard let state = displayStates[info.key] else { continue }
-            apply(state, to: info.displayID, key: info.key, reuseActive: false)
-            DesktopOverrideService.shared.scheduleCapture(
-                forDisplay: info.displayID, wallpaper: state.wallpaper)
+            guard !hasPendingAssignment(on: info.displayID, for: info.key),
+                  let state = displayStates[info.key] else { continue }
+            apply(state, to: info.displayID, key: info.key, reuseActive: false,
+                  assignmentID: ensureCommittedAssignmentID(for: info.key))
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
         syncStatusItems()
@@ -354,7 +472,10 @@ class WallpaperViewModel: ObservableObject {
               let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
         cancelPendingProperties(for: key)
         if currentPlaybackPolicy != .stop {
-            apply(state, to: displayID, key: key, reuseActive: false)
+            // A user-triggered reapply is itself an assignment transaction. If
+            // another request is in flight this queues deterministically behind
+            // it and keeps UI/persistence aligned with the eventual renderer.
+            submitAssignment(state, to: displayID, key: key, reuseActive: false)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, for: key, force: true)
     }
@@ -364,9 +485,12 @@ class WallpaperViewModel: ObservableObject {
     }
 
     private func apply(_ state: DisplayWallpaperState, to displayID: CGDirectDisplayID,
-                       key: DisplayKey, reuseActive: Bool) {
-        let options = makeRenderOptions(for: state.wallpaper, runtime: state.runtime)
-        let requestID = UUID()
+                       key: DisplayKey, reuseActive: Bool,
+                       assignmentID: UUID,
+                       requestID: UUID = UUID(),
+                       onResult: ((Bool) -> Void)? = nil) {
+        let options = makeRenderOptions(
+            for: state.wallpaper, runtime: state.runtime, assignmentID: assignmentID)
         pendingScreenAssignments[displayID] = requestID
         let accepted = renderer.render(
             state.wallpaper,
@@ -374,14 +498,23 @@ class WallpaperViewModel: ObservableObject {
             options: options,
             reuseActive: reuseActive
         ) { [weak self] success in
-            guard let self,
-                  self.pendingScreenAssignments[displayID] == requestID else { return }
+            guard let self else { return }
+            if let onResult {
+                if self.pendingScreenAssignments[displayID] == requestID {
+                    self.pendingScreenAssignments[displayID] = nil
+                }
+                onResult(success)
+                return
+            }
+            guard self.pendingScreenAssignments[displayID] == requestID else { return }
             self.pendingScreenAssignments[displayID] = nil
-            guard success else { return }
-            self.commit(state, to: displayID, key: key)
+            if success {
+                self.commit(state, to: displayID, key: key)
+            }
         }
         if !accepted, pendingScreenAssignments[displayID] == requestID {
             pendingScreenAssignments[displayID] = nil
+            onResult?(false)
         }
     }
 
@@ -394,17 +527,105 @@ class WallpaperViewModel: ObservableObject {
             forDisplay: displayID, wallpaper: state.wallpaper)
     }
 
+    private func reconcileCurrentWallpaper(on displayID: CGDirectDisplayID,
+                                           key: DisplayKey) {
+        guard let index = DisplayRegistry.shared.screenIndex(for: key) else { return }
+        currentByScreen[index] = renderer.currentWallpaper(onDisplay: displayID)
+    }
+
+    private func recoverCommittedAssignmentIfUncovered(
+        on displayID: CGDirectDisplayID,
+        key: DisplayKey,
+        failedProposalID: UUID
+    ) {
+        cancelFailedAssignmentRecovery(for: key)
+        guard currentPlaybackPolicy != .stop,
+              DisplayRegistry.shared.displayID(for: key) == displayID,
+              displayStates[key] != nil,
+              !hasPendingAssignment(on: displayID, for: key) else { return }
+        let committedAssignmentID = ensureCommittedAssignmentID(for: key)
+        if renderer.isRendering(onDisplay: displayID) { return }
+
+        failedAssignmentRecoveries[key] = FailedAssignmentRecovery(
+            proposalID: failedProposalID,
+            committedAssignmentID: committedAssignmentID,
+            displayID: displayID,
+            waiterID: nil)
+        let waiterID = renderer.whenCoverageOrWorkSettles(
+            onDisplay: displayID
+        ) { [weak self] in
+            self?.finishFailedAssignmentRecovery(
+                for: key, failedProposalID: failedProposalID,
+                committedAssignmentID: committedAssignmentID, displayID: displayID)
+        }
+        guard var recovery = failedAssignmentRecoveries[key],
+              recovery.proposalID == failedProposalID,
+              recovery.committedAssignmentID == committedAssignmentID,
+              recovery.displayID == displayID else {
+            renderer.cancelCoverageOrWorkWaiter(waiterID, onDisplay: displayID)
+            return
+        }
+        recovery.waiterID = waiterID
+        failedAssignmentRecoveries[key] = recovery
+    }
+
+    private func finishFailedAssignmentRecovery(
+        for key: DisplayKey,
+        failedProposalID: UUID,
+        committedAssignmentID: UUID,
+        displayID: CGDirectDisplayID
+    ) {
+        guard let recovery = failedAssignmentRecoveries[key],
+              recovery.proposalID == failedProposalID,
+              recovery.committedAssignmentID == committedAssignmentID,
+              recovery.displayID == displayID else { return }
+        failedAssignmentRecoveries[key] = nil
+        if renderer.isRendering(onDisplay: displayID) { return }
+        guard currentPlaybackPolicy != .stop,
+              DisplayRegistry.shared.displayID(for: key) == displayID,
+              committedAssignmentIDs[key] == committedAssignmentID,
+              let state = displayStates[key],
+              !hasPendingAssignment(on: displayID, for: key),
+              !renderer.hasCoverageOrWork(onDisplay: displayID) else { return }
+        // This fallback is deliberately non-transactional: a second failure
+        // ends without registering another recovery waiter.
+        apply(state, to: displayID, key: key, reuseActive: true,
+              assignmentID: committedAssignmentID)
+    }
+
+    private func cancelFailedAssignmentRecovery(for key: DisplayKey) {
+        guard let recovery = failedAssignmentRecoveries.removeValue(forKey: key),
+              let waiterID = recovery.waiterID else { return }
+        renderer.cancelCoverageOrWorkWaiter(waiterID, onDisplay: recovery.displayID)
+    }
+
+    private func cancelAllFailedAssignmentRecoveries() {
+        for key in Array(failedAssignmentRecoveries.keys) {
+            cancelFailedAssignmentRecovery(for: key)
+        }
+    }
+
     private func makeRenderOptions(for w: WEWallpaper,
-                                   runtime state: WallpaperRuntimeState) -> RenderOptions {
+                                   runtime state: WallpaperRuntimeState,
+                                   assignmentID: UUID,
+                                   playbackAction: GSPlayback? = nil) -> RenderOptions {
         let settings = AppDelegate.shared.globalSettingsViewModel.settings
+        let action = playbackAction ?? currentPlaybackPolicy
         var opts = RenderOptions()
+        opts.assignmentID = assignmentID
         opts.fps = globalFps
         opts.enableSpectrum = enableSpectrum
-        opts.muted = state.muted || globalMuted || state.volume == 0 || currentPlaybackPolicy == .mute
+        opts.muted = state.muted || globalMuted || state.volume == 0 || action == .mute
         opts.volume = state.volume * masterVolume
         opts.speed = state.speed
         opts.fillMode = state.fillMode
         opts.userProperties = effectiveProperties(for: w, runtime: state)
+        let throttledFps = AppDelegate.shared.globalSettingsViewModel
+            .throttledFps(base: globalFps)
+        let paused = state.speed == 0 || action == .pause
+        opts.powerState = paused ? .pause
+            : (throttledFps < globalFps ? .throttle : .run)
+        opts.powerFps = throttledFps
         opts.loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
         switch settings.textureResolution {
         case .highQuality: opts.renderScale = 1.0
@@ -428,8 +649,19 @@ class WallpaperViewModel: ObservableObject {
         let connectedIDs = Set(connected.map(\.displayID))
         let connectedKeys = Set(connected.map(\.key))
 
+        let staleRecoveryKeys = failedAssignmentRecoveries.compactMap { key, recovery in
+            !connectedKeys.contains(key) ||
+                DisplayRegistry.shared.displayID(for: key) != recovery.displayID ? key : nil
+        }
+        for key in staleRecoveryKeys {
+            cancelFailedAssignmentRecovery(for: key)
+        }
+
         renderer.stopDisplays(except: connectedIDs)
         pendingScreenAssignments = pendingScreenAssignments.filter { connectedIDs.contains($0.key) }
+        pendingAssignmentProposals = pendingAssignmentProposals.filter {
+            connectedIDs.contains($0.key)
+        }
         lastAppliedPlayback = lastAppliedPlayback.filter { connectedKeys.contains($0.key) }
 
         if !connectedKeys.contains(selectedDisplayKey) {
@@ -441,22 +673,31 @@ class WallpaperViewModel: ObservableObject {
             ?? displayStates[selectedDisplayKey]
         var seeded = false
         for info in connected {
+            if hasPendingAssignment(on: info.displayID, for: info.key) { continue }
             if displayStates[info.key] == nil, let inherited {
-                displayStates[info.key] = inherited
-                lastAppliedPlayback[info.key] = nil
-                seeded = true
+                if currentPlaybackPolicy == .stop {
+                    displayStates[info.key] = inherited
+                    committedAssignmentIDs[info.key] = UUID()
+                    lastAppliedPlayback[info.key] = nil
+                    seeded = true
+                } else {
+                    submitAssignment(inherited, to: info.displayID,
+                                     key: info.key, reuseActive: true)
+                    continue
+                }
             }
             guard let state = displayStates[info.key] else { continue }
             if currentPlaybackPolicy != .stop {
-                apply(state, to: info.displayID, key: info.key, reuseActive: true)
+                apply(state, to: info.displayID, key: info.key, reuseActive: true,
+                      assignmentID: ensureCommittedAssignmentID(for: info.key))
             }
         }
         if seeded { persistStates() }
 
         var rebuilt: [Int: WEWallpaper] = [:]
         for info in connected {
-            guard let state = displayStates[info.key] else { continue }
-            rebuilt[info.index] = state.wallpaper
+            guard let wallpaper = renderer.currentWallpaper(onDisplay: info.displayID) else { continue }
+            rebuilt[info.index] = wallpaper
         }
         currentByScreen = rebuilt
 
@@ -694,10 +935,21 @@ class WallpaperViewModel: ObservableObject {
                 guard let self else { return }
                 self.propertyCommandWorkItems[displayKey] = nil
                 let commands = self.pendingPropertyCommands.removeValue(forKey: displayKey) ?? [:]
-                guard self.displayStates[displayKey]?.wallpaper.id == wallpaperID,
-                      let displayID = DisplayRegistry.shared.displayID(for: displayKey) else { return }
+                guard let displayID = DisplayRegistry.shared.displayID(for: displayKey) else { return }
+                var assignmentIDs: Set<UUID> = []
+                if self.displayStates[displayKey]?.wallpaper.id == wallpaperID {
+                    assignmentIDs.insert(self.ensureCommittedAssignmentID(for: displayKey))
+                }
+                for proposal in self.pendingAssignmentProposals[displayID] ?? []
+                where proposal.key == displayKey && proposal.state.wallpaper.id == wallpaperID {
+                    assignmentIDs.insert(proposal.id)
+                }
                 for (key, property) in commands {
-                    self.renderer.setProperty(key: key, property: property, onDisplay: displayID)
+                    for assignmentID in assignmentIDs {
+                        self.renderer.setProperty(
+                            key: key, property: property, onDisplay: displayID,
+                            assignmentID: assignmentID)
+                    }
                 }
             }
             propertyCommandWorkItems[displayKey] = work
@@ -718,10 +970,19 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func setFillMode(_ mode: FillMode, for key: DisplayKey) {
-        guard displayStates[key] != nil else { return }
+        guard let state = displayStates[key] else { return }
+        let wallpaperID = state.wallpaper.id
         mutateRuntime(for: key) { $0.fillMode = mode }
         guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
-        renderer.setFillMode(mode, onDisplay: displayID)
+        var assignmentIDs: Set<UUID> = [ensureCommittedAssignmentID(for: key)]
+        for proposal in pendingAssignmentProposals[displayID] ?? []
+        where proposal.key == key && proposal.state.wallpaper.id == wallpaperID {
+            assignmentIDs.insert(proposal.id)
+        }
+        for assignmentID in assignmentIDs {
+            renderer.setFillMode(
+                mode, onDisplay: displayID, assignmentID: assignmentID)
+        }
     }
 
     func resetProperties() {
@@ -805,10 +1066,37 @@ class WallpaperViewModel: ObservableObject {
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
 
+    private func commitPendingAssignmentsForStoppedPolicy() {
+        guard !pendingAssignmentProposals.isEmpty else { return }
+        // Only the user's latest request per display becomes the desired
+        // stopped-state assignment; intermediate requests exist solely because
+        // they may have become a visible rollback baseline during handoff.
+        let proposals = pendingAssignmentProposals.values.compactMap(\.last)
+        pendingAssignmentProposals.removeAll()
+        for proposal in proposals {
+            let committed = assignmentStateMergingCurrentRuntime(
+                proposal.state, for: proposal.key)
+            if let previous = displayStates[proposal.key],
+               previous.wallpaper.id != committed.wallpaper.id {
+                cancelRuntimeSave(for: proposal.key)
+                persistRuntime(previous.runtime, for: previous.wallpaper)
+            }
+            displayStates[proposal.key] = committed
+            committedAssignmentIDs[proposal.key] = proposal.id
+            lastAppliedPlayback[proposal.key] = nil
+        }
+        pendingScreenAssignments.removeAll()
+        persistStates()
+        syncStatusItems()
+    }
+
     func applyPlaybackPolicy(_ action: GSPlayback, force: Bool = false) {
         if action == .stop {
             if !stoppedByPlaybackPolicy {
+                cancelAllFailedAssignmentRecoveries()
+                commitPendingAssignmentsForStoppedPolicy()
                 renderer.stopAll()
+                currentByScreen.removeAll()
                 stoppedByPlaybackPolicy = true
             }
             lastAppliedPlayback.removeAll()
@@ -820,7 +1108,8 @@ class WallpaperViewModel: ObservableObject {
             lastAppliedPlayback.removeAll()
             for info in DisplayRegistry.shared.connected {
                 guard let state = displayStates[info.key] else { continue }
-                apply(state, to: info.displayID, key: info.key, reuseActive: true)
+                apply(state, to: info.displayID, key: info.key, reuseActive: true,
+                      assignmentID: ensureCommittedAssignmentID(for: info.key))
             }
         }
 
@@ -831,41 +1120,51 @@ class WallpaperViewModel: ObservableObject {
 
     private func applyPlaybackPolicy(_ action: GSPlayback, for key: DisplayKey,
                                      force: Bool = false) {
-        guard let displayID = DisplayRegistry.shared.displayID(for: key),
-              let state = displayStates[key] else { return }
+        guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
         if action == .stop {
             renderer.stop(displayID: displayID)
             lastAppliedPlayback[key] = nil
             return
         }
 
-        let runtimeState = state.runtime
-        let throttledFps = AppDelegate.shared.globalSettingsViewModel.throttledFps(base: globalFps)
-        let paused = runtimeState.speed == 0 || action == .pause
-        let powerState: MiragePowerState = paused ? .pause
-            : (throttledFps < globalFps ? .throttle : .run)
+        if let state = displayStates[key] {
+            let runtimeState = state.runtime
+            let throttledFps = AppDelegate.shared.globalSettingsViewModel
+                .throttledFps(base: globalFps)
+            let paused = runtimeState.speed == 0 || action == .pause
+            let powerState: MiragePowerState = paused ? .pause
+                : (throttledFps < globalFps ? .throttle : .run)
 
-        let applied = AppliedPlaybackState(
-            paused: paused,
-            muted: runtimeState.muted || globalMuted || runtimeState.volume == 0 || action == .mute,
-            volume: runtimeState.volume * masterVolume,
-            speed: runtimeState.speed,
-            powerState: powerState,
-            fps: throttledFps
-        )
-        guard force || applied != lastAppliedPlayback[key] else { return }
-
-        if applied.paused {
-            renderer.setPower(applied.powerState, fps: applied.fps, onDisplay: displayID)
-            renderer.setVolume(applied.volume, onDisplay: displayID)
-            renderer.setMuted(applied.muted, onDisplay: displayID)
-        } else {
-            renderer.setVolume(applied.volume, onDisplay: displayID)
-            renderer.setMuted(applied.muted, onDisplay: displayID)
-            renderer.setSpeed(applied.speed, onDisplay: displayID)
-            renderer.setPower(applied.powerState, fps: applied.fps, onDisplay: displayID)
+            let applied = AppliedPlaybackState(
+                paused: paused,
+                muted: runtimeState.muted || globalMuted || runtimeState.volume == 0 ||
+                    action == .mute,
+                volume: runtimeState.volume * masterVolume,
+                speed: runtimeState.speed,
+                powerState: powerState,
+                fps: throttledFps
+            )
+            let committedAssignmentID = ensureCommittedAssignmentID(for: key)
+            if force || applied != lastAppliedPlayback[key] {
+                let options = makeRenderOptions(
+                    for: state.wallpaper, runtime: runtimeState,
+                    assignmentID: committedAssignmentID, playbackAction: action)
+                renderer.applyPlaybackOptions(
+                    options, assignmentID: committedAssignmentID, onDisplay: displayID)
+                lastAppliedPlayback[key] = applied
+            }
         }
-        lastAppliedPlayback[key] = applied
+
+        for proposal in pendingAssignmentProposals[displayID] ?? []
+        where proposal.key == key {
+            let proposalState = assignmentStateMergingCurrentRuntime(
+                proposal.state, for: proposal.key)
+            let options = makeRenderOptions(
+                for: proposalState.wallpaper, runtime: proposalState.runtime,
+                assignmentID: proposal.id, playbackAction: action)
+            renderer.applyPlaybackOptions(
+                options, assignmentID: proposal.id, onDisplay: displayID)
+        }
     }
 
     // MARK: 状态栏菜单项文字同步

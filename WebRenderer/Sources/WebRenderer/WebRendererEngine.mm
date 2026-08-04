@@ -27,12 +27,146 @@ static BOOL WREncodeSnapshot(CGImageRef image, NSString *path) {
     return WRWriteImage(image, path, (__bridge CFStringRef)UTTypeJPEG.identifier);
 }
 
+// A deferred WKWebView must be silent before any wallpaper script runs. Volume
+// alone is not a WebKit master mute: an ordinary HTMLMediaElement can ignore the
+// WE "audio" property, and WebAudio does not use it at all. Install this guard
+// in every frame at document-start so both existing and future media stay
+// blocked until Mirage replays the authoritative mute/pause state after the
+// window has been activated.
+static NSString *const kStrictAudioGuardJS = @"\
+(function(){\
+  if(window.__mirage_audio_guard_installed)return;\
+  window.__mirage_audio_guard_installed=true;\
+  var __isTop=false;try{__isTop=window.top===window;}catch(e){}\
+  var __muted=__isTop?!!window.__mirage_audio_guard_initial_muted:true;\
+  var __paused=false;\
+  try{delete window.__mirage_audio_guard_initial_muted;}catch(e){}\
+  function __blocked(){return __muted||__paused;}\
+  var __media=new Set(),__mediaDesired=new WeakMap();\
+  var __mediaProto=window.HTMLMediaElement&&HTMLMediaElement.prototype;\
+  var __mutedDescriptor=__mediaProto?Object.getOwnPropertyDescriptor(__mediaProto,'muted'):null;\
+  function __readNativeMuted(el){\
+    try{return __mutedDescriptor&&__mutedDescriptor.get?!!__mutedDescriptor.get.call(el):!!el.muted;}catch(e){return false;}\
+  }\
+  function __writeNativeMuted(el,value){\
+    try{if(__mutedDescriptor&&__mutedDescriptor.set)__mutedDescriptor.set.call(el,!!value);else el.muted=!!value;}catch(e){}\
+  }\
+  function __trackMedia(el){\
+    try{\
+      if(!__mediaProto||!(el instanceof HTMLMediaElement))return el;\
+      if(!__mediaDesired.has(el))__mediaDesired.set(el,__readNativeMuted(el));\
+      __media.add(el);\
+      __writeNativeMuted(el,__blocked()?true:!!__mediaDesired.get(el));\
+    }catch(e){}\
+    return el;\
+  }\
+  function __scanMedia(root){\
+    if(!root)return;\
+    __trackMedia(root);\
+    try{root.querySelectorAll('audio,video').forEach(__trackMedia);}catch(e){}\
+  }\
+  if(__mediaProto&&__mutedDescriptor&&__mutedDescriptor.get&&__mutedDescriptor.set&&__mutedDescriptor.configurable){\
+    try{Object.defineProperty(__mediaProto,'muted',{\
+      configurable:__mutedDescriptor.configurable,enumerable:__mutedDescriptor.enumerable,\
+      get:function(){return __mutedDescriptor.get.call(this);},\
+      set:function(value){__mediaDesired.set(this,!!value);__media.add(this);__mutedDescriptor.set.call(this,__blocked()?true:!!value);}\
+    });}catch(e){}\
+  }\
+  if(__mediaProto&&typeof __mediaProto.play==='function'){\
+    try{var __nativeMediaPlay=__mediaProto.play;__mediaProto.play=function(){__trackMedia(this);return __nativeMediaPlay.apply(this,arguments);};}catch(e){}\
+  }\
+  try{\
+    var __mediaObserver=new MutationObserver(function(records){records.forEach(function(record){\
+      if(record.type==='attributes')__trackMedia(record.target);\
+      else record.addedNodes.forEach(__scanMedia);\
+    });});\
+    __mediaObserver.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['muted','autoplay','src']});\
+    window.__mirage_audio_guard_media_observer=__mediaObserver;\
+  }catch(e){}\
+  try{document.addEventListener('play',function(event){__trackMedia(event.target);},true);}catch(e){}\
+  __scanMedia(document);\
+  var __contexts=new Set(),__contextDesired=new WeakMap(),__contextOps=new WeakMap(),__contextObserved=new WeakSet();\
+  function __ignorePromise(value){try{if(value&&value.catch)value.catch(function(){});}catch(e){}}\
+  function __trackContext(context,ops){\
+    if(!context||!ops)return context;\
+    if(!__contextDesired.has(context))__contextDesired.set(context,context.state==='running');\
+    __contexts.add(context);__contextOps.set(context,ops);\
+    if(__blocked()&&context.state!=='closed'){\
+      if(context.state==='running')__contextDesired.set(context,true);\
+      __ignorePromise(ops.suspend.call(context));\
+    }\
+    if(!__contextObserved.has(context)){\
+      __contextObserved.add(context);\
+      try{context.addEventListener('statechange',function(){\
+        if(__blocked()&&context.state==='running')__ignorePromise(ops.suspend.call(context));\
+      });}catch(e){}\
+    }\
+    return context;\
+  }\
+  function __patchContext(name){\
+    var Native=window[name];if(typeof Native!=='function'||!Native.prototype)return;\
+    var proto=Native.prototype,ops=proto.__mirage_audio_guard_ops;\
+    if(!ops){\
+      ops={resume:proto.resume,suspend:proto.suspend,close:proto.close};\
+      if(typeof ops.resume!=='function'||typeof ops.suspend!=='function')return;\
+      try{Object.defineProperty(proto,'__mirage_audio_guard_ops',{value:ops});}catch(e){return;}\
+      try{proto.resume=function(){\
+        __trackContext(this,ops);__contextDesired.set(this,true);\
+        if(__blocked()){__ignorePromise(ops.suspend.call(this));return Promise.resolve();}\
+        return ops.resume.apply(this,arguments);\
+      };}catch(e){}\
+      try{proto.suspend=function(){__trackContext(this,ops);__contextDesired.set(this,false);return ops.suspend.apply(this,arguments);};}catch(e){}\
+      if(typeof ops.close==='function'){try{proto.close=function(){__trackContext(this,ops);__contextDesired.set(this,false);return ops.close.apply(this,arguments);};}catch(e){}}\
+    }\
+    try{\
+      var Wrapped=function(options){var context=arguments.length?new Native(options):new Native();return __trackContext(context,ops);};\
+      Wrapped.prototype=proto;try{Object.setPrototypeOf(Wrapped,Native);}catch(e){}\
+      window[name]=Wrapped;\
+    }catch(e){}\
+  }\
+  __patchContext('AudioContext');__patchContext('webkitAudioContext');\
+  function __applyAudioState(muted,paused,relay){\
+    __muted=!!muted;__paused=!!paused;\
+    __media.forEach(function(el){__writeNativeMuted(el,__blocked()?true:!!__mediaDesired.get(el));});\
+    __scanMedia(document);\
+    __contexts.forEach(function(context){\
+      var ops=__contextOps.get(context);if(!ops||context.state==='closed')return;\
+      if(__blocked()){if(context.state==='running')__contextDesired.set(context,true);__ignorePromise(ops.suspend.call(context));}\
+      else if(__contextDesired.get(context))__ignorePromise(ops.resume.call(context));\
+    });\
+    if(relay)__broadcastState();\
+  }\
+  var __messageTag='mirage-strict-audio-v1';\
+  function __stateMessage(){return{tag:__messageTag,kind:'state',muted:__muted,paused:__paused};}\
+  function __broadcastState(){\
+    var state=__stateMessage();\
+    try{for(var i=0;i<window.frames.length;i++)window.frames[i].postMessage(state,'*');}catch(e){}\
+  }\
+  window.addEventListener('message',function(event){\
+    var data=event.data;if(!data||data.tag!==__messageTag)return;\
+    if(data.kind==='query'&&__isTop){try{if(event.source)event.source.postMessage(__stateMessage(),'*');}catch(e){}return;}\
+    if(data.kind==='state'&&!__isTop&&event.source===window.top)__applyAudioState(!!data.muted,!!data.paused,false);\
+  });\
+  window.__mirageAudioGuardTrackMedia=__trackMedia;\
+  window.__mirageAudioGuardSetMuted=function(value){if(__isTop)__applyAudioState(!!value,__paused,true);};\
+  window.__mirageAudioGuardSetPaused=function(value){if(__isTop)__applyAudioState(__muted,!!value,true);};\
+  __applyAudioState(__muted,__paused,__isTop);\
+  if(!__isTop){try{window.top.postMessage({tag:__messageTag,kind:'query'},'*');}catch(e){}}\
+})();";
+
+static NSString *WRStrictAudioGuardScript(BOOL initiallyMuted) {
+    NSString *prefix = initiallyMuted
+        ? @"window.__mirage_audio_guard_initial_muted=true;"
+        : @"window.__mirage_audio_guard_initial_muted=false;";
+    return [prefix stringByAppendingString:kStrictAudioGuardJS];
+}
+
 // WE JS API shim, installed at document-start (≈ CEF OnContextCreated).
 // Engine entrypoints (called via evaluateJavaScript):
 //   __wr_applyProps(obj)   → wallpaperPropertyListener.applyUserProperties
 //   __wr_setPaused(bool)   → wallpaperPropertyListener.setPaused + state
 //   __wr_setFps(int)       → requestAnimationFrame throttle
-//   __wr_applyMute(bool)   → registered audio streams .muted
+//   __wr_applyMute(bool)   → strict all-frame HTML media + WebAudio guard
 //   __wr_pauseStreams()    → registered audio streams .pause()
 //   __wr_resumeStreams()   → resume streams the host paused
 //   __wr_pushAudio([128])  → wallpaperRegisterAudioListener callbacks
@@ -129,13 +263,14 @@ static NSString *const kShimJS = @"\
   var __streams = [];\
   window.wallpaperRegisterAudioStream = function(el){\
     if (el && __streams.indexOf(el) < 0) __streams.push(el);\
+    try { if(window.__mirageAudioGuardTrackMedia)window.__mirageAudioGuardTrackMedia(el); } catch(e) {}\
     return el;\
   };\
   window.wallpaperRemoveAudioStream = function(el){\
     var i = __streams.indexOf(el); if (i >= 0) __streams.splice(i,1);\
   };\
   window.__wr_applyMute = function(m){\
-    for (var i=0;i<__streams.length;i++){ try { __streams[i].muted = !!m; } catch(e){} }\
+    try { if(window.__mirageAudioGuardSetMuted)window.__mirageAudioGuardSetMuted(!!m); } catch(e){}\
   };\
   window.__wr_pauseStreams = function(){\
     for (var i=0;i<__streams.length;i++){\
@@ -295,7 +430,9 @@ static NSString *const kShimJS = @"\
     } catch(e) { console.error('WebRenderer applyUserProperties:',e); return -1; }\
   };\
   window.__wr_setPaused = function(p){\
-    p=!!p; if (__paused===p) return; __paused=p; window.wallpaperEngine_paused=p;\
+    p=!!p;\
+    try { if(window.__mirageAudioGuardSetPaused)window.__mirageAudioGuardSetPaused(p); } catch(e){}\
+    if (__paused===p) return; __paused=p; window.wallpaperEngine_paused=p;\
     __setCssPaused(p);\
     __setPageVisibility(p);\
     if(p){\
@@ -476,9 +613,17 @@ static NSString *WRStringValue(id value) {
 @property (nonatomic, strong) WRManifest *manifest;
 @property (nonatomic, strong) WRURLSchemeHandler *schemeHandler;
 @property (nonatomic, assign) BOOL didFinishLoad;
+@property (nonatomic, assign) BOOL contentReadyReported;
+@property (nonatomic, assign) NSUInteger contentReadinessGeneration;
 @property (nonatomic, assign) BOOL networkRulesReady;
 @property (nonatomic, assign) BOOL networkRulesFailed;
 @property (nonatomic, assign) BOOL pendingWallpaperLoad;
+@property (nonatomic, assign) BOOL initialMediaPlaybackStateReady;
+@property (nonatomic, assign) BOOL desiredHostMediaPlaybackSuspended;
+@property (nonatomic, assign) BOOL hostMediaPlaybackSuspended;
+@property (nonatomic, assign) BOOL hostMediaPlaybackRequestInFlight;
+@property (nonatomic, strong) NSMutableArray<NSNumber *> *hostMediaPlaybackStates;
+@property (nonatomic, strong) NSMutableArray *hostMediaPlaybackCompletions;
 @property (nonatomic, assign) NSUInteger networkObservationCount;
 @property (nonatomic, strong) NSMutableArray<NSString *> *pendingJS;
 @property (nonatomic, assign) float volume;
@@ -492,7 +637,9 @@ static NSString *WRStringValue(id value) {
 @property (nonatomic, assign) BOOL audioListenerDemand;
 @property (nonatomic, assign) BOOL paused;
 - (void)installNetworkRuleList;
+- (void)loadWallpaperIfReady;
 - (void)loadWallpaperEntry;
+- (void)startNextHostMediaPlaybackRequest;
 @end
 
 @implementation WebRendererEngine {
@@ -504,6 +651,7 @@ static NSString *WRStringValue(id value) {
     c.enableInspector = YES;
     c.enableAudioSpectrum = YES;
     c.enableAudioPlayback = YES;
+    c.initiallySuspendsMediaPlayback = NO;
     c.initialVolume = 1.0f;
     c.frameRate = 60;
     c.loadFromMemory = NO;
@@ -520,6 +668,11 @@ static NSString *WRStringValue(id value) {
         _pendingJS = [NSMutableArray array];
         _volume = config.initialVolume;
         _muted = (config.initialVolume <= 0.0f);
+        _initialMediaPlaybackStateReady = !config.initiallySuspendsMediaPlayback;
+        _desiredHostMediaPlaybackSuspended = config.initiallySuspendsMediaPlayback;
+        _hostMediaPlaybackSuspended = NO;
+        _hostMediaPlaybackStates = [NSMutableArray array];
+        _hostMediaPlaybackCompletions = [NSMutableArray array];
         _audioTap = [[WRAudioTap alloc] init];
         [self setupWebViewWithFrame:frame];
     }
@@ -529,6 +682,12 @@ static NSString *WRStringValue(id value) {
 - (void)setupWebViewWithFrame:(NSRect)frame {
     WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
     WKUserContentController *ucc = [WKUserContentController new];
+    WKUserScript *audioGuard = [[WKUserScript alloc]
+        initWithSource:WRStrictAudioGuardScript(
+            _muted || _config.initiallySuspendsMediaPlayback)
+        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:NO];
+    [ucc addUserScript:audioGuard];
     WKUserScript *shim = [[WKUserScript alloc] initWithSource:kShimJS
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:YES];
@@ -583,6 +742,16 @@ static NSString *WRStringValue(id value) {
     _webView.customUserAgent = (_config.userAgent.length > 0) ? _config.userAgent : kDefaultUserAgent;
     if (@available(macOS 13.0, *)) {
         _webView.inspectable = _config.enableInspector ? YES : NO;
+    }
+
+    if (_config.initiallySuspendsMediaPlayback) {
+        __weak WebRendererEngine *weakSelf = self;
+        [self setHostMediaPlaybackSuspended:YES completion:^{
+            WebRendererEngine *strongSelf = weakSelf;
+            if (strongSelf == nil) return;
+            strongSelf.initialMediaPlaybackStateReady = YES;
+            [strongSelf loadWallpaperIfReady];
+        }];
     }
 
     switch (_config.networkPolicy) {
@@ -648,7 +817,7 @@ static NSString *WRStringValue(id value) {
         [s.userContentController addContentRuleList:list];
         s.networkRulesReady = YES;
         fprintf(stderr, "WebRenderer: network policy=block (external requests blocked)\n");
-        if (s.pendingWallpaperLoad) [s loadWallpaperEntry];
+        if (s.pendingWallpaperLoad) [s loadWallpaperIfReady];
     }];
 }
 
@@ -657,6 +826,8 @@ static NSString *WRStringValue(id value) {
 - (void)openWallpaper:(WRManifest *)manifest {
     _manifest = manifest;
     _didFinishLoad = NO;
+    _contentReadyReported = NO;
+    _contentReadinessGeneration += 1;
     _propertyApplySerial += 1;
     _propertySnapshotApplied = NO;
     _userPropertySnapshot = nil;
@@ -668,16 +839,23 @@ static NSString *WRStringValue(id value) {
     [_schemeHandler clearMemoryCache];
     _schemeHandler.loadFromMemory = _config.loadFromMemory;
 
+    _pendingWallpaperLoad = YES;
+    [self loadWallpaperIfReady];
+}
+
+- (void)loadWallpaperIfReady {
+    if (!_pendingWallpaperLoad || _manifest == nil) return;
+    if (!_initialMediaPlaybackStateReady) return;
     if (_config.networkPolicy == WRNetworkPolicyBlock && !_networkRulesReady) {
         if (_networkRulesFailed) {
             fprintf(stderr, "WebRenderer: not loading wallpaper — "
                             "network policy=block could not be enforced\n");
+            _pendingWallpaperLoad = NO;
             return;
         }
         // The content rule list is still compiling. Loading now would give the
         // page a window of unrestricted egress, so hand the load to the
         // compilation completion handler instead.
-        _pendingWallpaperLoad = YES;
         fprintf(stderr, "WebRenderer: deferring load until the network rule list is installed\n");
         return;
     }
@@ -821,6 +999,34 @@ static NSString *WRStringValue(id value) {
     [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", effectiveMuted ? @"true" : @"false"]];
 }
 
+- (void)setHostMediaPlaybackSuspended:(BOOL)suspended
+                            completion:(void (^)(void))completion {
+    _desiredHostMediaPlaybackSuspended = suspended;
+    [_hostMediaPlaybackStates addObject:@(suspended)];
+    [_hostMediaPlaybackCompletions addObject:
+        completion != nil ? [completion copy] : [^{} copy]];
+    [self startNextHostMediaPlaybackRequest];
+}
+
+- (void)startNextHostMediaPlaybackRequest {
+    if (_hostMediaPlaybackRequestInFlight || _hostMediaPlaybackStates.count == 0) return;
+    _hostMediaPlaybackRequestInFlight = YES;
+    const BOOL suspended = _hostMediaPlaybackStates.firstObject.boolValue;
+    void (^completion)(void) = _hostMediaPlaybackCompletions.firstObject;
+    [_hostMediaPlaybackStates removeObjectAtIndex:0];
+    [_hostMediaPlaybackCompletions removeObjectAtIndex:0];
+
+    __weak WebRendererEngine *weakSelf = self;
+    [_webView setAllMediaPlaybackSuspended:suspended completionHandler:^{
+        WebRendererEngine *strongSelf = weakSelf;
+        if (strongSelf == nil) return;
+        strongSelf.hostMediaPlaybackSuspended = suspended;
+        strongSelf.hostMediaPlaybackRequestInFlight = NO;
+        if (completion) completion();
+        [strongSelf startNextHostMediaPlaybackRequest];
+    }];
+}
+
 - (void)setFrameRate:(int)fps {
     [self eval:[NSString stringWithFormat:@"__wr_setFps(%d);", fps]];
 }
@@ -959,6 +1165,39 @@ static NSString *WRStringValue(id value) {
 
 #pragma mark - WKNavigationDelegate
 
+- (void)probeContentReadinessForGeneration:(NSUInteger)generation
+                                  attempts:(NSInteger)attempts {
+    if (generation != _contentReadinessGeneration || !_didFinishLoad ||
+        _contentReadyReported) return;
+
+    // didFinishNavigation precedes the first compositor commit. A tiny snapshot
+    // is a public WebKit synchronization point that proves the page process has
+    // produced pixels without allocating a full-display bitmap.
+    WKSnapshotConfiguration *snapshot = [WKSnapshotConfiguration new];
+    const NSRect bounds = self.webView.bounds;
+    snapshot.rect = NSMakeRect(NSMidX(bounds), NSMidY(bounds), 1.0, 1.0);
+    snapshot.afterScreenUpdates = YES;
+    __weak WebRendererEngine *weakSelf = self;
+    [self.webView takeSnapshotWithConfiguration:snapshot
+                              completionHandler:^(NSImage *image, NSError *error) {
+        (void)error;
+        WebRendererEngine *strongSelf = weakSelf;
+        if (strongSelf == nil || generation != strongSelf.contentReadinessGeneration ||
+            !strongSelf.didFinishLoad || strongSelf.contentReadyReported) return;
+        if (image != nil) {
+            strongSelf.contentReadyReported = YES;
+            if (strongSelf.contentReadyHandler) strongSelf.contentReadyHandler();
+            return;
+        }
+        if (attempts <= 0) return;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            [strongSelf probeContentReadinessForGeneration:generation
+                                                  attempts:attempts - 1];
+        });
+    }];
+}
+
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     (void)navigation;
     _didFinishLoad = YES;
@@ -979,6 +1218,24 @@ static NSString *WRStringValue(id value) {
         [self setFrameRate:_config.frameRate];
     }
     [self flushPendingJS];
+
+    const NSUInteger generation = _contentReadinessGeneration;
+    __weak WebRendererEngine *weakSelf = self;
+    void (^beginReadinessProbe)(void) = ^{
+        WebRendererEngine *strongSelf = weakSelf;
+        if (strongSelf == nil || generation != strongSelf.contentReadinessGeneration ||
+            !strongSelf.didFinishLoad) return;
+        [strongSelf probeContentReadinessForGeneration:generation attempts:40];
+    };
+    if (_desiredHostMediaPlaybackSuspended) {
+        // Suspending the initially empty WKWebView before navigation closes the
+        // startup race, but a navigation creates a new page. Reassert the host
+        // barrier for that concrete document and do not publish `prepared`
+        // until WebKit acknowledges it.
+        [self setHostMediaPlaybackSuspended:YES completion:beginReadinessProbe];
+    } else {
+        beginReadinessProbe();
+    }
 }
 
 - (void)webView:(WKWebView *)webView

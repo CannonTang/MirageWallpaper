@@ -102,6 +102,8 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, strong) id itemFailedObserver;
 @property (nonatomic, assign) BOOL looperObserved;
 @property (nonatomic, assign) BOOL failureReported;
+@property (nonatomic, assign) BOOL firstFrameReported;
+@property (nonatomic, assign) BOOL hostPaused;
 @property (nonatomic, assign) CFTimeInterval lastItemEndReport;
 @property (nonatomic, strong) AVPlayerItemVideoOutput *frameProbe;
 /// Kept alive across snapshots: attaching an output makes the decoder start
@@ -155,6 +157,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         _volume = _player.volume;
         _muted = config.muted;
         _autoplay = config.autoplay;
+        _hostPaused = !config.autoplay;
         _loadFromMemory = config.loadFromMemory;
         _itemEndObservers = [NSMutableArray array];
         _transcodeQueue = dispatch_queue_create("VideoRenderer.transcode",
@@ -324,6 +327,8 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.frameProbe = nil;
     self.loaded = NO;
     self.failureReported = NO;
+    self.firstFrameReported = NO;
+    self.hostPaused = !self.autoplay;
     self.lastItemEndReport = 0;
     self.openGeneration += 1;
 
@@ -466,7 +471,14 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
         AVPlayerItem *current = strongSelf.player.currentItem;
         if (current == nil) {
-            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:deadline];
+            if (!strongSelf.hostPaused && deadline.timeIntervalSinceNow <= 0) {
+                [strongSelf reportPlaybackFailure:nil
+                                        fallback:@"video produced no playable item"];
+                return;
+            }
+            NSDate *nextDeadline = strongSelf.hostPaused
+                ? [NSDate dateWithTimeIntervalSinceNow:kVRFirstFrameTimeout] : deadline;
+            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:nextDeadline];
             return;
         }
         AVPlayerItemVideoOutput *probe = strongSelf.frameProbe;
@@ -482,11 +494,16 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         if ([probe hasNewPixelBufferForItemTime:current.currentTime]) {
             [current removeOutput:probe];
             strongSelf.frameProbe = nil;
+            if (!strongSelf.firstFrameReported) {
+                strongSelf.firstFrameReported = YES;
+                if (strongSelf.firstFrameReadyBlock) strongSelf.firstFrameReadyBlock();
+            }
             return;
         }
-        // A paused wallpaper legitimately produces nothing: hold the deadline
-        // open instead of counting occluded or power-saved time against it.
-        if (strongSelf.player.rate == 0) {
+        // Only an explicit host pause suspends the deadline. AVPlayer also has
+        // rate == 0 while stalled or unable to start, and those states must end
+        // in a bounded error instead of retrying forever.
+        if (strongSelf.hostPaused) {
             [strongSelf armFirstFrameWatchdogForGeneration:generation
                                                  deadline:[NSDate dateWithTimeIntervalSinceNow:
                                                               kVRFirstFrameTimeout]];
@@ -511,10 +528,12 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 // fully occluded is the desired behaviour, not a bug.
 - (void)play {
     if (!self.loaded) return;
+    self.hostPaused = NO;
     [self.player play];
 }
 
 - (void)pause {
+    self.hostPaused = YES;
     [self.player pause];
 }
 

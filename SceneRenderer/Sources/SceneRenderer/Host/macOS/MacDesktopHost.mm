@@ -61,6 +61,10 @@ struct MacDesktopHost {
     std::atomic<bool>                first_frame_presented { false };
     std::atomic<bool>                activation_requested { false };
     std::atomic<bool>                activation_confirmed { false };
+    std::atomic<bool>                activation_failure_pending { false };
+    std::atomic<bool>                activation_failure_reported { false };
+    std::atomic<bool>                deactivation_requested { false };
+    std::atomic<bool>                deactivation_confirmed { false };
 };
 
 NSScreen* ResolveScreen(CGDirectDisplayID display_id) {
@@ -186,6 +190,106 @@ bool ValidateGeometry(MacDesktopHost* host, bool activated) {
     return true;
 }
 
+bool ValidateHidden(MacDesktopHost* host) {
+    if (host == nullptr || host->window == nil) return true;
+    if (host->window.isVisible || host->window.alphaValue > 0.001) return false;
+    CGRect window_bounds = CGRectZero;
+    bool onscreen = false;
+    double alpha = 0.0;
+    // Once WindowServer drops the entry entirely, the window is necessarily no
+    // longer composited. If it still has an entry, require both visibility and
+    // alpha to have settled before acknowledging the handoff.
+    if (! WindowServerState(host->window, window_bounds, onscreen, alpha)) return true;
+    return ! onscreen && alpha <= 0.001;
+}
+
+void ConfirmDeactivated(SRHostRef* ref, int attempts_left) {
+    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
+    if (host == nullptr || ! host->deactivation_requested.load()) return;
+    if (ValidateHidden(host)) {
+        if (! host->deactivation_confirmed.exchange(true) &&
+            host->callbacks.deactivated != nullptr) {
+            host->callbacks.deactivated(host->callbacks.userdata);
+        }
+        return;
+    }
+    if (attempts_left <= 0) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+      ConfirmDeactivated(ref, attempts_left - 1);
+    });
+}
+
+void ConfirmActivationFailed(SRHostRef* ref, int attempts_left) {
+    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
+    if (host == nullptr || ! host->activation_failure_pending.load()) return;
+    if (ValidateHidden(host)) {
+        host->activation_failure_pending.store(false);
+        if (! host->activation_failure_reported.exchange(true) &&
+            host->callbacks.activation_failed != nullptr) {
+            host->callbacks.activation_failed(host->callbacks.userdata);
+        }
+        return;
+    }
+    if (attempts_left <= 0) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+      ConfirmActivationFailed(ref, attempts_left - 1);
+    });
+}
+
+void BeginActivationFailure(SRHostRef* ref) {
+    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
+    if (host == nullptr || host->window == nil ||
+        host->activation_failure_pending.exchange(true)) return;
+    host->activation_requested.store(false);
+    host->activation_confirmed.store(false);
+    host->window.alphaValue = 0.0;
+    [host->window orderOut:nil];
+    [CATransaction flush];
+    ConfirmActivationFailed(ref, 200);
+}
+
+void ConfirmActivated(SRHostRef* ref, int attempts_left) {
+    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
+    if (host == nullptr || ! host->activation_requested.load() ||
+        host->activation_confirmed.load()) return;
+    if (ValidateGeometry(host, true)) {
+        if (! host->activation_confirmed.exchange(true) &&
+            host->callbacks.activated != nullptr) {
+            host->callbacks.activated(host->callbacks.userdata);
+        }
+        return;
+    }
+    if (attempts_left <= 0) {
+        BeginActivationFailure(ref);
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+      ConfirmActivated(ref, attempts_left - 1);
+    });
+}
+
+void PrepareActivation(SRHostRef* ref, int attempts_left) {
+    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
+    if (host == nullptr || ! host->activation_requested.load()) return;
+    if (ValidateGeometry(host, false)) {
+        host->window.alphaValue = 1.0;
+        [CATransaction flush];
+        ConfirmActivated(ref, 200);
+        return;
+    }
+    if (attempts_left <= 0) {
+        BeginActivationFailure(ref);
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+      PrepareActivation(ref, attempts_left - 1);
+    });
+}
+
 void StopApplicationOnMainThread();
 
 void EmitMouseEnter(MacDesktopHost* host, bool entered) {
@@ -205,6 +309,12 @@ void PollInput(MacDesktopHost* host) {
     if (screen == nil) {
         [host->window orderOut:nil];
         StopApplicationOnMainThread();
+        return;
+    }
+
+    if (! host->activation_confirmed.load()) {
+        EmitMouseEnter(host, false);
+        host->last_buttons = 0;
         return;
     }
 
@@ -294,6 +404,7 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
                                     NSWindowCollectionBehaviorStationary |
                                     NSWindowCollectionBehaviorIgnoresCycle;
         const bool deferred_show     = config != nullptr && config->deferred_show;
+        host->activation_confirmed.store(! deferred_show);
         window.opaque                = deferred_show ? NO : YES;
         window.backgroundColor       = deferred_show ? NSColor.clearColor : NSColor.blackColor;
         window.alphaValue            = deferred_show ? 0.0 : 1.0;
@@ -421,12 +532,24 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
     auto activate = ^{
       if (host->window == nil) return;
       if (! NormalizeGeometry(host)) return;
+      host->deactivation_requested.store(false);
+      host->deactivation_confirmed.store(false);
+      host->activation_confirmed.store(false);
+      host->activation_failure_pending.store(false);
+      host->activation_failure_reported.store(false);
+      host->activation_requested.store(true);
       host->window.backgroundColor = NSColor.blackColor;
       host->window.opaque          = YES;
-      host->window.alphaValue      = 1.0;
       if (host->surface_layer != nil) host->surface_layer.opaque = YES;
+
+      // A standby has been orderOut'ed, so geometry cannot be checked against
+      // WindowServer until it is registered again. Re-register it at alpha 0,
+      // validate the exact target-display bounds, and reveal only afterwards.
+      // This keeps a stale or misplaced window from ever becoming visible.
+      host->window.alphaValue = 0.0;
       [host->window orderFrontRegardless];
-      host->activation_requested.store(true);
+      [CATransaction flush];
+      PrepareActivation(host->hostRef, 200);
     };
     if (NSThread.isMainThread) {
         activate();
@@ -440,8 +563,15 @@ extern "C" void SceneRendererMacDesktopDeactivate(void* handle) {
     if (host == nullptr) return;
     auto deactivate = ^{
       if (host->window == nil) return;
+      host->activation_requested.store(false);
+      host->activation_confirmed.store(false);
+      host->activation_failure_pending.store(false);
+      host->deactivation_confirmed.store(false);
+      host->deactivation_requested.store(true);
       host->window.alphaValue = 0.0;
       [host->window orderOut:nil];
+      [CATransaction flush];
+      ConfirmDeactivated(host->hostRef, 200);
     };
     if (NSThread.isMainThread) {
         deactivate();
