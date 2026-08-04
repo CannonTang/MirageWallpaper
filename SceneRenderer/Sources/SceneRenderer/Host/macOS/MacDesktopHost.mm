@@ -3,6 +3,7 @@
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CGWindowLevel.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CATransaction.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <algorithm>
@@ -75,6 +76,116 @@ double Clamp01(double value) {
     return std::clamp(value, 0.0, 1.0);
 }
 
+bool NearlyEqual(CGFloat lhs, CGFloat rhs) {
+    return std::abs(lhs - rhs) <= 0.5;
+}
+
+bool AppKitRectMatches(NSRect lhs, NSRect rhs) {
+    return NearlyEqual(NSMinX(lhs), NSMinX(rhs)) &&
+           NearlyEqual(NSMinY(lhs), NSMinY(rhs)) &&
+           NearlyEqual(NSWidth(lhs), NSWidth(rhs)) &&
+           NearlyEqual(NSHeight(lhs), NSHeight(rhs));
+}
+
+bool CoreGraphicsRectMatches(CGRect lhs, CGRect rhs) {
+    return NearlyEqual(CGRectGetMinX(lhs), CGRectGetMinX(rhs)) &&
+           NearlyEqual(CGRectGetMinY(lhs), CGRectGetMinY(rhs)) &&
+           NearlyEqual(CGRectGetWidth(lhs), CGRectGetWidth(rhs)) &&
+           NearlyEqual(CGRectGetHeight(lhs), CGRectGetHeight(rhs));
+}
+
+bool SizeMatches(CGSize lhs, CGSize rhs) {
+    return NearlyEqual(lhs.width, rhs.width) && NearlyEqual(lhs.height, rhs.height);
+}
+
+CGDirectDisplayID ScreenDisplayID(NSScreen* screen) {
+    NSNumber* number = screen.deviceDescription[@"NSScreenNumber"];
+    return number != nil ? number.unsignedIntValue : 0;
+}
+
+bool WindowServerState(NSWindow* window, CGRect& bounds, bool& onscreen, double& alpha) {
+    if (window == nil || window.windowNumber <= 0) return false;
+    CFArrayRef windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionIncludingWindow,
+        static_cast<CGWindowID>(window.windowNumber));
+    if (windows == nullptr || CFArrayGetCount(windows) != 1) {
+        if (windows != nullptr) CFRelease(windows);
+        return false;
+    }
+    auto info = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(windows, 0));
+    auto bounds_value = static_cast<CFDictionaryRef>(
+        CFDictionaryGetValue(info, kCGWindowBounds));
+    const bool has_bounds = bounds_value != nullptr &&
+                            CGRectMakeWithDictionaryRepresentation(bounds_value, &bounds);
+    auto onscreen_value = static_cast<CFBooleanRef>(
+        CFDictionaryGetValue(info, kCGWindowIsOnscreen));
+    onscreen = onscreen_value != nullptr && CFBooleanGetValue(onscreen_value);
+    auto alpha_value = static_cast<CFNumberRef>(CFDictionaryGetValue(info, kCGWindowAlpha));
+    alpha = 0.0;
+    if (alpha_value != nullptr) {
+        CFNumberGetValue(alpha_value, kCFNumberDoubleType, &alpha);
+    }
+    CFRelease(windows);
+    return has_bounds;
+}
+
+bool NormalizeGeometry(MacDesktopHost* host) {
+    if (host == nullptr || host->window == nil || host->surface_layer == nil) return false;
+    NSScreen* screen = ResolveScreen(host->display_id);
+    if (screen == nil || ScreenDisplayID(screen) != host->display_id) return false;
+    NSRect frame = screen.frame;
+    if (! std::isfinite(NSMinX(frame)) || ! std::isfinite(NSMinY(frame)) ||
+        ! std::isfinite(NSWidth(frame)) || ! std::isfinite(NSHeight(frame)) ||
+        NSWidth(frame) <= 0.0 || NSHeight(frame) <= 0.0) {
+        return false;
+    }
+    if (! AppKitRectMatches(host->window.frame, frame)) {
+        [host->window setFrame:frame display:YES];
+    }
+    NSView* content_view = host->window.contentView;
+    if (content_view == nil) return false;
+    [content_view layoutSubtreeIfNeeded];
+    const NSRect bounds = content_view.bounds;
+    host->surface_layer.frame = bounds;
+    host->surface_layer.contentsScale = screen.backingScaleFactor;
+    host->surface_layer.drawableSize = [content_view convertRectToBacking:bounds].size;
+    [host->window displayIfNeeded];
+    [content_view displayIfNeeded];
+    [CATransaction flush];
+    return true;
+}
+
+bool ValidateGeometry(MacDesktopHost* host, bool activated) {
+    if (host == nullptr || host->window == nil || host->surface_layer == nil) return false;
+    NSScreen* screen = ResolveScreen(host->display_id);
+    if (screen == nil || ScreenDisplayID(screen) != host->display_id) return false;
+    if (! AppKitRectMatches(host->window.frame, screen.frame) || ! host->window.isVisible) return false;
+    NSView* content_view = host->window.contentView;
+    if (content_view == nil) return false;
+    const NSRect expected_bounds = NSMakeRect(
+        0.0, 0.0, NSWidth(screen.frame), NSHeight(screen.frame));
+    if (! AppKitRectMatches(content_view.bounds, expected_bounds) ||
+        ! AppKitRectMatches(host->surface_layer.frame, content_view.bounds) ||
+        ! NearlyEqual(host->surface_layer.contentsScale, screen.backingScaleFactor)) {
+        return false;
+    }
+    const CGSize expected_drawable =
+        [content_view convertRectToBacking:content_view.bounds].size;
+    if (! SizeMatches(host->surface_layer.drawableSize, expected_drawable)) return false;
+    CGRect window_bounds = CGRectZero;
+    bool onscreen = false;
+    double alpha = 0.0;
+    if (! WindowServerState(host->window, window_bounds, onscreen, alpha) ||
+        ! CoreGraphicsRectMatches(window_bounds, CGDisplayBounds(host->display_id))) {
+        return false;
+    }
+    if (activated && (! onscreen || alpha < 0.999 || host->window.alphaValue < 0.999 ||
+                      ! host->window.opaque || ! host->surface_layer.opaque)) {
+        return false;
+    }
+    return true;
+}
+
 void StopApplicationOnMainThread();
 
 void EmitMouseEnter(MacDesktopHost* host, bool entered) {
@@ -98,13 +209,7 @@ void PollInput(MacDesktopHost* host) {
     }
 
     const NSRect frame = screen.frame;
-    if (! NSEqualRects(host->window.frame, frame)) {
-        [host->window setFrame:frame display:YES];
-        NSView* content_view = host->window.contentView;
-        host->surface_layer.frame = content_view.bounds;
-        host->surface_layer.contentsScale = screen.backingScaleFactor;
-        host->surface_layer.drawableSize = [content_view convertRectToBacking:content_view.bounds].size;
-    }
+    NormalizeGeometry(host);
 
     const NSPoint mouse = NSEvent.mouseLocation;
     const bool    inside =
@@ -294,14 +399,18 @@ extern "C" void SceneRendererMacDesktopWake(void* handle) {
     dispatch_async(dispatch_get_main_queue(), ^{
       auto* current = static_cast<MacDesktopHost*>(ref.hostPtr);
       if (current == nullptr) return;
-      if (! current->first_frame_presented.exchange(true) &&
+      if (! NormalizeGeometry(current)) return;
+      if (ValidateGeometry(current, false) &&
+          ! current->first_frame_presented.exchange(true) &&
           current->callbacks.first_frame_presented != nullptr) {
           current->callbacks.first_frame_presented(current->callbacks.userdata);
       }
       if (current->activation_requested.load() &&
-          ! current->activation_confirmed.exchange(true) &&
-          current->callbacks.activated != nullptr) {
-          current->callbacks.activated(current->callbacks.userdata);
+          ! current->activation_confirmed.load() && ValidateGeometry(current, true)) {
+          if (! current->activation_confirmed.exchange(true) &&
+              current->callbacks.activated != nullptr) {
+              current->callbacks.activated(current->callbacks.userdata);
+          }
       }
     });
 }
@@ -311,6 +420,7 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
     if (host == nullptr) return;
     auto activate = ^{
       if (host->window == nil) return;
+      if (! NormalizeGeometry(host)) return;
       host->window.backgroundColor = NSColor.blackColor;
       host->window.opaque          = YES;
       host->window.alphaValue      = 1.0;
@@ -322,6 +432,21 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
         activate();
     } else {
         dispatch_sync(dispatch_get_main_queue(), activate);
+    }
+}
+
+extern "C" void SceneRendererMacDesktopDeactivate(void* handle) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    if (host == nullptr) return;
+    auto deactivate = ^{
+      if (host->window == nil) return;
+      host->window.alphaValue = 0.0;
+      [host->window orderOut:nil];
+    };
+    if (NSThread.isMainThread) {
+        deactivate();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), deactivate);
     }
 }
 

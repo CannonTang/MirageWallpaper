@@ -34,6 +34,7 @@ class WallpaperViewModel: ObservableObject {
 
     private var lastAppliedPlaybackState: AppliedPlaybackState?
     private var screenAssignments: [CGDirectDisplayID: ScreenAssignment] = [:]
+    private var pendingScreenAssignments: [CGDirectDisplayID: UUID] = [:]
     private var stoppedByPlaybackPolicy = false
     private var runtimeSaveWorkItem: DispatchWorkItem?
     private var playbackCommandWorkItem: DispatchWorkItem?
@@ -376,12 +377,51 @@ class WallpaperViewModel: ObservableObject {
         renderer.displayID(for: screenIndex)
     }
 
+    private func apply(_ assignment: ScreenAssignment,
+                       to displayID: CGDirectDisplayID,
+                       options: RenderOptions) {
+        if currentPlaybackPolicy == .stop {
+            pendingScreenAssignments[displayID] = nil
+            commit(assignment, to: displayID)
+            return
+        }
+        let requestID = UUID()
+        pendingScreenAssignments[displayID] = requestID
+        let accepted = renderer.render(
+            assignment.wallpaper,
+            onDisplay: displayID,
+            options: options,
+            reuseActive: true
+        ) { [weak self] success in
+            guard let self,
+                  self.pendingScreenAssignments[displayID] == requestID else { return }
+            self.pendingScreenAssignments[displayID] = nil
+            guard success else { return }
+            self.commit(assignment, to: displayID)
+        }
+        if !accepted, pendingScreenAssignments[displayID] == requestID {
+            pendingScreenAssignments[displayID] = nil
+        }
+    }
+
+    private func commit(_ assignment: ScreenAssignment,
+                        to displayID: CGDirectDisplayID) {
+        guard let screenIndex = renderer.screenIndex(for: displayID) else { return }
+        screenAssignments[displayID] = assignment
+        currentByScreen[screenIndex] = assignment.wallpaper
+        DesktopOverrideService.shared.scheduleCapture(
+            forDisplay: displayID, wallpaper: assignment.wallpaper)
+    }
+
     @objc private func displayTopologyChanged() {
         let displayIDs = Set(NSScreen.screens.compactMap {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
                 .uint32Value
         })
         renderer.stopDisplays(except: displayIDs)
+        pendingScreenAssignments = pendingScreenAssignments.filter {
+            displayIDs.contains($0.key)
+        }
         screenAssignments = screenAssignments.filter { displayIDs.contains($0.key) }
 
         if let mainDisplayID = displayID(for: 0) {
@@ -390,14 +430,9 @@ class WallpaperViewModel: ObservableObject {
                 : nil)
             if let inherited {
                 for displayID in displayIDs where screenAssignments[displayID] == nil {
-                    screenAssignments[displayID] = inherited
-                    if !stoppedByPlaybackPolicy {
-                        renderer.render(inherited.wallpaper, onDisplay: displayID,
-                                        options: makeRenderOptions(for: inherited.wallpaper,
-                                                                   runtime: inherited.runtime))
-                    }
-                    DesktopOverrideService.shared.scheduleCapture(
-                        forDisplay: displayID, wallpaper: inherited.wallpaper)
+                    apply(inherited, to: displayID,
+                          options: makeRenderOptions(for: inherited.wallpaper,
+                                                     runtime: inherited.runtime))
                 }
             }
         }
@@ -466,18 +501,15 @@ class WallpaperViewModel: ObservableObject {
             opts.muted = runtime.muted || globalMuted
             opts.speed = runtime.speed
             opts.fillMode = runtime.fillMode
-            screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: runtime)
-            if currentPlaybackPolicy != .stop {
-                renderer.render(w, onDisplay: displayID, options: opts)
-            }
-            currentByScreen[screen] = w
-            DesktopOverrideService.shared.scheduleCapture(forDisplay: displayID, wallpaper: w)
+            apply(ScreenAssignment(wallpaper: w, runtime: runtime),
+                  to: displayID, options: opts)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
 
     func stopWallpaper() {
         renderer.stopAll()
+        pendingScreenAssignments.removeAll()
         screenAssignments.removeAll()
         stoppedByPlaybackPolicy = false
         currentWallpaper = WallpaperViewModel.invalidWallpaper
@@ -490,18 +522,7 @@ class WallpaperViewModel: ObservableObject {
 
     func applyOnDisplay(_ w: WEWallpaper, displayID targetDisplayID: CGDirectDisplayID) {
         guard w.isValid, w.kind != .unsupported else { return }
-        guard let screenIndex = renderer.screenIndex(for: targetDisplayID) else { return }
-        if renderer.currentWallpaper(onDisplay: targetDisplayID)?.id == w.id {
-            let appliedRuntime = targetDisplayID == CGMainDisplayID() ? runtime : loadRuntime(for: w)
-            screenAssignments[targetDisplayID] = ScreenAssignment(
-                wallpaper: w,
-                runtime: appliedRuntime
-            )
-            currentByScreen[screenIndex] = w
-            applyPlaybackPolicy(currentPlaybackPolicy, runtime: appliedRuntime, on: targetDisplayID)
-            DesktopOverrideService.shared.scheduleCapture(forDisplay: targetDisplayID, wallpaper: w)
-            return
-        }
+        guard renderer.screenIndex(for: targetDisplayID) != nil else { return }
         if targetDisplayID == CGMainDisplayID() {
             currentWallpaper = w
         } else {
@@ -511,13 +532,9 @@ class WallpaperViewModel: ObservableObject {
             opts.muted = saved.muted || globalMuted
             opts.speed = saved.speed
             opts.fillMode = saved.fillMode
-            screenAssignments[targetDisplayID] = ScreenAssignment(wallpaper: w, runtime: saved)
-            if currentPlaybackPolicy != .stop {
-                renderer.render(w, onDisplay: targetDisplayID, options: opts)
-            }
+            apply(ScreenAssignment(wallpaper: w, runtime: saved),
+                  to: targetDisplayID, options: opts)
             applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: targetDisplayID)
-            currentByScreen[screenIndex] = w
-            DesktopOverrideService.shared.scheduleCapture(forDisplay: targetDisplayID, wallpaper: w)
         }
     }
 

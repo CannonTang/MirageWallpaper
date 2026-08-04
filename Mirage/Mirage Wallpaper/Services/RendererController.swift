@@ -47,8 +47,10 @@ final class RendererProcess {
     /// renderer that came up mid-throttle does not silently run at full rate.
     var desiredPowerState = MiragePowerState.run
     var desiredPowerFps: Int?
+    var desiredSpeed: Float
     let spectrumEnabled: Bool
     var spectrumDemanded: Bool
+    var transitionCompletions: [(Bool) -> Void] = []
 
     private let stateLock = NSLock()
     private let spectrumStateLock = NSLock()
@@ -91,7 +93,8 @@ final class RendererProcess {
 
     init(process: Process, stdinPipe: Pipe, stdoutPipe: Pipe?, stderrPipe: Pipe,
          wallpaper: WEWallpaper, displayID: CGDirectDisplayID, generation: UInt64,
-         desiredVolume: Float, desiredMuted: Bool, spectrumEnabled: Bool) {
+         desiredVolume: Float, desiredMuted: Bool, desiredSpeed: Float,
+         spectrumEnabled: Bool) {
         self.process = process
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
@@ -101,6 +104,7 @@ final class RendererProcess {
         self.generation = generation
         self.desiredVolume = desiredVolume
         self.desiredMuted = desiredMuted
+        self.desiredSpeed = desiredSpeed
         self.spectrumEnabled = spectrumEnabled
         self.spectrumDemanded = false
         setUpWriter()
@@ -363,6 +367,9 @@ final class RendererProcess {
         pendingSpectrum = nil
         spectrumStateLock.unlock()
 
+        if wallpaper.kind == .scene {
+            enqueue(["cmd": "deactivate"], allowAfterStop: true)
+        }
         // The graceful quit must be written after marking the handle stopped,
         // so no later live-control command can race it. Use the private bypass
         // instead of send(), whose normal guard intentionally rejects it.
@@ -664,7 +671,8 @@ final class RendererController {
 
     @discardableResult
     func render(_ wallpaper: WEWallpaper, onDisplay displayID: CGDirectDisplayID,
-                options: RenderOptions) -> Bool {
+                options: RenderOptions, reuseActive: Bool = false,
+                completion: ((Bool) -> Void)? = nil) -> Bool {
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return false }
         // Web wallpapers execute untrusted third-party HTML/JS. Never spawn one
         // the user has not explicitly confirmed, whatever code path led here.
@@ -676,6 +684,37 @@ final class RendererController {
             NSLog("[Mirage] 找不到 \(wallpaper.kind) 渲染器二进制")
             return false
         }
+
+        var reusedCandidate = false
+        var reusedActive = false
+        var canceledCandidate: RendererProcess?
+        var canceledCompletions: [(Bool) -> Void] = []
+        queue.sync {
+            if let candidate = candidates[displayID], candidate.process.isRunning,
+               candidate.wallpaper.id == wallpaper.id {
+                if let completion { candidate.transitionCompletions.append(completion) }
+                reusedCandidate = true
+                return
+            }
+            if reuseActive, let active = running[displayID], active.process.isRunning,
+               active.wallpaper.id == wallpaper.id {
+                if let candidate = candidates.removeValue(forKey: displayID) {
+                    generations[displayID] = (generations[displayID] ?? 0) &+ 1
+                    canceledCandidate = candidate
+                    canceledCompletions = takeTransitionCompletionsLocked(from: candidate)
+                }
+                reusedActive = true
+            }
+        }
+        if reusedCandidate { return true }
+        if reusedActive {
+            canceledCandidate?.stop()
+            dispatchTransitionCompletions(canceledCompletions, success: false)
+            if let completion {
+                DispatchQueue.main.async { completion(true) }
+            }
+            return true
+        }
         NSLog("[Mirage] 启动渲染器: \(binary.path) 显示器=\(displayID)")
 
         // Scene wallpapers have a real first-frame protocol. Keep the active
@@ -683,17 +722,23 @@ final class RendererController {
         // renderer kinds retain their existing immediate-switch behaviour.
         let deferredScene = wallpaper.kind == .scene
         var supersededCandidate: RendererProcess?
+        var supersededCompletions: [(Bool) -> Void] = []
         var replacedActive: RendererProcess?
         let generation: UInt64 = queue.sync {
             let next = (generations[displayID] ?? 0) &+ 1
             generations[displayID] = next
             supersededCandidate = candidates.removeValue(forKey: displayID)
+            if let supersededCandidate {
+                supersededCompletions = takeTransitionCompletionsLocked(
+                    from: supersededCandidate)
+            }
             if !deferredScene {
                 replacedActive = running.removeValue(forKey: displayID)
             }
             return next
         }
         supersededCandidate?.stop()
+        dispatchTransitionCompletions(supersededCompletions, success: false)
         replacedActive?.stop()
 
         let proc = Process()
@@ -781,8 +826,10 @@ final class RendererController {
             generation: generation,
             desiredVolume: options.volume,
             desiredMuted: options.muted,
+            desiredSpeed: options.speed,
             spectrumEnabled: options.enableSpectrum &&
                 (wallpaper.kind == .scene || wallpaper.kind == .web))
+        if let completion { handle.transitionCompletions.append(completion) }
 
         if wallpaper.kind == .scene,
            let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
@@ -829,9 +876,13 @@ final class RendererController {
                     self.candidates[displayID] = nil
                 }
                 if wasActive || wasCandidate {
+                    let transitionCompletions = wasCandidate
+                        ? self.takeTransitionCompletionsLocked(from: handle) : []
                     let abnormal = status != 0 && !handle.isTerminated
                     SystemAudioSpectrumService.shared.setEnabled(
                         self.hasSpectrumConsumersLocked())
+                    self.dispatchTransitionCompletions(
+                        transitionCompletions, success: false)
                     DispatchQueue.main.async {
                         // Only this handle's own exit clears the row. A renderer
                         // replaced by a newer one is no longer `wasActive`, so a
@@ -850,6 +901,10 @@ final class RendererController {
         } catch {
             NSLog("[Mirage] 启动渲染器失败: \(error)")
             handle.cleanupAfterExit()
+            let transitionCompletions = queue.sync {
+                takeTransitionCompletionsLocked(from: handle)
+            }
+            dispatchTransitionCompletions(transitionCompletions, success: false)
             return false
         }
 
@@ -867,10 +922,21 @@ final class RendererController {
             accepted = true
         }
         guard accepted else {
+            let transitionCompletions = queue.sync {
+                takeTransitionCompletionsLocked(from: handle)
+            }
             handle.stop()
+            dispatchTransitionCompletions(transitionCompletions, success: false)
             return false
         }
         refreshAudioSpectrumService()
+
+        if !deferredScene {
+            let transitionCompletions = queue.sync {
+                takeTransitionCompletionsLocked(from: handle)
+            }
+            dispatchTransitionCompletions(transitionCompletions, success: true)
+        }
 
         handle.startReadingOutput { [weak self, weak handle] event in
             guard let self, let handle else { return }
@@ -883,9 +949,13 @@ final class RendererController {
                 guard let self, let handle,
                       self.candidates[displayID] === handle else { return }
                 self.candidates[displayID] = nil
+                let transitionCompletions = self.takeTransitionCompletionsLocked(
+                    from: handle)
                 handle.stop()
                 SystemAudioSpectrumService.shared.setEnabled(
                     self.hasSpectrumConsumersLocked())
+                self.dispatchTransitionCompletions(
+                    transitionCompletions, success: false)
                 NSLog("[Mirage] 场景首帧超时，保留旧壁纸 (显示器=\(displayID), generation=\(generation))")
                 DispatchQueue.main.async {
                     if let screen = self.screenIndex(for: displayID) {
@@ -901,8 +971,11 @@ final class RendererController {
         guard let event = message["event"] as? String else { return }
         let elapsed = (message["elapsed_ms"] as? NSNumber)?.intValue
         queue.async { [weak self, weak handle] in
-            guard let self, let handle,
-                  self.generations[handle.displayID] == handle.generation else { return }
+            guard let self, let handle else { return }
+            let isActive = self.running[handle.displayID] === handle
+            let isCurrentCandidate = self.candidates[handle.displayID] === handle &&
+                self.generations[handle.displayID] == handle.generation
+            guard isActive || isCurrentCandidate else { return }
 
             if event == "audio-demand" {
                 guard self.running[handle.displayID] === handle ||
@@ -1000,10 +1073,15 @@ final class RendererController {
                 previous?.stop()
                 handle.send(["cmd": "volume", "value": handle.desiredVolume])
                 handle.send(["cmd": "muted", "value": handle.desiredMuted])
+                handle.send(["cmd": "speed", "value": handle.desiredSpeed])
                 handle.send(Self.powerCommand(state: handle.desiredPowerState,
                                               fps: handle.desiredPowerFps))
+                let transitionCompletions = self.takeTransitionCompletionsLocked(
+                    from: handle)
                 SystemAudioSpectrumService.shared.setEnabled(
                     self.hasSpectrumConsumersLocked())
+                self.dispatchTransitionCompletions(
+                    transitionCompletions, success: true)
                 NSLog("[Mirage] 场景切换完成 (显示器=\(handle.displayID), generation=\(handle.generation))")
 
             default:
@@ -1018,33 +1096,62 @@ final class RendererController {
     }
 
     func stop(displayID: CGDirectDisplayID) {
+        var transitionCompletions: [(Bool) -> Void] = []
         let handles: [RendererProcess] = queue.sync {
             generations[displayID] = (generations[displayID] ?? 0) &+ 1
-            return [running.removeValue(forKey: displayID),
-                    candidates.removeValue(forKey: displayID)].compactMap { $0 }
+            let candidate = candidates.removeValue(forKey: displayID)
+            if let candidate {
+                transitionCompletions = takeTransitionCompletionsLocked(from: candidate)
+            }
+            return [running.removeValue(forKey: displayID), candidate].compactMap { $0 }
         }
         handles.forEach { $0.stop() }
+        dispatchTransitionCompletions(transitionCompletions, success: false)
         refreshAudioSpectrumService()
     }
 
     func stopDisplays(except displayIDs: Set<CGDirectDisplayID>) {
-        let removed = queue.sync {
-            Set(running.keys).union(candidates.keys).subtracting(displayIDs)
+        var transitionCompletions: [(Bool) -> Void] = []
+        let handles: [RendererProcess] = queue.sync {
+            var result: [RendererProcess] = []
+            for displayID in Array(generations.keys) {
+                generations[displayID] = (generations[displayID] ?? 0) &+ 1
+            }
+            for (displayID, candidate) in candidates {
+                transitionCompletions.append(contentsOf:
+                    takeTransitionCompletionsLocked(from: candidate))
+                result.append(candidate)
+            }
+            candidates.removeAll()
+            for displayID in Set(running.keys).subtracting(displayIDs) {
+                if let active = running.removeValue(forKey: displayID) {
+                    result.append(active)
+                }
+            }
+            return result
         }
-        removed.forEach { stop(displayID: $0) }
+        handles.forEach { $0.stop() }
+        dispatchTransitionCompletions(transitionCompletions, success: false)
+        refreshAudioSpectrumService()
     }
 
     func stopAll() {
+        var transitionCompletions: [(Bool) -> Void] = []
         let handles: [RendererProcess] = queue.sync {
             let result = Array(running.values) + Array(candidates.values)
             for screen in Set(running.keys).union(candidates.keys) {
                 generations[screen] = (generations[screen] ?? 0) &+ 1
+            }
+            for candidate in candidates.values {
+                transitionCompletions.append(contentsOf:
+                    takeTransitionCompletionsLocked(from: candidate))
             }
             running.removeAll()
             candidates.removeAll()
             return result
         }
         handles.forEach { $0.stop() }
+        dispatchTransitionCompletions(transitionCompletions, success: false)
         SystemAudioSpectrumService.shared.setEnabled(false)
     }
 
@@ -1057,15 +1164,21 @@ final class RendererController {
     /// SIGKILL — waiting on every renderer in parallel so the worst case stays
     /// around two seconds regardless of how many are running.
     func stopAllAndWait() {
+        var transitionCompletions: [(Bool) -> Void] = []
         let handles: [RendererProcess] = queue.sync {
             let result = Array(running.values) + Array(candidates.values)
             for screen in Set(running.keys).union(candidates.keys) {
                 generations[screen] = (generations[screen] ?? 0) &+ 1
             }
+            for candidate in candidates.values {
+                transitionCompletions.append(contentsOf:
+                    takeTransitionCompletionsLocked(from: candidate))
+            }
             running.removeAll()
             candidates.removeAll()
             return result
         }
+        dispatchTransitionCompletions(transitionCompletions, success: false)
         SystemAudioSpectrumService.shared.setEnabled(false)
         // The handles are dropped from `running`/`candidates` above, so nothing
         // else will ever reap them. `defer` covers every early return below;
@@ -1163,6 +1276,23 @@ final class RendererController {
 
     private func hasSpectrumConsumersLocked() -> Bool {
         running.values.contains { self.needsSpectrum($0) }
+    }
+
+    private func takeTransitionCompletionsLocked(
+        from handle: RendererProcess
+    ) -> [(Bool) -> Void] {
+        let completions = handle.transitionCompletions
+        handle.transitionCompletions.removeAll()
+        return completions
+    }
+
+    private func dispatchTransitionCompletions(
+        _ completions: [(Bool) -> Void], success: Bool
+    ) {
+        guard !completions.isEmpty else { return }
+        DispatchQueue.main.async {
+            completions.forEach { $0(success) }
+        }
     }
 
     private func needsSpectrum(_ process: RendererProcess) -> Bool {
@@ -1321,7 +1451,12 @@ final class RendererController {
     }
 
     func setSpeed(_ speed: Float, onDisplay displayID: CGDirectDisplayID?) {
-        forEach(displayID) { $0.send(["cmd": "speed", "value": speed]) }
+        let targets: [RendererProcess] = queue.sync {
+            let list = targetsLocked(displayID, includeCandidates: true)
+            for handle in list { handle.desiredSpeed = speed }
+            return list
+        }
+        for handle in targets { handle.send(["cmd": "speed", "value": speed]) }
     }
 
     func setFillMode(_ mode: FillMode, on screenIndex: Int? = nil) {

@@ -36,6 +36,7 @@ int   SceneRendererMacDesktopRun(void* handle);
 void  SceneRendererMacDesktopStop(void* handle);
 void  SceneRendererMacDesktopWake(void* handle);
 void  SceneRendererMacDesktopActivate(void* handle);
+void  SceneRendererMacDesktopDeactivate(void* handle);
 // Borrowed CAMetalLayer pointer used to create VK_EXT_metal_surface.
 void* SceneRendererMacDesktopMetalLayer(void* handle);
 std::uint32_t SceneRendererMacDesktopPixelWidth(void* handle);

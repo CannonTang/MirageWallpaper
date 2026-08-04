@@ -54,11 +54,13 @@ public:
     // which is fine: commands are rare and ordering is preserved.
     SceneControlChannel(sr::SceneWallpaper& wallpaper, std::function<void()> on_quit,
                         std::function<void()> on_activate = {},
+                        std::function<void()> on_deactivate = {},
                         std::function<void(const std::string&, const std::string&)>
                             on_snapshot = {})
         : m_wallpaper(wallpaper),
           m_on_quit(std::move(on_quit)),
           m_on_activate(std::move(on_activate)),
+          m_on_deactivate(std::move(on_deactivate)),
           m_on_snapshot(std::move(on_snapshot)) {}
 
     ~SceneControlChannel() { stop(); }
@@ -88,6 +90,7 @@ private:
     sr::SceneWallpaper&   m_wallpaper;
     std::function<void()> m_on_quit;
     std::function<void()> m_on_activate;
+    std::function<void()> m_on_deactivate;
     std::function<void(const std::string&, const std::string&)> m_on_snapshot;
     std::atomic<bool>     m_running { false };
     std::thread           m_thread;

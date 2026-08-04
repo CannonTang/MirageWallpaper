@@ -167,6 +167,10 @@ void SceneControlChannel::dispatchLine(const char* line) {
         m_on_snapshot(path_text, token_text);
     } else if (cmd == "activate") {
         if (m_on_activate) m_on_activate();
+    } else if (cmd == "deactivate") {
+        m_wallpaper.setMuted(true);
+        m_wallpaper.pause();
+        if (m_on_deactivate) m_on_deactivate();
     } else if (cmd == "quit") {
         m_running.store(false);
         if (m_on_quit) m_on_quit();

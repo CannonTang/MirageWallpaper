@@ -602,6 +602,7 @@ int main(int argc, char** argv) {
             wallpaper,
             [desktop]() { SceneRendererMacDesktopStop(desktop); },
             [desktop]() { SceneRendererMacDesktopActivate(desktop); },
+            [desktop]() { SceneRendererMacDesktopDeactivate(desktop); },
             [](const std::string& path, const std::string& token) {
                 const bool ok = ! path.empty() && mirage::WriteSceneSnapshot(path);
                 EmitSnapshotDone(token, ok);
