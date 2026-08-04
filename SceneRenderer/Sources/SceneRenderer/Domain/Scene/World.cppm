@@ -2766,6 +2766,8 @@ public:
         m_render_graph_dirty = false;
         return dirty;
     }
+    void MarkDynamicTopologyDirty() { m_dynamic_topology_dirty = true; }
+    bool CommitDynamicTopology();
     // Script frequently assigns a layer's visibility more than once in a
     // tick (for example, hide every day/night layer and then show one set).
     // Apply only the final state to render-graph membership after all scripts
@@ -2908,6 +2910,7 @@ private:
     uint32_t                                 m_resource_generation { 0 };
     SceneResourceIndex                       m_resource_index;
     bool                                     m_render_graph_dirty { false };
+    bool                                     m_dynamic_topology_dirty { false };
     bool                                     m_planar_reflection_enabled { false };
     Map<i32, SceneNode*>                     m_pending_node_visibility_changes;
     Map<i32, std::string>                    m_render_group_cameras;

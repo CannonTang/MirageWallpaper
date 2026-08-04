@@ -168,6 +168,113 @@ void TestVec4Compatibility() {
           "Vec4 fields preserve four-component initial and return values");
 }
 
+void TestInvalidVectorReturns() {
+    struct Case {
+        sr::script::FieldKind kind;
+        std::string_view      source;
+        std::string_view      sha;
+        std::string_view      initial;
+        std::string_view      name;
+    };
+
+    const std::array cases {
+        Case { sr::script::FieldKind::Vec2,
+               R"JS(
+                   let frame = 0;
+                   export function update() {
+                       ++frame;
+                       if (frame === 1) return new Vec2(1, 2);
+                       if (frame === 2) return [3];
+                       return { x: 3, y: Infinity };
+                   }
+               )JS",
+               "test/invalid_vec2_return",
+               "\"0 0\"",
+               "Vec2" },
+        Case { sr::script::FieldKind::Vec3,
+               R"JS(
+                   let frame = 0;
+                   export function update() {
+                       ++frame;
+                       if (frame === 1) return new Vec3(1, 2, 3);
+                       if (frame === 2) return { x: 4, y: 5 };
+                       return [4, 5, NaN];
+                   }
+               )JS",
+               "test/invalid_vec3_return",
+               "\"0 0 0\"",
+               "Vec3" },
+        Case { sr::script::FieldKind::Vec4,
+               R"JS(
+                   let frame = 0;
+                   export function update() {
+                       ++frame;
+                       if (frame === 1) return new Vec4(1, 2, 3, 4);
+                       if (frame === 2) return [5, 6, 7];
+                       return { x: 5, y: 6, z: 7, w: -Infinity };
+                   }
+               )JS",
+               "test/invalid_vec4_return",
+               "\"0 0 0 0\"",
+               "Vec4" },
+    };
+
+    for (const auto& test : cases) {
+        sr::script::JsRuntime runtime;
+        auto* script = runtime.MakeFieldScript(test.source,
+                                               test.sha,
+                                               test.kind,
+                                               Parse("{}"),
+                                               Parse(test.initial));
+        Check(script != nullptr, std::string(test.name) + " validation script compiles");
+        if (! script) continue;
+
+        runtime.TickAll();
+        Check(! std::holds_alternative<std::monostate>(script->last_value()),
+              std::string(test.name) + " accepts complete finite components");
+        runtime.TickAll();
+        Check(std::holds_alternative<std::monostate>(script->last_value()),
+              std::string(test.name) + " rejects a missing component");
+        runtime.TickAll();
+        Check(std::holds_alternative<std::monostate>(script->last_value()),
+              std::string(test.name) + " rejects a non-finite component");
+    }
+}
+
+void TestInvalidVectorPreservesTransform() {
+    auto node = rstd::sync::Arc<sr::SceneNode>::make();
+    node->SetTranslate(Eigen::Vector3f { 10.0f, 20.0f, 30.0f });
+
+    sr::script::ScriptScene scripts;
+    auto* script = scripts.runtime().MakeFieldScript(
+        R"JS(
+            let frame = 0;
+            export function update() {
+                ++frame;
+                if (frame === 1) return new Vec3(4, 5, 6);
+                return { x: 100, y: 200 };
+            }
+        )JS",
+        "test/invalid_vec3_preserves_transform",
+        sr::script::FieldKind::Vec3,
+        Parse("{}"),
+        Parse("\"10 20 30\""));
+    Check(script != nullptr, "transform preservation script compiles");
+    if (! script) return;
+
+    scripts.AddActuator({ script,
+                          sr::script::MakeNodeTransformApply(
+                              node.clone(), sr::script::NodeTransformTarget::Translate) });
+    scripts.Tick({});
+    Check(node->Translate().isApprox(Eigen::Vector3f { 4.0f, 5.0f, 6.0f }),
+          "complete Vec3 updates the transform");
+    scripts.Tick({});
+    Check(std::holds_alternative<std::monostate>(script->last_value()),
+          "incomplete Vec3 becomes monostate");
+    Check(node->Translate().isApprox(Eigen::Vector3f { 4.0f, 5.0f, 6.0f }),
+          "incomplete Vec3 preserves the last valid transform");
+}
+
 void TestColorPropertyCoercion() {
     sr::script::JsRuntime runtime;
     auto* script = runtime.MakeFieldScript(
@@ -212,14 +319,20 @@ void TestDynamicLayerCompatibility() {
             let created = null;
             export function init() {
                 initial = thisScene.getInitialLayerConfig(thisLayer);
-                created = thisScene.createLayer({
-                    origin: new Vec3(12, 34, 0),
-                    size: new Vec2(64, 32),
-                    perspective: true
-                });
             }
             export function update() {
-                return new Vec3(initial.alpha, created.origin.x, created.perspective ? 1 : 0);
+                if (created === null) {
+                    created = thisScene.createLayer({
+                        origin: new Vec3(12, 34, 0),
+                        size: new Vec2(64, 32),
+                        perspective: true,
+                        visible: false
+                    });
+                }
+                let state = created.perspective ? 1 : 0;
+                if (created.visible) state += 2;
+                if (created.isPlaying()) state += 4;
+                return new Vec3(initial.alpha, created.origin.x, state);
             }
         )JS",
         "test/dynamic_layer_compatibility",
@@ -239,12 +352,16 @@ void TestDynamicLayerCompatibility() {
         sr::GetJsonValue(config, "origin", origin, false);
         auto node = rstd::sync::Arc<sr::SceneNode>::make(
             Eigen::Vector3f(origin.data()), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero());
+        bool visible = true;
+        sr::GetJsonValue(config, "visible", visible, false);
+        node->SetVisible(visible);
+        node->Stop();
         root_ptr->AppendChild(node.clone());
         return std::optional<rstd::sync::Arc<sr::SceneNode>>(std::move(node));
     });
     runtime.SetSceneRoot(root.as_ptr());
-    runtime.ClearLayerConfigFactory();
     runtime.TickAll();
+    runtime.ClearLayerConfigFactory();
 
     const auto* value = std::get_if<sr::script::Vec3Value>(&script->last_value());
     Check(value != nullptr, "dynamic layer script returns Vec3");
@@ -386,6 +503,8 @@ int main() {
     TestColorScaleHelpers();
     TestMathConversionConstants();
     TestVec4Compatibility();
+    TestInvalidVectorReturns();
+    TestInvalidVectorPreservesTransform();
     TestColorPropertyCoercion();
     TestFullwidthSemicolonNormalization();
     TestDynamicLayerCompatibility();

@@ -867,7 +867,8 @@ void LoadRootCameraPaths(ParseContext& context, const wpscene::SceneMetadata& sc
 void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& node_sp,
                       const wpscene::FieldBindings&                   fb,
                       std::function<void(const script::ScriptValue&)> origin_apply = {},
-                      std::function<void(const script::ScriptValue&)> scale_apply  = {}) {
+                      std::function<void(const script::ScriptValue&)> scale_apply  = {},
+                      std::function<void(const script::ScriptValue&)> alpha_apply  = {}) {
     SceneNode* node = node_sp.as_ptr();
     if (fb.scripts.empty()) return;
     auto& ss = EnsureScriptScene(context);
@@ -920,7 +921,8 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             ss.AddActuator(
                 { fs, script::MakeNodeVisibleApply(node_sp.clone(), context.scene.get()) });
         else if (is_alpha)
-            ss.AddActuator({ fs, script::MakeNodeAlphaApply(node_sp.clone()) });
+            ss.AddActuator(
+                { fs, alpha_apply ? alpha_apply : script::MakeNodeAlphaApply(node_sp.clone()) });
         else if (is_volume)
             ss.AddActuator({ fs, script::MakeNodeVolumeApply(node_sp.clone()) });
         else if (is_color)
@@ -5149,6 +5151,12 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         compose_ptr->SetScale(*next);
         apply_text_anchor();
     };
+    auto apply_text_alpha = [layouter, rebuild_compose](const script::ScriptValue& value) {
+        auto next = ScriptValueAsFloat(value);
+        if (! next) return;
+        layouter->SetAlpha(*next);
+        rebuild_compose(layouter->Metrics());
+    };
 
     auto set_halign = [layouter, rebuild_compose, anchor_state](std::string_view align) {
         anchor_state->horizontal = std::string(align);
@@ -5216,7 +5224,12 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // composite quad in world space, not the layer-space glyph node.
     AssignNodeFieldAnimations(*compose_node.as_ptr(), obj.field_bindings);
     WireFieldScripts(
-        context, compose_node, obj.field_bindings, apply_text_origin, apply_text_scale);
+        context,
+        compose_node,
+        obj.field_bindings,
+        apply_text_origin,
+        apply_text_scale,
+        apply_text_alpha);
     if (! obj.visible) compose_node->SetVisible(false);
     if (! obj.visible_user.empty())
         compose_node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(obj.visible_user));
@@ -5664,14 +5677,15 @@ std::optional<rstd::sync::Arc<SceneNode>> InstantiateLayerConfiguration(
         if (! text.FromJson(config, *context.vfs, context.pkg_version)) return std::nullopt;
         text.id      = id;
         text.parent  = 0;
-        text.visible = true;
         ParseTextObj(context, text);
     } else if (config.get("image").is_some()) {
         wpscene::ImageObject image;
         if (! image.FromJson(config, *context.vfs, context.pkg_version)) return std::nullopt;
         image.id      = id;
         image.parent  = 0;
-        image.visible = true;
+        if (config.get("size").is_none()) {
+            if (auto size = ResolveImageAssetSize(context, image.image)) image.size = *size;
+        }
         ParseImageObj(context, image);
     } else {
         std::vector<float> requested_size;
@@ -5688,7 +5702,8 @@ std::optional<rstd::sync::Arc<SceneNode>> InstantiateLayerConfiguration(
         image.size    = size;
         image.solid   = true;
         image.parent  = 0;
-        image.visible = true;
+        wpscene::VisibleUserBinding visible_user;
+        wpscene::ReadVisibleProperty(config, image.visible, visible_user);
         sr::GetJsonValue(config, "origin", image.origin, false);
         sr::GetJsonValue(config, "angles", image.angles, false);
         sr::GetJsonValue(config, "scale", image.scale, false);
@@ -5707,8 +5722,264 @@ std::optional<rstd::sync::Arc<SceneNode>> InstantiateLayerConfiguration(
     if (parsed == context.node_id_map.end() || parsed->second.node.is_none()) return std::nullopt;
     auto node = (*parsed->second.node).clone();
     context.node_id_map.erase(parsed);
+    bool                        visible = true;
+    wpscene::VisibleUserBinding visible_user;
+    wpscene::ReadVisibleProperty(config, visible, visible_user);
+    node->SetVisible(visible);
     return AttachCreatedLayer(context, owner, std::move(node));
 }
+
+struct DynamicImageRuntimeState {
+    std::array<float, 3> origin { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> scale { 1.0f, 1.0f, 1.0f };
+    std::array<float, 3> angles { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> color { 1.0f, 1.0f, 1.0f };
+    float                alpha { 1.0f };
+    float                brightness { 1.0f };
+    bool                 visible { true };
+    bool                 perspective { false };
+    bool                 reflected { true };
+    std::string          alignment { "center" };
+};
+
+DynamicImageRuntimeState ReadDynamicImageRuntimeState(const Json& config) {
+    DynamicImageRuntimeState state;
+    sr::GetJsonValue(config, "origin", state.origin, false);
+    sr::GetJsonValue(config, "scale", state.scale, false);
+    sr::GetJsonValue(config, "angles", state.angles, false);
+    sr::GetJsonValue(config, "color", state.color, false);
+    sr::GetJsonValue(config, "alpha", state.alpha, false);
+    sr::GetJsonValue(config, "brightness", state.brightness, false);
+    sr::GetJsonValue(config, "perspective", state.perspective, false);
+    sr::GetJsonValue(config, "reflected", state.reflected, false);
+    sr::GetJsonValue(config, "alignment", state.alignment, false);
+    wpscene::VisibleUserBinding visible_user;
+    wpscene::ReadVisibleProperty(config, state.visible, visible_user);
+    if (state.alpha > 1.0f) state.alpha /= 100.0f;
+    state.alpha = std::clamp(state.alpha, 0.0f, 1.0f);
+    return state;
+}
+
+std::optional<std::string> DynamicImageConfigurationKey(const Json& config) {
+    std::string image;
+    if (! sr::GetJsonValue(config, "image", image, false) || image.empty()) return std::nullopt;
+    if (auto effects = config.get("effects"); effects.is_some()) {
+        auto array = (*effects)->as_array();
+        if (array.is_none() || (*array)->len() != 0) return std::nullopt;
+    }
+    constexpr std::array<std::string_view, 22> structural_fields {
+        "image",          "size",             "name",             "parallaxDepth",
+        "colorBlendMode", "fullscreen",       "nopadding",        "instance",
+        "effects",        "locktransforms",   "muteineditor",     "nointerpolation",
+        "dependencies",   "perspective",      "copybackground",   "solid",
+        "opaquebackground", "clampuvs",       "castshadow",       "disablepropagation",
+        "depthtest",      "backgroundbrightness",
+    };
+    std::string key;
+    for (auto field : structural_fields) {
+        auto value = config.get(field);
+        if (value.is_none()) continue;
+        key.append(field);
+        key.push_back('=');
+        key.append(sr::Dump(**value));
+        key.push_back(';');
+    }
+    return key;
+}
+
+class DynamicLayerService {
+public:
+    DynamicLayerService(ParseContext&& context, script::JsRuntime& runtime, Scene* scene)
+        : m_context(std::move(context)), m_runtime(runtime), m_scene(scene) {
+        m_context.scene = std::shared_ptr<Scene>(scene, [](Scene*) {});
+        m_context.script_scene.reset();
+    }
+
+    std::optional<rstd::sync::Arc<SceneNode>> InstantiateAsset(SceneNode* owner,
+                                                                std::string_view asset) {
+        if (! CanAllocate(1, asset)) return std::nullopt;
+        WPShaderParser::InitGlslang();
+        auto node = InstantiateRegisteredAsset(m_context, owner, asset);
+        WPShaderParser::FinalGlslang();
+        if (! node) return std::nullopt;
+        ++m_allocated;
+        m_scene->MarkDynamicTopologyDirty();
+        return node;
+    }
+
+    std::optional<rstd::sync::Arc<SceneNode>> InstantiateConfiguration(SceneNode* owner,
+                                                                        Json config) {
+        auto key = DynamicImageConfigurationKey(config);
+        if (! key) {
+            if (! CanAllocate(1, "configuration")) return std::nullopt;
+            WPShaderParser::InitGlslang();
+            auto node = InstantiateLayerConfiguration(m_context, owner, config);
+            WPShaderParser::FinalGlslang();
+            if (! node) return std::nullopt;
+            ++m_allocated;
+            m_scene->MarkDynamicTopologyDirty();
+            return node;
+        }
+
+        const auto state = ReadDynamicImageRuntimeState(config);
+        auto node = AcquireImageNode(*key, owner, config);
+        if (! node) return std::nullopt;
+        ApplyState(node->as_ptr(), state);
+        return node;
+    }
+
+private:
+    static constexpr std::size_t kMaxDynamicLayers = 4096;
+
+    struct DynamicImagePool {
+        rstd::sync::Arc<SceneNode>              tmpl;
+        std::vector<rstd::sync::Arc<SceneNode>> available;
+        std::size_t                             capacity { 0 };
+
+        explicit DynamicImagePool(rstd::sync::Arc<SceneNode> node): tmpl(std::move(node)) {}
+    };
+
+    bool CanAllocate(std::size_t count, std::string_view request) {
+        if (count <= kMaxDynamicLayers - m_allocated) return true;
+        if (! m_limit_logged) {
+            rstd_error("dynamic layer limit {} reached while creating '{}'",
+                       kMaxDynamicLayers,
+                       request);
+            m_limit_logged = true;
+        }
+        return false;
+    }
+
+    std::optional<rstd::sync::Arc<SceneNode>> CompileImageTemplate(const Json& config) {
+        wpscene::ImageObject image;
+        if (! image.FromJson(config, *m_context.vfs, m_context.pkg_version)) return {};
+        if (! image.effects.empty() || ! image.puppet.empty()) return {};
+        if (config.get("size").is_none()) {
+            auto size = ResolveImageAssetSize(m_context, image.image);
+            if (! size) return {};
+            image.size = *size;
+        }
+        image.id     = m_context.next_dynamic_layer_id--;
+        image.parent = 0;
+        WPShaderParser::InitGlslang();
+        ParseImageObj(m_context, image);
+        WPShaderParser::FinalGlslang();
+
+        auto parsed = m_context.node_id_map.find(image.id);
+        if (parsed == m_context.node_id_map.end() || parsed->second.node.is_none()) return {};
+        auto node = (*parsed->second.node).clone();
+        m_context.node_id_map.erase(parsed);
+        InstallAlignmentBinding(node.as_ptr(), image.alignment);
+        return node;
+    }
+
+    std::optional<rstd::sync::Arc<SceneNode>> AcquireImageNode(const std::string& key,
+                                                               SceneNode* owner,
+                                                               const Json& config) {
+        SceneNode* parent = owner != nullptr && owner->Parent() != nullptr
+                                ? owner->Parent()
+                                : m_scene->sceneGraph.as_ptr();
+        std::string pool_key = key + "@" + getAddr(parent);
+        auto        pool_it  = m_image_pools.find(pool_key);
+        if (pool_it == m_image_pools.end()) {
+            auto tmpl = CompileImageTemplate(config);
+            if (! tmpl) return std::nullopt;
+            pool_it = m_image_pools
+                          .emplace(std::move(pool_key), DynamicImagePool(tmpl->clone()))
+                          .first;
+        }
+        auto& pool = pool_it->second;
+        if (pool.available.empty() && ! GrowImagePool(pool, owner)) return std::nullopt;
+        auto node = std::move(pool.available.back());
+        pool.available.pop_back();
+        return node;
+    }
+
+    bool GrowImagePool(DynamicImagePool& pool, SceneNode* owner) {
+        const std::size_t requested = pool.capacity == 0 ? 8 : pool.capacity;
+        const std::size_t available = kMaxDynamicLayers - m_allocated;
+        if (available == 0) {
+            CanAllocate(1, "image configuration pool");
+            return false;
+        }
+        const std::size_t count = std::min(requested, available);
+        if (! CanAllocate(count, "image configuration pool")) return false;
+
+        pool.available.reserve(pool.available.size() + count);
+        for (std::size_t i = 0; i < count; ++i) {
+            auto node = pool.capacity == 0 && i == 0 ? pool.tmpl.clone()
+                                                     : CloneImageNode(pool.tmpl.as_ptr());
+            node->SetVisible(false);
+            auto attached = AttachCreatedLayer(m_context, owner, node.clone());
+            if (! attached) return false;
+            pool.available.push_back(std::move(node));
+        }
+        pool.capacity += count;
+        m_allocated += count;
+        m_scene->MarkDynamicTopologyDirty();
+        return true;
+    }
+
+    rstd::sync::Arc<SceneNode> CloneImageNode(SceneNode* tmpl) {
+        auto clone = rstd::sync::Arc<SceneNode>::make(
+            tmpl->Translate(), tmpl->Scale(), tmpl->Rotation(), tmpl->Name());
+        clone->SetLocalFrame(tmpl->LocalFrame());
+        clone->SetSize(tmpl->Size());
+        clone->SetGeometryTransform(tmpl->GeometryTransform());
+        clone->SetPerspective(tmpl->Perspective());
+        clone->SetReflected(tmpl->Reflected());
+        clone->SetBaseColor(tmpl->BaseColor(), tmpl->BaseAlpha());
+        if (! tmpl->Camera().empty()) clone->SetCamera(tmpl->Camera());
+        if (auto control = tmpl->VideoControlHandle()) clone->SetVideoControl(std::move(control));
+        clone->AddMesh(tmpl->MeshShared());
+        clone->ID() = m_context.next_dynamic_layer_id--;
+        m_context.shader_updater->CopyNodeData(tmpl, clone.as_ptr());
+        CloneImageAlignmentBinding(m_context, tmpl, clone.as_ptr());
+        InstallAlignmentBinding(clone.as_ptr(), "center");
+        return clone;
+    }
+
+    void InstallAlignmentBinding(SceneNode* node, std::string_view alignment) {
+        for (auto it = m_context.image_alignment_bindings.rbegin();
+             it != m_context.image_alignment_bindings.rend(); ++it) {
+            if (it->node != node) continue;
+            InstallImageAlignmentBinding(m_runtime, node, alignment, it->setter);
+            return;
+        }
+    }
+
+    void ApplyState(SceneNode* node, const DynamicImageRuntimeState& state) {
+        node->SetTranslate(Vector3f(state.origin.data()));
+        node->SetScale(Vector3f(state.scale.data()));
+        node->SetRotation(Vector3f(state.angles.data()));
+        node->SetBaseColor(Vector3f(state.color.data()), state.alpha);
+        node->SetColor(Vector3f(state.color.data()));
+        node->SetUserAlpha(state.alpha);
+        node->SetBrightness(state.brightness);
+        node->SetPerspective(state.perspective);
+        node->SetReflected(state.reflected);
+        node->SetVisible(state.visible);
+        for (auto it = m_context.image_alignment_bindings.rbegin();
+             it != m_context.image_alignment_bindings.rend(); ++it) {
+            if (it->node != node) continue;
+            if (it->setter) it->setter(node, state.alignment);
+            m_runtime.RegisterImageAlignmentSetter(
+                node,
+                state.alignment,
+                [node, setter = it->setter](std::string_view value) {
+                    if (setter) setter(node, value);
+                });
+            break;
+        }
+    }
+
+    ParseContext m_context;
+    script::JsRuntime& m_runtime;
+    Scene* m_scene { nullptr };
+    std::unordered_map<std::string, DynamicImagePool> m_image_pools;
+    std::size_t m_allocated { 0 };
+    bool m_limit_logged { false };
+};
 
 void ProcessObjects(ParseContext& context, std::span<SceneObjectVar> scene_objs,
                     wavsen::audio::SoundManager* sm, ProcessOpts opts) {
@@ -5757,6 +6028,7 @@ void ProcessObjects(ParseContext& context, std::span<SceneObjectVar> scene_objs,
 }
 
 std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
+    auto scene = context.scene;
     // Single attach phase. Each registered node was created in JSON
     // declaration order (node_id_order) but not yet inserted into the scene
     // graph. Walk that order and AppendChild to parent (or root). Result:
@@ -5839,7 +6111,8 @@ std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
         // Hand the scene root to the JS runtime so `thisScene.getLayer(name)`
         // can resolve against the live graph. The renderer also ticks the
         // ScriptScene once per frame via sr::script::TickSceneScripts.
-        auto& runtime = context.script_scene->runtime();
+        auto scripts = std::move(context.script_scene);
+        auto& runtime = scripts->runtime();
         for (auto id : context.node_id_order) {
             auto node   = context.node_id_map.find(id);
             auto config = context.initial_layer_configs.find(id);
@@ -5848,27 +6121,26 @@ std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
                 continue;
             runtime.RegisterInitialLayerConfig((*node->second.node).as_ptr(), config->second.clone());
         }
-        runtime.SetScene(context.scene.get());
+        runtime.SetScene(scene.get());
+        auto dynamic_layers =
+            std::make_shared<DynamicLayerService>(std::move(context), runtime, scene.get());
         runtime.SetLayerFactory(
-            [&context](SceneNode* owner, std::string_view asset) {
-                auto node = InstantiateRegisteredAsset(context, owner, asset);
+            [dynamic_layers](SceneNode* owner, std::string_view asset) {
+                auto node = dynamic_layers->InstantiateAsset(owner, asset);
                 if (! node)
                     rstd_error("registered layer asset '{}' is unsupported or unavailable", asset);
                 return node;
             });
-        runtime.SetLayerConfigFactory([&context](SceneNode* owner, Json config) {
-            auto node = InstantiateLayerConfiguration(context, owner, config);
+        runtime.SetLayerConfigFactory([dynamic_layers](SceneNode* owner, Json config) {
+            auto node = dynamic_layers->InstantiateConfiguration(owner, std::move(config));
             if (! node) rstd_error("layer configuration is unsupported or unavailable");
             return node;
         });
-        WPShaderParser::InitGlslang();
-        runtime.SetSceneRoot(context.scene->sceneGraph.as_ptr());
-        WPShaderParser::FinalGlslang();
-        runtime.ClearLayerFactory();
-        runtime.ClearLayerConfigFactory();
-        sr::script::InstallScriptScene(*context.scene, std::move(context.script_scene));
+        runtime.SetSceneRoot(scene->sceneGraph.as_ptr());
+        scene->CommitDynamicTopology();
+        sr::script::InstallScriptScene(*scene, std::move(scripts));
     }
-    return context.scene;
+    return scene;
 }
 
 void BuildBloomPostProcess(ParseContext& context, fs::VFS& vfs, const wpscene::SceneGeneral& g) {

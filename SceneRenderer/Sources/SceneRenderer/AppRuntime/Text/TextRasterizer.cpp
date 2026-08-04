@@ -66,9 +66,10 @@ bool IsLayoutWhitespace(std::uint32_t cp) {
 }
 
 std::uint32_t AtlasDimForPixelSize(std::uint32_t pixel_size) {
-    if (pixel_size > 512) return 4096;
-    if (pixel_size > 256) return 2048;
-    return kMinAtlasDim;
+    std::uint32_t dim      = kMinAtlasDim;
+    std::uint32_t required = pixel_size * 12;
+    while (dim < required && dim < 4096) dim *= 2;
+    return dim;
 }
 
 class FtLibrary {
@@ -399,12 +400,10 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
         }
 
         if (! impl.ReserveSlot(gi.pixel_w, gi.pixel_h, gi.atlas_x, gi.atlas_y)) {
-            // Atlas full → tofu mapped to the white cell. Cache the fallback so
-            // we don't FT_Load the same codepoint every frame.
             gi.atlas_x = 0;
             gi.atlas_y = 0;
-            gi.pixel_w = kWhiteCellSize;
-            gi.pixel_h = kWhiteCellSize;
+            gi.pixel_w = 0;
+            gi.pixel_h = 0;
             impl.glyphs.emplace(codepoint, gi);
             continue;
         }
@@ -1128,9 +1127,9 @@ void TextLayouter::SetText(std::string_view utf8) {
     }
 
     std::array<float, 4> text_rgba {
-        im.style.color[0],
-        im.style.color[1],
-        im.style.color[2],
+        im.style.color[0] * im.style.brightness,
+        im.style.color[1] * im.style.brightness,
+        im.style.color[2] * im.style.brightness,
         im.style.alpha,
     };
 

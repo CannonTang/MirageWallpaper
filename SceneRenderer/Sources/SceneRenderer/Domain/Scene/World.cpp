@@ -1017,6 +1017,13 @@ bool Scene::CommitNodeVisibilityChanges() {
     return requires_graph_rebuild;
 }
 
+bool Scene::CommitDynamicTopology() {
+    if (! m_dynamic_topology_dirty) return false;
+    m_dynamic_topology_dirty = false;
+    m_render_graph_dirty      = true;
+    return true;
+}
+
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property) {
     if (m_resource_index.Empty()) RebuildResourceIndex();
     bool matched_binding = false;

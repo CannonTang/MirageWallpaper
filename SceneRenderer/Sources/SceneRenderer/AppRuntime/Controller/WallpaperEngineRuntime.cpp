@@ -1198,6 +1198,7 @@ void SceneRenderController::on(RenderDraw&&) {
             }
             m_scene->TickNodeFieldAnimations();
             sr::script::TickSceneScripts(*m_scene, fi);
+            m_scene->CommitDynamicTopology();
             m_scene->CommitNodeVisibilityChanges();
             m_scene->TickCameraPaths();
             m_scene->TickMaterialShaderAnimations();

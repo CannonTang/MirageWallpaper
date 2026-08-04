@@ -90,8 +90,16 @@ JSValue MakeVec4Value(JSContext* ctx, double x, double y, double z, double w) {
 ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     if (JS_IsUndefined(ret) || JS_IsNull(ret)) return {};
 
+    auto clear_exception = [&] {
+        JSValue exception = JS_GetException(ctx);
+        JS_FreeValue(ctx, exception);
+    };
     auto read_field = [&](JSValue obj, const char* name, double& out) -> bool {
         JSValue v = JS_GetPropertyStr(ctx, obj, name);
+        if (JS_IsException(v)) {
+            clear_exception();
+            return false;
+        }
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
             return false;
@@ -99,12 +107,20 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
         double d  = 0.0;
         int    rc = JS_ToFloat64(ctx, &d, v);
         JS_FreeValue(ctx, v);
-        if (rc < 0 || ! IsFinite(d)) return false;
+        if (rc < 0) {
+            clear_exception();
+            return false;
+        }
+        if (! IsFinite(d)) return false;
         out = d;
         return true;
     };
     auto read_index = [&](JSValue arr, uint32_t i, double& out) -> bool {
         JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+        if (JS_IsException(v)) {
+            clear_exception();
+            return false;
+        }
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
             return false;
@@ -112,7 +128,11 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
         double d  = 0.0;
         int    rc = JS_ToFloat64(ctx, &d, v);
         JS_FreeValue(ctx, v);
-        if (rc < 0 || ! IsFinite(d)) return false;
+        if (rc < 0) {
+            clear_exception();
+            return false;
+        }
+        if (! IsFinite(d)) return false;
         out = d;
         return true;
     };
@@ -134,11 +154,9 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     case FieldKind::Vec2: {
         Vec2Value v;
         if (JS_IsArray(ret)) {
-            read_index(ret, 0, v.x);
-            read_index(ret, 1, v.y);
+            if (! read_index(ret, 0, v.x) || ! read_index(ret, 1, v.y)) return {};
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
+            if (! read_field(ret, "x", v.x) || ! read_field(ret, "y", v.y)) return {};
         } else {
             return {};
         }
@@ -147,18 +165,21 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     case FieldKind::Vec3: {
         Vec3Value v;
         if (JS_IsArray(ret)) {
-            read_index(ret, 0, v.x);
-            read_index(ret, 1, v.y);
-            read_index(ret, 2, v.z);
+            if (! read_index(ret, 0, v.x) || ! read_index(ret, 1, v.y) ||
+                ! read_index(ret, 2, v.z))
+                return {};
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
+            if (! read_field(ret, "x", v.x) || ! read_field(ret, "y", v.y) ||
+                ! read_field(ret, "z", v.z))
+                return {};
         } else if (JS_IsNumber(ret)) {
             // Many audio-response scripts return a *scalar* even when bound
             // to scale (vec3). Splat into all three components.
             double d = 0.0;
-            JS_ToFloat64(ctx, &d, ret);
+            if (JS_ToFloat64(ctx, &d, ret) < 0) {
+                clear_exception();
+                return {};
+            }
             if (! IsFinite(d)) return {};
             return Vec3Value { d, d, d };
         } else {
@@ -169,18 +190,19 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     case FieldKind::Vec4: {
         Vec4Value v;
         if (JS_IsArray(ret)) {
-            read_index(ret, 0, v.x);
-            read_index(ret, 1, v.y);
-            read_index(ret, 2, v.z);
-            read_index(ret, 3, v.w);
+            if (! read_index(ret, 0, v.x) || ! read_index(ret, 1, v.y) ||
+                ! read_index(ret, 2, v.z) || ! read_index(ret, 3, v.w))
+                return {};
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
-            read_field(ret, "w", v.w);
+            if (! read_field(ret, "x", v.x) || ! read_field(ret, "y", v.y) ||
+                ! read_field(ret, "z", v.z) || ! read_field(ret, "w", v.w))
+                return {};
         } else if (JS_IsNumber(ret)) {
             double d = 0.0;
-            JS_ToFloat64(ctx, &d, ret);
+            if (JS_ToFloat64(ctx, &d, ret) < 0) {
+                clear_exception();
+                return {};
+            }
             if (! IsFinite(d)) return {};
             return Vec4Value { d, d, d, d };
         } else {
@@ -2832,8 +2854,9 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
     auto* fs   = host->active_field_script;
     if (! fs) return JS_DupValue(ctx, host->default_layer);
 
-    sr::SceneNode* node = nullptr;
-    if (argc > 0 && ! JS_IsObject(argv[0])) {
+    const bool     configuration_request = argc > 0 && JS_IsObject(argv[0]);
+    sr::SceneNode* node                  = nullptr;
+    if (argc > 0 && ! configuration_request) {
         const char* asset = JS_ToCString(ctx, argv[0]);
         if (asset) {
             auto it = fs->m_impl->asset_clone_queues.find(asset);
@@ -2854,7 +2877,7 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
             }
             JS_FreeCString(ctx, asset);
         }
-    } else if (argc > 0 && JS_IsObject(argv[0]) && host->layer_config_factory) {
+    } else if (configuration_request && host->layer_config_factory) {
         std::optional<Json> config;
         if (auto* source_node = GetLayerNode(argv[0]); source_node != nullptr) {
             if (auto it = host->initial_layer_configs.find(source_node);
@@ -2894,9 +2917,9 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
         fs->m_impl->clone_queue.erase(fs->m_impl->clone_queue.begin());
     }
     if (! node) return JS_ThrowReferenceError(ctx, "createLayer asset is unavailable");
-    node->SetVisible(true);
-    node->Play();
-    if (argc > 0 && JS_IsObject(argv[0])) {
+    if (! configuration_request) node->SetVisible(true);
+    if (! configuration_request || node->Visible()) node->Play();
+    if (configuration_request) {
         JSValue perspective = JS_GetPropertyStr(ctx, argv[0], "perspective");
         if (! JS_IsUndefined(perspective)) node->SetPerspective(JS_ToBool(ctx, perspective) != 0);
         JS_FreeValue(ctx, perspective);

@@ -1,9 +1,13 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <string_view>
+#include <vector>
 
 import sr.text;
+import sr.scene;
+import sr.spec_texs;
 
 namespace
 {
@@ -143,6 +147,65 @@ int main() {
     ok &= Near(background_geometry.draw_height, 24.0f);
     ok &= Near(background_geometry.uv_source_width, 84.0f);
     ok &= Near(background_geometry.uv_source_height, 24.0f);
+
+    if (font.bytes) {
+        sr::text::FontCache large_cache;
+        auto* large_face = large_cache.GetFace(font.bytes, 128);
+        if (large_face == nullptr) {
+            std::cerr << "failed to load exact-256-raster font\n";
+            ok = false;
+        } else {
+            std::vector<std::uint32_t> printable;
+            for (std::uint32_t cp = 33; cp <= 126; ++cp) printable.push_back(cp);
+            large_face->Populate(printable);
+            ok &= large_face->Metrics().atlas_w == 4096;
+            for (std::uint32_t cp : printable) {
+                const auto* glyph = large_face->Lookup(cp);
+                if (glyph == nullptr || glyph->pixel_w == 0 || glyph->pixel_h == 0 ||
+                    (glyph->atlas_x == 0 && glyph->atlas_y == 0)) {
+                    std::cerr << "printable glyph did not receive an atlas slot: " << cp << '\n';
+                    ok = false;
+                    break;
+                }
+            }
+        }
+
+        sr::text::FontCache style_cache;
+        auto* style_face = style_cache.GetFace(font.bytes, 32);
+        if (style_face == nullptr) {
+            std::cerr << "failed to load text style font\n";
+            ok = false;
+        } else {
+            const std::array<std::uint32_t, 1> glyphs { 'A' };
+            style_face->Populate(glyphs);
+            auto mesh = std::make_shared<sr::SceneMesh>(true);
+            mesh->AddVertexArray(sr::SceneVertexArray(
+                sr::MakeAttrSet({ sr::VAttr::Position, sr::VAttr::TexCoord, sr::VAttr::Color }), 4));
+            mesh->AddIndexArray(sr::SceneIndexArray(6));
+            sr::text::TextLayoutStyle style;
+            style.color      = { 0.8f, 0.6f, 0.4f };
+            style.alpha      = 0.5f;
+            style.brightness = 0.25f;
+            sr::text::TextLayouter layouter(style_face, mesh, style, 1);
+            layouter.SetText("A");
+
+            const auto& vertex = mesh->GetVertexArray(0);
+            const auto attrs = vertex.GetAttrOffsetMap();
+            const auto color = attrs.find("a_Color");
+            if (color == attrs.end()) {
+                std::cerr << "text color vertex attribute missing\n";
+                ok = false;
+            } else {
+                const auto offset = color->second.offset / sizeof(float);
+                ok &= Near(vertex.Data()[offset + 0], 0.2f);
+                ok &= Near(vertex.Data()[offset + 1], 0.15f);
+                ok &= Near(vertex.Data()[offset + 2], 0.1f);
+                ok &= Near(vertex.Data()[offset + 3], 0.5f);
+                layouter.SetAlpha(0.2f);
+                ok &= Near(vertex.Data()[offset + 3], 0.2f);
+            }
+        }
+    }
 
     return ok ? 0 : 1;
 }
