@@ -20,7 +20,9 @@ struct ExplorerBottomBar: View {
     @State private var isSettingsPresented = false
     @State private var isClearConfirming = false
 
-    private var screenCount: Int { NSScreen.screens.count }
+    private var displays: [DisplayInfo] {
+        wallpaperViewModel.connectedDisplays
+    }
 
     private var itemCount: Int {
         manager.current(on: targetScreen).items.count
@@ -81,14 +83,14 @@ struct ExplorerBottomBar: View {
                 .font(.title2.bold())
                 .lineLimit(1)
 
-            if screenCount > 1 {
+            if displays.count > 1 {
                 Picker("", selection: $targetScreen) {
-                    ForEach(0..<screenCount, id: \.self) { idx in
-                        Text(L("屏幕 %d", idx + 1)).tag(idx)
+                    ForEach(displays) { info in
+                        Text(L("显示器 %d", info.index + 1) + " · " + info.name).tag(info.index)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 110)
+                .frame(width: 190)
             }
 
             Spacer()

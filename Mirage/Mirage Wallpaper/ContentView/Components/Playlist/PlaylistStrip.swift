@@ -67,13 +67,10 @@ struct PlaylistStrip: View {
     private func tap(_ item: PlaylistItem) {
         selectedItemID = item.wallpaperID
         guard let wallpaper = libraryByID[item.wallpaperID], wallpaper.isValid else { return }
-        if screen == 0 {
-            // Via requestApply so an unconfirmed web wallpaper gets the trust
-            // sheet. Assigning currentWallpaper directly just hit the renderer's
-            // trust backstop and did nothing.
-            wallpaperViewModel.requestApply(wallpaper)
-        } else {
-            wallpaperViewModel.applyOnScreen(wallpaper, screen: screen)
+        // Via requestApply so an unconfirmed web wallpaper gets the trust sheet
+        // on every screen, not just the main one.
+        if let key = DisplayRegistry.shared.key(forScreenIndex: screen) {
+            wallpaperViewModel.requestApply(wallpaper, to: key)
         }
         manager.kickRotator(on: screen)
     }

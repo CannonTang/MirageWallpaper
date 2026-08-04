@@ -29,7 +29,8 @@ struct ContentView: View {
             HSplitView {
                 if viewModel.isStaging {
                     VStack(spacing: 5) {
-                        TopTabBar(contentViewModel: viewModel)
+                        TopTabBar(contentViewModel: viewModel,
+                                  wallpaperViewModel: wallpaperViewModel)
                         ProjectFeedbackBanner()
                         switch viewModel.topTabBarSelection {
                         case 0:
@@ -113,18 +114,14 @@ struct ContentView: View {
                 Button("立即删除", role: .destructive) {
                     WEWallpaper.invalidateSizeCache()
                     try? WallpaperLibrary.shared.delete(wallpaper)
-                    if url == wallpaperViewModel.currentWallpaper.wallpaperDirectory {
-                        wallpaperViewModel.currentWallpaper = WallpaperViewModel.invalidWallpaper
-                    }
+                    wallpaperViewModel.removeWallpaper(at: url)
                     viewModel.hoveredWallpaper = nil
                     viewModel.refresh()
                 }
                 Button("移到废纸篓") {
                     WEWallpaper.invalidateSizeCache()
                     try? WallpaperLibrary.shared.trash(wallpaper)
-                    if url == wallpaperViewModel.currentWallpaper.wallpaperDirectory {
-                        wallpaperViewModel.currentWallpaper = WallpaperViewModel.invalidWallpaper
-                    }
+                    wallpaperViewModel.removeWallpaper(at: url)
                     viewModel.hoveredWallpaper = nil
                     viewModel.refresh()
                 }
@@ -163,11 +160,6 @@ struct ContentView: View {
         .sheet(isPresented: $globalSettingsViewModel.isFirstLaunch) {
             FirstLaunchView()
                 .environmentObject(globalSettingsViewModel)
-        }
-        .sheet(isPresented: $viewModel.isDisplaySettingsReveal) {
-            DisplaySettings(viewModel: viewModel)
-                .padding()
-                .frame(width: 520, height: 450)
         }
         .sheet(item: $viewModel.pendingTrustRequest) { request in
             UnsafeWallpaper(request: request)

@@ -41,6 +41,16 @@ struct WallpaperPreview: SubviewOfContentView {
         VStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    HStack {
+                        Image(systemName: "display")
+                            .foregroundStyle(.secondary)
+                        Text("正在为 \(wallpaperViewModel.selectedDisplayName) 设置")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+
                     VStack(spacing: 10) {
                         GifImage(contentsOf: wallpaperViewModel.currentWallpaper.project.preview.isEmpty
                             ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
@@ -183,7 +193,10 @@ struct WallpaperPreview: SubviewOfContentView {
                         HStack {
                             Label("音量", systemImage: "speaker.wave.3.fill")
                             Spacer()
-                            MirageSlider(value: $wallpaperViewModel.playVolume, in: 0...1).frame(width: 100)
+                            MirageSlider(value: Binding(
+                                get: { wallpaperViewModel.playVolume },
+                                set: { wallpaperViewModel.playVolume = $0 }), in: 0...1)
+                                .frame(width: 100)
                             Text(String(format: "%.0f", wallpaperViewModel.playVolume * 100) + "%")
                                 .frame(width: 35)
                         }
@@ -191,7 +204,10 @@ struct WallpaperPreview: SubviewOfContentView {
                             HStack {
                                 Label("速度", systemImage: "gauge.with.dots.needle.67percent")
                                 Spacer()
-                                MirageSlider(value: $wallpaperViewModel.playRate, in: 0...2, step: 0.1).frame(width: 100)
+                                MirageSlider(value: Binding(
+                                    get: { wallpaperViewModel.playRate },
+                                    set: { wallpaperViewModel.playRate = $0 }), in: 0...2, step: 0.1)
+                                    .frame(width: 100)
                                 Text(String(format: "%.01fx", wallpaperViewModel.playRate))
                                 .frame(width: 35)
                             }
@@ -226,7 +242,13 @@ struct WallpaperPreview: SubviewOfContentView {
                         Button {
                             wallpaperViewModel.stopWallpaper()
                         } label: {
-                            Label("停止壁纸", systemImage: "stop.fill")
+                            Label("停止此显示器", systemImage: "stop.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        Button {
+                            wallpaperViewModel.stopAllWallpapers()
+                        } label: {
+                            Label("全部停止", systemImage: "stop.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
                     }

@@ -80,8 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let w = wallpaperViewModel.currentWallpaper
         if w.isValid {
-            wallpaperViewModel.reapplyCurrent()
-            DesktopOverrideService.shared.scheduleCapture(for: 0, wallpaper: w)
+            wallpaperViewModel.restoreAllDisplays()
         }
 
         let isDefaultLaunch = (notification.userInfo?["NSApplicationLaunchIsDefaultLaunchKey"] as? Bool) ?? true

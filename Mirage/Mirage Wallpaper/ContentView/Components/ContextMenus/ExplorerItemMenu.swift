@@ -22,20 +22,48 @@ struct ExplorerItemMenu: SubviewOfContentView {
     var body: some View {
         Group {
             Section {
+                if displays.count > 1 {
+                    Menu {
+                        ForEach(displays) { info in
+                            Button {
+                                apply(to: info)
+                            } label: {
+                                Label(displayTitle(info), systemImage: "display")
+                            }
+                        }
+                        Divider()
+                        Button {
+                            applyToAll()
+                        } label: {
+                            Label("所有显示器", systemImage: "rectangle.on.rectangle")
+                        }
+                    } label: {
+                        Label("设为壁纸", systemImage: "photo.fill")
+                    }
+                    .disabled(!canApply)
+                } else {
+                    Button {
+                        if let info = displays.first { apply(to: info) }
+                    } label: {
+                        Label("设为壁纸", systemImage: "photo.fill")
+                    }
+                    .disabled(!canApply || displays.isEmpty)
+                }
+
                 Button(action: setAsScreenSaver) {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
-                .disabled(!hoveredWallpaper.isValid || hoveredWallpaper.kind == .unsupported)
+                .disabled(!canApply)
             }
 
             Section {
-                if NSScreen.screens.count > 1 {
+                if displays.count > 1 {
                     Menu {
-                        ForEach(0..<NSScreen.screens.count, id: \.self) { idx in
+                        ForEach(displays) { info in
                             Button {
-                                PlaylistManager.shared.add(hoveredWallpaper, to: idx)
+                                PlaylistManager.shared.add(hoveredWallpaper, to: info.index)
                             } label: {
-                                Label(L("屏幕 %d", idx + 1), systemImage: "display")
+                                Label(displayTitle(info), systemImage: "display")
                             }
                         }
                     } label: {
@@ -106,6 +134,34 @@ struct ExplorerItemMenu: SubviewOfContentView {
             }
         }
         .labelStyle(.titleAndIcon)
+    }
+
+    private var displays: [DisplayInfo] {
+        wallpaperViewModel.connectedDisplays
+    }
+
+    private var canApply: Bool {
+        hoveredWallpaper.isValid && hoveredWallpaper.kind != .unsupported
+    }
+
+    private func displayTitle(_ info: DisplayInfo) -> String {
+        var text = L("显示器 %d", info.index + 1)
+        text += " · " + info.name
+        if info.isMain { text += L(" · 主屏") }
+        return text
+    }
+
+    private func apply(to info: DisplayInfo) {
+        wallpaperViewModel.requestApply(hoveredWallpaper, to: info.key)
+    }
+
+    private func applyToAll() {
+        if hoveredWallpaper.kind == .web, !wallpaperViewModel.isTrusted(hoveredWallpaper) {
+            viewModel.warningUnsafeWallpaperModal(which: hoveredWallpaper,
+                                                  action: .applyToAllDisplays)
+            return
+        }
+        wallpaperViewModel.applyToAllDisplays(hoveredWallpaper)
     }
 
     private func setAsScreenSaver() {

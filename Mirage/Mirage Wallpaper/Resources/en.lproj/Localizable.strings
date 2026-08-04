@@ -258,7 +258,6 @@
 "导入壁纸…" = "Import Wallpaper...";
 "导入壁纸目录" = "Imported Wallpapers";
 "导出" = "Export";
-"将当前壁纸「%@」指派到指定显示器。" = "Assign the current wallpaper \"%@\" to the specified monitor.";
 "将正在播放的壁纸设为屏保" = "Use the Current Wallpaper as the Screen Saver";
 "小图标" = "Small Icons";
 "小时" = "Hours";
@@ -293,7 +292,6 @@
 "帧率" = "Frame Rate";
 "帮助" = "Help";
 "广受好评" = "Top Rated";
-"应用到此屏" = "Apply to this screen";
 "应用程序" = "Application";
 "建议设置专属 Steam API Key" = "Configure a Personal Steam API Key";
 "建议设置专属 Steam Web API Key" = "Configure a Personal Steam Web API Key";
@@ -437,7 +435,6 @@
 "正在播放" = "Now playing";
 "正在更新屏保组件…" = "Updating screen saver component...";
 "正在检测 SteamCMD..." = "Detecting SteamCMD...";
-"正在渲染：%@" = "Rendering: %@";
 "正在登录..." = "Signing in...";
 "正在解压..." = "Unzipping...";
 "正在转换视频格式" = "Converting video format";
@@ -678,3 +675,11 @@
 "%@播放时长最多" = "Most Playtime %@";
 "%@平均播放时长最长" = "Longest Average Playtime %@";
 "%@播放次数最多" = "Most Sessions %@";
+"停止此显示器" = "Stop This Display";
+"选择要设置的显示器" = "Choose a display to configure";
+"未连接的显示器" = "Disconnected display";
+"正在为 %@ 设置" = "Configuring %@";
+"%@ · 未渲染壁纸" = "%@ · No wallpaper";
+"%@ · 当前壁纸：%@" = "%@ · Current wallpaper: %@";
+"设为壁纸" = "Set as Wallpaper";
+"所有显示器" = "All Displays";

@@ -229,8 +229,8 @@ class GlobalSettingsViewModel: ObservableObject {
     
     func didFinishLaunchingNotification() {
         self.didCurrentWallpaperChangeCancellable =
-        AppDelegate.shared.wallpaperViewModel.$currentWallpaper
-            .sink { [weak self] in self?.didCurrentWallpaperChange($0) }
+        AppDelegate.shared.wallpaperViewModel.$displayStates
+            .sink { [weak self] in self?.didDisplayStatesChange($0) }
         
         self.didAddToLoginItemCancellable =
         self.$settings
@@ -366,7 +366,7 @@ class GlobalSettingsViewModel: ObservableObject {
             settings.laptopOnBattery != .keepRunning
 
         guard anyRuleEnabled,
-              AppDelegate.shared.wallpaperViewModel.currentWallpaper.isValid else {
+              AppDelegate.shared.wallpaperViewModel.hasAnyWallpaper else {
             effectivePlaybackAction = .keepRunning
             AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicy(.keepRunning)
             return
@@ -510,8 +510,12 @@ class GlobalSettingsViewModel: ObservableObject {
         }
     }
     
-    func didCurrentWallpaperChange(_ newValue: WEWallpaper) {
-        DesktopOverrideService.shared.scheduleCapture(for: 0, wallpaper: newValue)
+    func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {
+        for (key, state) in states {
+            guard let displayID = DisplayRegistry.shared.displayID(for: key) else { continue }
+            DesktopOverrideService.shared.scheduleCapture(
+                forDisplay: displayID, wallpaper: state.wallpaper)
+        }
         if playbackPolicySettingsCancellable != nil {
             DispatchQueue.main.async { [weak self] in self?.configurePlaybackMonitoring() }
         }

@@ -8,9 +8,11 @@ import SwiftUI
 
 struct TopTabBar: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
 
-    init(contentViewModel viewModel: ContentViewModel) {
+    init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
         self.viewModel = viewModel
+        self.wallpaperViewModel = wallpaperViewModel
     }
 
     private var downloadCount: Int {
@@ -32,9 +34,7 @@ struct TopTabBar: SubviewOfContentView {
 
             HStack(spacing: 2) {
                 chromeButton(title: "移动端", systemImage: "platter.filled.bottom.iphone") { }
-                chromeButton(title: "显示器", systemImage: "display") {
-                    viewModel.isDisplaySettingsReveal = true
-                }
+                DisplayPicker(wallpaperViewModel: wallpaperViewModel)
                 chromeButton(title: "设置", systemImage: "gearshape.fill") {
                     AppDelegate.shared.openSettingsWindow()
                 }

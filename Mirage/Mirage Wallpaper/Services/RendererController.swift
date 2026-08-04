@@ -1462,10 +1462,14 @@ final class RendererController {
     func setFillMode(_ mode: FillMode, on screenIndex: Int? = nil) {
         if let screenIndex {
             guard let displayID = displayID(for: screenIndex) else { return }
-            forEach(displayID) { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
+            setFillMode(mode, onDisplay: displayID)
         } else {
-            forEach(nil) { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
+            setFillMode(mode, onDisplay: nil)
         }
+    }
+
+    func setFillMode(_ mode: FillMode, onDisplay displayID: CGDirectDisplayID?) {
+        forEach(displayID) { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
     }
 
     func setProperty(key: String, property: WEProjectProperty, on screenIndex: Int? = nil) {
@@ -1476,6 +1480,11 @@ final class RendererController {
         } else {
             displayID = nil
         }
+        setProperty(key: key, property: property, onDisplay: displayID)
+    }
+
+    func setProperty(key: String, property: WEProjectProperty,
+                     onDisplay displayID: CGDirectDisplayID?) {
         forEach(displayID) { proc in
             proc.send(Self.propertyCommand(key: key, property: property))
         }

@@ -15,13 +15,13 @@ struct WallpaperRuntimeState: Codable, Equatable {
     var propertyOverrides: [String: WEPropertyValue] = [:]
 }
 
+struct DisplayWallpaperState: Codable, Equatable {
+    var wallpaper: WEWallpaper
+    var runtime: WallpaperRuntimeState
+}
+
 class WallpaperViewModel: ObservableObject {
     let renderer = RendererController()
-
-    private struct ScreenAssignment {
-        let wallpaper: WEWallpaper
-        let runtime: WallpaperRuntimeState
-    }
 
     private struct AppliedPlaybackState: Equatable {
         let paused: Bool
@@ -32,14 +32,33 @@ class WallpaperViewModel: ObservableObject {
         let fps: Int
     }
 
-    private var lastAppliedPlaybackState: AppliedPlaybackState?
-    private var screenAssignments: [CGDirectDisplayID: ScreenAssignment] = [:]
+    private static let assignmentsDefaultsKey = "DisplayAssignments"
+    private static let selectedDisplayDefaultsKey = "SelectedDisplay"
+    private static let legacyWallpaperDefaultsKey = "CurrentWallpaper"
+
+    @Published private(set) var displayStates: [DisplayKey: DisplayWallpaperState] = [:]
+
+    @Published var selectedDisplayKey: DisplayKey {
+        didSet {
+            guard selectedDisplayKey != oldValue else { return }
+            UserDefaults.standard.set(selectedDisplayKey.rawValue,
+                                      forKey: Self.selectedDisplayDefaultsKey)
+            syncStatusItems()
+        }
+    }
+
+    @Published var currentByScreen: [Int: WEWallpaper] = [:]
+
     private var pendingScreenAssignments: [CGDirectDisplayID: UUID] = [:]
+    private var lastAppliedPlayback: [DisplayKey: AppliedPlaybackState] = [:]
     private var stoppedByPlaybackPolicy = false
-    private var runtimeSaveWorkItem: DispatchWorkItem?
-    private var playbackCommandWorkItem: DispatchWorkItem?
-    private var propertyCommandWorkItem: DispatchWorkItem?
-    private var pendingPropertyCommands: [String: WEProjectProperty] = [:]
+    private var statesSaveWorkItem: DispatchWorkItem?
+    private var runtimeSaveWorkItems: [DisplayKey: DispatchWorkItem] = [:]
+    private var playbackCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
+    private var propertyCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
+    private var pendingPropertyCommands: [DisplayKey: [String: WEProjectProperty]] = [:]
+    private var lastVolumeByDisplay: [DisplayKey: Float] = [:]
+    private var lastRateByDisplay: [DisplayKey: Float] = [:]
 
     static var invalidWallpaper: WEWallpaper {
         WEWallpaper(using: .invalid,
@@ -47,89 +66,95 @@ class WallpaperViewModel: ObservableObject {
                         ?? URL(fileURLWithPath: "/dev/null"))
     }
 
-    /// Entry point for "user picked this wallpaper in the UI". Web wallpapers
-    /// run untrusted third-party JS, so an unconfirmed one is routed to the
-    /// trust sheet instead of being applied.
-    ///
-    /// This used to be a `@Published var nextCurrentWallpaper` whose `willSet`
-    /// either presented the sheet or assigned `currentWallpaper`. Mutating one
-    /// published property from inside another's `willSet` is exactly what
-    /// triggers SwiftUI's "Publishing changes from within view updates", and
-    /// the sheet read the new value back before `willSet` had committed it.
-    func requestApply(_ wallpaper: WEWallpaper) {
-        guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
-        if wallpaper.kind == .web, !isTrusted(wallpaper) {
-            AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(which: wallpaper)
-            return
-        }
-        currentWallpaper = wallpaper
-    }
-
-    @Published var currentWallpaper: WEWallpaper {
-        didSet {
-            if oldValue.isValid, oldValue.id != currentWallpaper.id {
-                runtimeSaveWorkItem?.cancel()
-                runtimeSaveWorkItem = nil
-                persistRuntime(runtime, for: oldValue)
-            }
-            UserDefaults.standard.set(try? JSONEncoder().encode(currentWallpaper), forKey: "CurrentWallpaper")
-            applyCurrent()
-            currentByScreen[0] = currentWallpaper.isValid ? currentWallpaper : nil
-        }
-    }
-
-    @Published var currentByScreen: [Int: WEWallpaper] = [:]
-
-    @Published var runtime = WallpaperRuntimeState()
-
-    // 避免运行时回填 UI 时重复下发指令。
-    private var suppressPlaybackSideEffects = false
-
-    var lastPlayRate: Float = 1.0
-    @Published var playRate: Float = 1.0 {
-        willSet { syncStatusPauseItem(isPaused: newValue == 0.0) }
-        didSet {
-            lastPlayRate = oldValue
-            guard !suppressPlaybackSideEffects else { return }
-            runtime.speed = playRate
-            schedulePlaybackPolicyApplication()
-            scheduleRuntimeSave()
-        }
-    }
-
-    var lastPlayVolume: Float = 1.0
-    @Published var playVolume: Float = 1.0 {
-        willSet { syncStatusMuteItem(isMuted: newValue == 0.0) }
-        didSet {
-            lastPlayVolume = oldValue
-            guard !suppressPlaybackSideEffects else { return }
-            runtime.volume = playVolume
-            schedulePlaybackPolicyApplication()
-            scheduleRuntimeSave()
-        }
-    }
-
     init() {
-        if let json = UserDefaults.standard.data(forKey: "CurrentWallpaper"),
-           let wallpaper = try? JSONDecoder().decode(WEWallpaper.self, from: json),
-           FileManager.default.fileExists(atPath: wallpaper.wallpaperDirectory.path) {
-            currentWallpaper = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
+        let registry = DisplayRegistry.shared
+        let stored = UserDefaults.standard.string(forKey: Self.selectedDisplayDefaultsKey)
+            .map(DisplayKey.init(rawValue:))
+        let connectedKeys = registry.connectedKeys
+        if let stored, connectedKeys.contains(stored) {
+            selectedDisplayKey = stored
         } else {
-            currentWallpaper = WallpaperViewModel.invalidWallpaper
+            selectedDisplayKey = registry.mainKey ?? DisplayKey(rawValue: "idx:0")
         }
-        // Silent backstop. `requestApply` above remains the thing that prompts
-        // the user; this makes sure an unconfirmed web wallpaper can never be
-        // spawned by one of the many paths that assign currentWallpaper directly
-        // (playlist rotation, per-screen apply, launch restore). Deliberately a
-        // context-free closure, so the renderer holds nothing of `self`.
+
+        var loaded = Self.loadPersistedStates()
+        if loaded.isEmpty, let migrated = Self.loadLegacyState(),
+           let mainKey = registry.mainKey {
+            loaded[mainKey] = migrated
+        }
+        displayStates = loaded
+
         renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
         NotificationCenter.default.addObserver(
             self, selector: #selector(displayTopologyChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        persistStates()
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    // MARK: 显示器状态
+
+    var connectedDisplays: [DisplayInfo] {
+        DisplayRegistry.shared.connected
+    }
+
+    var selectedDisplay: DisplayInfo? {
+        DisplayRegistry.shared.info(for: selectedDisplayKey)
+    }
+
+    var selectedDisplayName: String {
+        DisplayRegistry.shared.displayName(for: selectedDisplayKey)
+    }
+
+    var hasAnyWallpaper: Bool {
+        !displayStates.isEmpty
+    }
+
+    func state(for key: DisplayKey) -> DisplayWallpaperState? {
+        displayStates[key]
+    }
+
+    func wallpaper(for key: DisplayKey) -> WEWallpaper {
+        displayStates[key]?.wallpaper ?? WallpaperViewModel.invalidWallpaper
+    }
+
+    func runtime(for key: DisplayKey) -> WallpaperRuntimeState {
+        displayStates[key]?.runtime ?? WallpaperRuntimeState()
+    }
+
+    func isRendering(_ key: DisplayKey) -> Bool {
+        guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return false }
+        return renderer.isRendering(onDisplay: displayID)
+    }
+
+    // MARK: 选中显示器的门面
+
+    var currentWallpaper: WEWallpaper {
+        get { wallpaper(for: selectedDisplayKey) }
+        set { assign(newValue, to: selectedDisplayKey) }
+    }
+
+    var runtime: WallpaperRuntimeState {
+        get { runtime(for: selectedDisplayKey) }
+        set {
+            guard var state = displayStates[selectedDisplayKey] else { return }
+            state.runtime = Self.normalizedRuntime(newValue, for: state.wallpaper)
+            displayStates[selectedDisplayKey] = state
+            persistStates()
+        }
+    }
+
+    var playVolume: Float {
+        get { runtime(for: selectedDisplayKey).volume }
+        set { setVolume(newValue, for: selectedDisplayKey) }
+    }
+
+    var playRate: Float {
+        get { runtime(for: selectedDisplayKey).speed }
+        set { setSpeed(newValue, for: selectedDisplayKey) }
     }
 
     // MARK: 全局设置桥接
@@ -152,15 +177,6 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 信任（网页壁纸安全确认）
 
-    /// Wallpapers the user confirmed in the trust sheet without ticking "don't
-    /// ask again". Without this, "继续" had nowhere to record the user's consent:
-    /// `RendererController`'s trust backstop consults the persisted list only,
-    /// so a one-shot confirmation was vetoed by that backstop and the wallpaper
-    /// silently never launched. Session-scoped on purpose — consent lasts until
-    /// Mirage quits, whereas the checkbox persists it across launches.
-    ///
-    /// `static` to match `isWallpaperTrusted` below: the closure handed to
-    /// `RendererController` stays context-free and retains nothing.
     private static let sessionTrustLock = NSLock()
     nonisolated(unsafe) private static var sessionTrusted: Set<String> = []
 
@@ -176,9 +192,6 @@ class WallpaperViewModel: ObservableObject {
         sessionTrustLock.unlock()
     }
 
-    /// The trust store is plain UserDefaults state, so it is exposed as a type
-    /// method: `RendererController` consults it through an injected closure and
-    /// never needs (or retains) a reference to the view model.
     static func isWallpaperTrusted(_ w: WEWallpaper) -> Bool {
         let list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
         if list.contains(w.id) { return true }
@@ -199,14 +212,270 @@ class WallpaperViewModel: ObservableObject {
 
     func trustAndApply(_ w: WEWallpaper) {
         trust(w)
-        currentWallpaper = w
+        assign(w, to: selectedDisplayKey)
+    }
+
+    func requestApply(_ wallpaper: WEWallpaper) {
+        requestApply(wallpaper, to: selectedDisplayKey)
+    }
+
+    func requestApply(_ wallpaper: WEWallpaper, to key: DisplayKey) {
+        guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
+        if wallpaper.kind == .web, !isTrusted(wallpaper) {
+            guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
+            AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(
+                which: wallpaper, action: .applyOnDisplay(displayID))
+            return
+        }
+        assign(wallpaper, to: key)
+    }
+
+    // MARK: 指派与停止
+
+    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey) {
+        guard wallpaper.isValid, wallpaper.kind != .unsupported else {
+            clear(key)
+            return
+        }
+        let previous = displayStates[key]
+        if let previous, previous.wallpaper.id != wallpaper.id {
+            cancelRuntimeSave(for: key)
+            persistRuntime(previous.runtime, for: previous.wallpaper)
+        }
+        let resolved: WallpaperRuntimeState
+        if let previous, previous.wallpaper.id == wallpaper.id {
+            resolved = previous.runtime
+        } else {
+            resolved = Self.loadPersistedRuntime(for: wallpaper)
+        }
+        let state = DisplayWallpaperState(wallpaper: wallpaper, runtime: resolved)
+        displayStates[key] = state
+        lastAppliedPlayback[key] = nil
+        persistStates()
+        cancelPendingProperties(for: key)
+
+        guard let displayID = DisplayRegistry.shared.displayID(for: key) else {
+            syncStatusItems()
+            return
+        }
+        if currentPlaybackPolicy == .stop {
+            pendingScreenAssignments[displayID] = nil
+            commit(state, to: displayID, key: key)
+        } else {
+            apply(state, to: displayID, key: key, reuseActive: true)
+        }
+        applyPlaybackPolicy(currentPlaybackPolicy, for: key, force: true)
+        syncStatusItems()
+    }
+
+    func applyOnDisplay(_ w: WEWallpaper, displayID targetDisplayID: CGDirectDisplayID) {
+        guard let key = DisplayRegistry.shared.key(forDisplay: targetDisplayID) else { return }
+        assign(w, to: key)
+    }
+
+    func applyOnScreen(_ w: WEWallpaper, screen: Int) {
+        guard let key = DisplayRegistry.shared.key(forScreenIndex: screen) else { return }
+        assign(w, to: key)
+    }
+
+    func applyToAllDisplays(_ w: WEWallpaper) {
+        guard w.isValid, w.kind != .unsupported else { return }
+        for info in DisplayRegistry.shared.connected {
+            assign(w, to: info.key)
+        }
+    }
+
+    func applyToAllScreens() {
+        guard let state = displayStates[selectedDisplayKey] else { return }
+        applyToAllDisplays(state.wallpaper)
+    }
+
+    func clear(_ key: DisplayKey) {
+        if let state = displayStates[key] {
+            cancelRuntimeSave(for: key)
+            persistRuntime(state.runtime, for: state.wallpaper)
+        }
+        displayStates[key] = nil
+        lastAppliedPlayback[key] = nil
+        cancelPendingProperties(for: key)
+        persistStates()
+        if let index = DisplayRegistry.shared.screenIndex(for: key) {
+            currentByScreen[index] = nil
+        }
+        if let displayID = DisplayRegistry.shared.displayID(for: key) {
+            pendingScreenAssignments[displayID] = nil
+            renderer.stop(displayID: displayID)
+        }
+        syncStatusItems()
+    }
+
+    func stopWallpaper() {
+        clear(selectedDisplayKey)
+    }
+
+    func stopAllWallpapers() {
+        for (key, state) in displayStates {
+            cancelRuntimeSave(for: key)
+            persistRuntime(state.runtime, for: state.wallpaper)
+            cancelPendingProperties(for: key)
+        }
+        renderer.stopAll()
+        pendingScreenAssignments.removeAll()
+        displayStates.removeAll()
+        lastAppliedPlayback.removeAll()
+        currentByScreen.removeAll()
+        stoppedByPlaybackPolicy = false
+        persistStates()
+        syncStatusItems()
+    }
+
+    func removeWallpaper(at directory: URL) {
+        let identifier = directory.path(percentEncoded: false)
+        let targets = displayStates.filter { $0.value.wallpaper.id == identifier }.map(\.key)
+        for key in targets { clear(key) }
+    }
+
+    // MARK: 渲染
+
+    func restoreAllDisplays() {
+        guard currentPlaybackPolicy != .stop else { return }
+        for info in DisplayRegistry.shared.connected {
+            guard let state = displayStates[info.key] else { continue }
+            apply(state, to: info.displayID, key: info.key, reuseActive: false)
+            DesktopOverrideService.shared.scheduleCapture(
+                forDisplay: info.displayID, wallpaper: state.wallpaper)
+        }
+        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
+        syncStatusItems()
+    }
+
+    func reapply(for key: DisplayKey) {
+        guard let state = displayStates[key],
+              let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
+        cancelPendingProperties(for: key)
+        if currentPlaybackPolicy != .stop {
+            apply(state, to: displayID, key: key, reuseActive: false)
+        }
+        applyPlaybackPolicy(currentPlaybackPolicy, for: key, force: true)
+    }
+
+    func reapplyCurrent() {
+        reapply(for: selectedDisplayKey)
+    }
+
+    private func apply(_ state: DisplayWallpaperState, to displayID: CGDirectDisplayID,
+                       key: DisplayKey, reuseActive: Bool) {
+        let options = makeRenderOptions(for: state.wallpaper, runtime: state.runtime)
+        let requestID = UUID()
+        pendingScreenAssignments[displayID] = requestID
+        let accepted = renderer.render(
+            state.wallpaper,
+            onDisplay: displayID,
+            options: options,
+            reuseActive: reuseActive
+        ) { [weak self] success in
+            guard let self,
+                  self.pendingScreenAssignments[displayID] == requestID else { return }
+            self.pendingScreenAssignments[displayID] = nil
+            guard success else { return }
+            self.commit(state, to: displayID, key: key)
+        }
+        if !accepted, pendingScreenAssignments[displayID] == requestID {
+            pendingScreenAssignments[displayID] = nil
+        }
+    }
+
+    private func commit(_ state: DisplayWallpaperState, to displayID: CGDirectDisplayID,
+                        key: DisplayKey) {
+        if let index = DisplayRegistry.shared.screenIndex(for: key) {
+            currentByScreen[index] = state.wallpaper
+        }
+        DesktopOverrideService.shared.scheduleCapture(
+            forDisplay: displayID, wallpaper: state.wallpaper)
+    }
+
+    private func makeRenderOptions(for w: WEWallpaper,
+                                   runtime state: WallpaperRuntimeState) -> RenderOptions {
+        let settings = AppDelegate.shared.globalSettingsViewModel.settings
+        var opts = RenderOptions()
+        opts.fps = globalFps
+        opts.enableSpectrum = enableSpectrum
+        opts.muted = state.muted || globalMuted || state.volume == 0 || currentPlaybackPolicy == .mute
+        opts.volume = state.volume * masterVolume
+        opts.speed = state.speed
+        opts.fillMode = state.fillMode
+        opts.userProperties = effectiveProperties(for: w, runtime: state)
+        opts.loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
+        switch settings.textureResolution {
+        case .highQuality: opts.renderScale = 1.0
+        case .automatic: opts.renderScale = 0.75
+        case .highPerformance: opts.renderScale = 0.5
+        }
+        switch settings.antiAliasing {
+        case .none: opts.msaaSamples = 1
+        case .msaa_x2: opts.msaaSamples = 2
+        case .msaa_x4: opts.msaaSamples = 4
+        case .msaa_x8: opts.msaaSamples = 8
+        }
+        return opts
+    }
+
+    // MARK: 拓扑变化
+
+    @objc private func displayTopologyChanged() {
+        DisplayRegistry.shared.invalidate()
+        let connected = DisplayRegistry.shared.connected
+        let connectedIDs = Set(connected.map(\.displayID))
+        let connectedKeys = Set(connected.map(\.key))
+
+        renderer.stopDisplays(except: connectedIDs)
+        pendingScreenAssignments = pendingScreenAssignments.filter { connectedIDs.contains($0.key) }
+        lastAppliedPlayback = lastAppliedPlayback.filter { connectedKeys.contains($0.key) }
+
+        if !connectedKeys.contains(selectedDisplayKey) {
+            selectedDisplayKey = DisplayRegistry.shared.mainKey
+                ?? connected.first?.key ?? selectedDisplayKey
+        }
+
+        let inherited = DisplayRegistry.shared.mainKey.flatMap { displayStates[$0] }
+            ?? displayStates[selectedDisplayKey]
+        var seeded = false
+        for info in connected {
+            if displayStates[info.key] == nil, let inherited {
+                displayStates[info.key] = inherited
+                lastAppliedPlayback[info.key] = nil
+                seeded = true
+            }
+            guard let state = displayStates[info.key] else { continue }
+            if currentPlaybackPolicy != .stop {
+                apply(state, to: info.displayID, key: info.key, reuseActive: true)
+            }
+        }
+        if seeded { persistStates() }
+
+        var rebuilt: [Int: WEWallpaper] = [:]
+        for info in connected {
+            guard let state = displayStates[info.key] else { continue }
+            rebuilt[info.index] = state.wallpaper
+        }
+        currentByScreen = rebuilt
+
+        DesktopOverrideService.shared.scheduleCaptureForAllScreens()
+        if !stoppedByPlaybackPolicy {
+            applyPlaybackPolicy(currentPlaybackPolicy, force: true)
+        }
+        syncStatusItems()
     }
 
     // MARK: 运行时状态持久化
 
-    private func runtimeKey(for w: WEWallpaper) -> String { "Runtime_\(w.id)" }
+    private static func runtimeKey(for w: WEWallpaper) -> String { "Runtime_\(w.id)" }
 
     func loadRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
+        Self.loadPersistedRuntime(for: w)
+    }
+
+    private static func loadPersistedRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
         if let data = UserDefaults.standard.data(forKey: runtimeKey(for: w)),
            let saved = try? JSONDecoder().decode(WallpaperRuntimeState.self, from: data) {
             let normalized = normalizedRuntime(saved, for: w)
@@ -219,20 +488,25 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func saveRuntime() {
-        guard currentWallpaper.isValid else { return }
-        let normalized = normalizedRuntime(runtime, for: currentWallpaper)
-        if normalized != runtime { runtime = normalized }
-        if let displayID = displayID(for: 0) {
-            screenAssignments[displayID] = ScreenAssignment(
-                wallpaper: currentWallpaper, runtime: normalized)
+        if var state = displayStates[selectedDisplayKey] {
+            let normalized = Self.normalizedRuntime(state.runtime, for: state.wallpaper)
+            if normalized != state.runtime {
+                state.runtime = normalized
+                displayStates[selectedDisplayKey] = state
+            }
         }
-        persistRuntime(normalized, for: currentWallpaper)
+        for (key, state) in displayStates {
+            cancelRuntimeSave(for: key)
+            persistRuntime(state.runtime, for: state.wallpaper)
+        }
+        persistStates()
     }
 
     private func persistRuntime(_ state: WallpaperRuntimeState, for wallpaper: WEWallpaper) {
-        let normalized = normalizedRuntime(state, for: wallpaper)
+        guard wallpaper.isValid else { return }
+        let normalized = Self.normalizedRuntime(state, for: wallpaper)
         guard let data = try? JSONEncoder().encode(normalized) else { return }
-        UserDefaults.standard.set(data, forKey: runtimeKey(for: wallpaper))
+        UserDefaults.standard.set(data, forKey: Self.runtimeKey(for: wallpaper))
         if ScreenSaverManager.shared.configuredWallpaperID() == wallpaper.id {
             try? ScreenSaverManager.shared.configure(
                 with: wallpaper,
@@ -243,31 +517,88 @@ class WallpaperViewModel: ObservableObject {
         }
     }
 
-    private func scheduleRuntimeSave() {
-        runtimeSaveWorkItem?.cancel()
-        let wallpaper = currentWallpaper
-        let state = runtime
+    private func scheduleRuntimeSave(for key: DisplayKey) {
+        runtimeSaveWorkItems[key]?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.persistRuntime(state, for: wallpaper)
+            guard let self else { return }
+            self.runtimeSaveWorkItems[key] = nil
+            guard let state = self.displayStates[key] else { return }
+            self.persistRuntime(state.runtime, for: state.wallpaper)
         }
-        runtimeSaveWorkItem = work
+        runtimeSaveWorkItems[key] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
-    private func schedulePlaybackPolicyApplication() {
-        playbackCommandWorkItem?.cancel()
+    private func cancelRuntimeSave(for key: DisplayKey) {
+        runtimeSaveWorkItems[key]?.cancel()
+        runtimeSaveWorkItems[key] = nil
+    }
+
+    private func persistStates() {
+        statesSaveWorkItem?.cancel()
+        statesSaveWorkItem = nil
+        writeStates()
+    }
+
+    private func scheduleStatesSave() {
+        statesSaveWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.applyPlaybackPolicy(self.currentPlaybackPolicy)
+            self.statesSaveWorkItem = nil
+            self.writeStates()
         }
-        playbackCommandWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0, execute: work)
+        statesSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func writeStates() {
+        var raw: [String: DisplayWallpaperState] = [:]
+        for (key, state) in displayStates {
+            raw[key.rawValue] = state
+        }
+        if let data = try? JSONEncoder().encode(raw) {
+            UserDefaults.standard.set(data, forKey: Self.assignmentsDefaultsKey)
+        }
+        let mainState = DisplayRegistry.shared.mainKey.flatMap { displayStates[$0] }
+        if let mainState, let data = try? JSONEncoder().encode(mainState.wallpaper) {
+            UserDefaults.standard.set(data, forKey: Self.legacyWallpaperDefaultsKey)
+        } else if mainState == nil {
+            UserDefaults.standard.removeObject(forKey: Self.legacyWallpaperDefaultsKey)
+        }
+    }
+
+    private static func loadPersistedStates() -> [DisplayKey: DisplayWallpaperState] {
+        guard let data = UserDefaults.standard.data(forKey: assignmentsDefaultsKey),
+              let raw = try? JSONDecoder().decode([String: DisplayWallpaperState].self, from: data)
+        else { return [:] }
+        var result: [DisplayKey: DisplayWallpaperState] = [:]
+        for (rawKey, stored) in raw {
+            guard FileManager.default.fileExists(
+                atPath: stored.wallpaper.wallpaperDirectory.path) else { continue }
+            let refreshed = WEWallpaper.load(from: stored.wallpaper.wallpaperDirectory)
+            guard refreshed.isValid, refreshed.kind != .unsupported else { continue }
+            result[DisplayKey(rawValue: rawKey)] = DisplayWallpaperState(
+                wallpaper: refreshed,
+                runtime: normalizedRuntime(stored.runtime, for: refreshed))
+        }
+        return result
+    }
+
+    private static func loadLegacyState() -> DisplayWallpaperState? {
+        guard let data = UserDefaults.standard.data(forKey: legacyWallpaperDefaultsKey),
+              let stored = try? JSONDecoder().decode(WEWallpaper.self, from: data),
+              FileManager.default.fileExists(atPath: stored.wallpaperDirectory.path)
+        else { return nil }
+        let refreshed = WEWallpaper.load(from: stored.wallpaperDirectory)
+        guard refreshed.isValid, refreshed.kind != .unsupported else { return nil }
+        return DisplayWallpaperState(wallpaper: refreshed,
+                                     runtime: loadPersistedRuntime(for: refreshed))
     }
 
     // MARK: 属性合并
 
     func effectiveProperties(for w: WEWallpaper) -> [String: WEProjectProperty] {
-        effectiveProperties(for: w, runtime: runtime)
+        effectiveProperties(for: w, runtime: runtime(for: selectedDisplayKey))
     }
 
     func effectiveProperties(for w: WEWallpaper,
@@ -279,11 +610,6 @@ class WallpaperViewModel: ObservableObject {
                 result[key] = prop
             }
         }
-        // A workshop preset may store file/directory values relative to its
-        // own overlay (for example "files/background.jpg"). Resolve those
-        // for both scene and web dependencies: many legacy web wallpapers
-        // prepend file:/// themselves and therefore cannot use a bare path
-        // relative to the dependency's entry page.
         if !w.assetOverlayDirectories.isEmpty {
             let baseProperties = loadBaseProperties(for: w)
             let presetKeys = Set(w.project.preset?.keys.map { $0 } ?? [])
@@ -312,8 +638,8 @@ class WallpaperViewModel: ObservableObject {
         return result
     }
 
-    private func normalizedRuntime(_ source: WallpaperRuntimeState,
-                                   for wallpaper: WEWallpaper) -> WallpaperRuntimeState {
+    private static func normalizedRuntime(_ source: WallpaperRuntimeState,
+                                          for wallpaper: WEWallpaper) -> WallpaperRuntimeState {
         var result = source
         let properties = wallpaper.project.general?.properties?.items ?? [:]
         for (key, value) in result.propertyOverrides {
@@ -346,252 +672,135 @@ class WallpaperViewModel: ObservableObject {
         return nil
     }
 
-    private func makeRenderOptions(for w: WEWallpaper,
-                                   runtime runtimeState: WallpaperRuntimeState? = nil) -> RenderOptions {
-        let state = runtimeState ?? runtime
-        let settings = AppDelegate.shared.globalSettingsViewModel.settings
-        var opts = RenderOptions()
-        opts.fps = globalFps
-        opts.enableSpectrum = enableSpectrum
-        opts.muted = state.muted || globalMuted || state.volume == 0 || currentPlaybackPolicy == .mute
-        opts.volume = state.volume * masterVolume
-        opts.speed = state.speed
-        opts.fillMode = state.fillMode
-        opts.userProperties = effectiveProperties(for: w, runtime: state)
-        opts.loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
-        switch settings.textureResolution {
-        case .highQuality: opts.renderScale = 1.0
-        case .automatic: opts.renderScale = 0.75
-        case .highPerformance: opts.renderScale = 0.5
-        }
-        switch settings.antiAliasing {
-        case .none: opts.msaaSamples = 1
-        case .msaa_x2: opts.msaaSamples = 2
-        case .msaa_x4: opts.msaaSamples = 4
-        case .msaa_x8: opts.msaaSamples = 8
-        }
-        return opts
-    }
-
-    private func displayID(for screenIndex: Int) -> CGDirectDisplayID? {
-        renderer.displayID(for: screenIndex)
-    }
-
-    private func apply(_ assignment: ScreenAssignment,
-                       to displayID: CGDirectDisplayID,
-                       options: RenderOptions) {
-        if currentPlaybackPolicy == .stop {
-            pendingScreenAssignments[displayID] = nil
-            commit(assignment, to: displayID)
-            return
-        }
-        let requestID = UUID()
-        pendingScreenAssignments[displayID] = requestID
-        let accepted = renderer.render(
-            assignment.wallpaper,
-            onDisplay: displayID,
-            options: options,
-            reuseActive: true
-        ) { [weak self] success in
-            guard let self,
-                  self.pendingScreenAssignments[displayID] == requestID else { return }
-            self.pendingScreenAssignments[displayID] = nil
-            guard success else { return }
-            self.commit(assignment, to: displayID)
-        }
-        if !accepted, pendingScreenAssignments[displayID] == requestID {
-            pendingScreenAssignments[displayID] = nil
-        }
-    }
-
-    private func commit(_ assignment: ScreenAssignment,
-                        to displayID: CGDirectDisplayID) {
-        guard let screenIndex = renderer.screenIndex(for: displayID) else { return }
-        screenAssignments[displayID] = assignment
-        currentByScreen[screenIndex] = assignment.wallpaper
-        DesktopOverrideService.shared.scheduleCapture(
-            forDisplay: displayID, wallpaper: assignment.wallpaper)
-    }
-
-    @objc private func displayTopologyChanged() {
-        let displayIDs = Set(NSScreen.screens.compactMap {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
-                .uint32Value
-        })
-        renderer.stopDisplays(except: displayIDs)
-        pendingScreenAssignments = pendingScreenAssignments.filter {
-            displayIDs.contains($0.key)
-        }
-        screenAssignments = screenAssignments.filter { displayIDs.contains($0.key) }
-
-        if let mainDisplayID = displayID(for: 0) {
-            let inherited = screenAssignments[mainDisplayID] ?? (currentWallpaper.isValid
-                ? ScreenAssignment(wallpaper: currentWallpaper, runtime: runtime)
-                : nil)
-            if let inherited {
-                for displayID in displayIDs where screenAssignments[displayID] == nil {
-                    apply(inherited, to: displayID,
-                          options: makeRenderOptions(for: inherited.wallpaper,
-                                                     runtime: inherited.runtime))
-                }
-            }
-        }
-
-        currentByScreen = Dictionary(uniqueKeysWithValues: screenAssignments.compactMap { displayID, assignment in
-            renderer.screenIndex(for: displayID).map { ($0, assignment.wallpaper) }
-        })
-        DesktopOverrideService.shared.scheduleCaptureForAllScreens()
-        if !stoppedByPlaybackPolicy {
-            applyPlaybackPolicy(currentPlaybackPolicy, force: true)
-        }
-    }
-
-    // MARK: 应用壁纸
-
-    private func applyCurrent() {
-        propertyCommandWorkItem?.cancel()
-        pendingPropertyCommands.removeAll(keepingCapacity: true)
-        let w = currentWallpaper
-        guard w.isValid, w.kind != .unsupported else {
-            renderer.stopAll()
-            screenAssignments.removeAll()
-            return
-        }
-        runtime = loadRuntime(for: w)
-        suppressPlaybackSideEffects = true
-        playVolume = runtime.volume
-        playRate = runtime.speed
-        suppressPlaybackSideEffects = false
-        let opts = makeRenderOptions(for: w)
-        guard let displayID = displayID(for: 0) else { return }
-        screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: runtime)
-        if currentPlaybackPolicy != .stop {
-            renderer.render(w, onDisplay: displayID, options: opts)
-        }
-        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
-        DesktopOverrideService.shared.scheduleCapture(forDisplay: displayID, wallpaper: w)
-    }
-
-    func reapplyCurrent() {
-        propertyCommandWorkItem?.cancel()
-        pendingPropertyCommands.removeAll(keepingCapacity: true)
-        let w = currentWallpaper
-        guard w.isValid else { return }
-        runtime = loadRuntime(for: w)
-        suppressPlaybackSideEffects = true
-        playVolume = runtime.volume
-        playRate = runtime.speed
-        suppressPlaybackSideEffects = false
-        guard let displayID = displayID(for: 0) else { return }
-        screenAssignments[displayID] = ScreenAssignment(wallpaper: w, runtime: runtime)
-        if currentPlaybackPolicy != .stop {
-            renderer.render(w, onDisplay: displayID, options: makeRenderOptions(for: w))
-        }
-        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
-    }
-
-    func applyToAllScreens() {
-        let w = currentWallpaper
-        guard w.isValid, w.kind != .unsupported else { return }
-        currentWallpaper = w
-        for screen in NSScreen.screens.indices.dropFirst() {
-            guard let displayID = displayID(for: screen) else { continue }
-            var opts = makeRenderOptions(for: w)
-            opts.volume = runtime.volume * Float(masterVolume)
-            opts.muted = runtime.muted || globalMuted
-            opts.speed = runtime.speed
-            opts.fillMode = runtime.fillMode
-            apply(ScreenAssignment(wallpaper: w, runtime: runtime),
-                  to: displayID, options: opts)
-        }
-        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
-    }
-
-    func stopWallpaper() {
-        renderer.stopAll()
-        pendingScreenAssignments.removeAll()
-        screenAssignments.removeAll()
-        stoppedByPlaybackPolicy = false
-        currentWallpaper = WallpaperViewModel.invalidWallpaper
-    }
-
-    func applyOnScreen(_ w: WEWallpaper, screen: Int) {
-        guard let displayID = displayID(for: screen) else { return }
-        applyOnDisplay(w, displayID: displayID)
-    }
-
-    func applyOnDisplay(_ w: WEWallpaper, displayID targetDisplayID: CGDirectDisplayID) {
-        guard w.isValid, w.kind != .unsupported else { return }
-        guard renderer.screenIndex(for: targetDisplayID) != nil else { return }
-        if targetDisplayID == CGMainDisplayID() {
-            currentWallpaper = w
-        } else {
-            let saved = loadRuntime(for: w)
-            var opts = makeRenderOptions(for: w, runtime: saved)
-            opts.volume = saved.volume * Float(masterVolume)
-            opts.muted = saved.muted || globalMuted
-            opts.speed = saved.speed
-            opts.fillMode = saved.fillMode
-            apply(ScreenAssignment(wallpaper: w, runtime: saved),
-                  to: targetDisplayID, options: opts)
-            applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: targetDisplayID)
-        }
-    }
-
     // MARK: 属性实时下发
 
     func setProperty(key: String, value: WEPropertyValue) {
-        guard var prop = currentWallpaper.project.general?.properties?.items[key] else { return }
+        setProperty(key: key, value: value, for: selectedDisplayKey)
+    }
+
+    func setProperty(key propertyKey: String, value: WEPropertyValue, for displayKey: DisplayKey) {
+        guard let state = displayStates[displayKey],
+              var prop = state.wallpaper.project.general?.properties?.items[propertyKey] else { return }
         let normalizedValue = prop.normalizedComboValue(value)
         prop.value = normalizedValue
-        runtime.propertyOverrides[key] = normalizedValue
-        scheduleRuntimeSave()
+        mutateRuntime(for: displayKey) { $0.propertyOverrides[propertyKey] = normalizedValue }
 
-        switch currentWallpaper.kind {
+        switch state.wallpaper.kind {
         case .web, .scene:
-            // 场景与网页渲染器都支持实时属性通道：颜色 / 透明度 / 开关(可见性) /
-            // 下拉(shader combo & 脚本属性) / 文本 / 字号 均即时生效，无需重启进程。
-            pendingPropertyCommands[key] = prop
-            propertyCommandWorkItem?.cancel()
-            let wallpaperID = currentWallpaper.id
+            pendingPropertyCommands[displayKey, default: [:]][propertyKey] = prop
+            propertyCommandWorkItems[displayKey]?.cancel()
+            let wallpaperID = state.wallpaper.id
             let work = DispatchWorkItem { [weak self] in
-                guard let self, self.currentWallpaper.id == wallpaperID else { return }
-                let commands = self.pendingPropertyCommands
-                self.pendingPropertyCommands.removeAll(keepingCapacity: true)
+                guard let self else { return }
+                self.propertyCommandWorkItems[displayKey] = nil
+                let commands = self.pendingPropertyCommands.removeValue(forKey: displayKey) ?? [:]
+                guard self.displayStates[displayKey]?.wallpaper.id == wallpaperID,
+                      let displayID = DisplayRegistry.shared.displayID(for: displayKey) else { return }
                 for (key, property) in commands {
-                    self.renderer.setProperty(key: key, property: property)
+                    self.renderer.setProperty(key: key, property: property, onDisplay: displayID)
                 }
             }
-            propertyCommandWorkItem = work
+            propertyCommandWorkItems[displayKey] = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0, execute: work)
         case .video, .unsupported:
             break
         }
     }
 
+    private func cancelPendingProperties(for key: DisplayKey) {
+        propertyCommandWorkItems[key]?.cancel()
+        propertyCommandWorkItems[key] = nil
+        pendingPropertyCommands[key] = nil
+    }
+
     func setFillMode(_ mode: FillMode) {
-        runtime.fillMode = mode
-        renderer.setFillMode(mode)
-        scheduleRuntimeSave()
+        setFillMode(mode, for: selectedDisplayKey)
+    }
+
+    func setFillMode(_ mode: FillMode, for key: DisplayKey) {
+        guard displayStates[key] != nil else { return }
+        mutateRuntime(for: key) { $0.fillMode = mode }
+        guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
+        renderer.setFillMode(mode, onDisplay: displayID)
     }
 
     func resetProperties() {
-        runtime = WallpaperRuntimeState()
-        saveRuntime()
-        suppressPlaybackSideEffects = true
-        playVolume = runtime.volume
-        playRate = runtime.speed
-        suppressPlaybackSideEffects = false
-        reapplyCurrent()
+        let key = selectedDisplayKey
+        guard var state = displayStates[key] else { return }
+        state.runtime = WallpaperRuntimeState()
+        displayStates[key] = state
+        lastAppliedPlayback[key] = nil
+        persistStates()
+        cancelRuntimeSave(for: key)
+        persistRuntime(state.runtime, for: state.wallpaper)
+        reapply(for: key)
+        syncStatusItems()
+    }
+
+    // MARK: 播放控制
+
+    private func mutateRuntime(for key: DisplayKey,
+                               _ transform: (inout WallpaperRuntimeState) -> Void) {
+        guard var state = displayStates[key] else { return }
+        transform(&state.runtime)
+        displayStates[key] = state
+        scheduleStatesSave()
+        scheduleRuntimeSave(for: key)
+    }
+
+    func setVolume(_ value: Float, for key: DisplayKey) {
+        guard displayStates[key] != nil else { return }
+        lastVolumeByDisplay[key] = runtime(for: key).volume
+        mutateRuntime(for: key) { $0.volume = value }
+        schedulePlaybackPolicyApplication(for: key)
+        syncStatusItems()
+    }
+
+    func setSpeed(_ value: Float, for key: DisplayKey) {
+        guard displayStates[key] != nil else { return }
+        lastRateByDisplay[key] = runtime(for: key).speed
+        mutateRuntime(for: key) { $0.speed = value }
+        schedulePlaybackPolicyApplication(for: key)
+        syncStatusItems()
+    }
+
+    func muteAll() {
+        for key in Array(displayStates.keys) { setVolume(0, for: key) }
+    }
+
+    func unmuteAll() {
+        for key in Array(displayStates.keys) {
+            let remembered = lastVolumeByDisplay[key] ?? 1
+            setVolume(remembered == 0 ? 1 : remembered, for: key)
+        }
+    }
+
+    func pauseAll() {
+        for key in Array(displayStates.keys) { setSpeed(0, for: key) }
+    }
+
+    func resumeAll() {
+        for key in Array(displayStates.keys) {
+            let remembered = lastRateByDisplay[key] ?? 1
+            setSpeed(remembered == 0 ? 1 : remembered, for: key)
+        }
+    }
+
+    private func schedulePlaybackPolicyApplication(for key: DisplayKey) {
+        playbackCommandWorkItems[key]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.playbackCommandWorkItems[key] = nil
+            self.applyPlaybackPolicy(self.currentPlaybackPolicy, for: key)
+        }
+        playbackCommandWorkItems[key] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0, execute: work)
     }
 
     func reapplyVolume() {
         applyPlaybackPolicy(currentPlaybackPolicy)
     }
 
-    /// Re-push the frame rate after the user changes it. `force` because only
-    /// the fps component of the applied state changed, and the policy action
-    /// itself is unchanged.
     func reapplyFrameRate() {
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
@@ -602,87 +811,87 @@ class WallpaperViewModel: ObservableObject {
                 renderer.stopAll()
                 stoppedByPlaybackPolicy = true
             }
-            lastAppliedPlaybackState = nil
+            lastAppliedPlayback.removeAll()
             return
         }
 
         if stoppedByPlaybackPolicy {
             stoppedByPlaybackPolicy = false
-            for (displayID, assignment) in screenAssignments.sorted(by: { $0.key < $1.key }) {
-                renderer.render(assignment.wallpaper, onDisplay: displayID,
-                                options: makeRenderOptions(for: assignment.wallpaper,
-                                                           runtime: assignment.runtime))
+            lastAppliedPlayback.removeAll()
+            for info in DisplayRegistry.shared.connected {
+                guard let state = displayStates[info.key] else { continue }
+                apply(state, to: info.displayID, key: info.key, reuseActive: true)
             }
-            lastAppliedPlaybackState = nil
         }
 
-        // The frame rate the app wants right now: the configured rate, reduced
-        // when the policy centre reports thermal or low-power pressure.
+        for info in DisplayRegistry.shared.connected {
+            applyPlaybackPolicy(action, for: info.key, force: force)
+        }
+    }
+
+    private func applyPlaybackPolicy(_ action: GSPlayback, for key: DisplayKey,
+                                     force: Bool = false) {
+        guard let displayID = DisplayRegistry.shared.displayID(for: key),
+              let state = displayStates[key] else { return }
+        if action == .stop {
+            renderer.stop(displayID: displayID)
+            lastAppliedPlayback[key] = nil
+            return
+        }
+
+        let runtimeState = state.runtime
         let throttledFps = AppDelegate.shared.globalSettingsViewModel.throttledFps(base: globalFps)
-        let paused = playRate == 0 || action == .pause
+        let paused = runtimeState.speed == 0 || action == .pause
         let powerState: MiragePowerState = paused ? .pause
             : (throttledFps < globalFps ? .throttle : .run)
 
-        let state = AppliedPlaybackState(
+        let applied = AppliedPlaybackState(
             paused: paused,
-            muted: runtime.muted || globalMuted || runtime.volume == 0 || action == .mute,
-            volume: runtime.volume * masterVolume,
-            speed: playRate,
+            muted: runtimeState.muted || globalMuted || runtimeState.volume == 0 || action == .mute,
+            volume: runtimeState.volume * masterVolume,
+            speed: runtimeState.speed,
             powerState: powerState,
             fps: throttledFps
         )
-        guard force || state != lastAppliedPlaybackState else { return }
+        guard force || applied != lastAppliedPlayback[key] else { return }
 
-        if state.paused {
-            renderer.setPower(state.powerState, fps: state.fps)
-            renderer.setVolume(state.volume)
-            renderer.setMuted(state.muted)
+        if applied.paused {
+            renderer.setPower(applied.powerState, fps: applied.fps, onDisplay: displayID)
+            renderer.setVolume(applied.volume, onDisplay: displayID)
+            renderer.setMuted(applied.muted, onDisplay: displayID)
         } else {
-            renderer.setVolume(state.volume)
-            renderer.setMuted(state.muted)
-            renderer.setSpeed(state.speed)
-            renderer.setPower(state.powerState, fps: state.fps)
+            renderer.setVolume(applied.volume, onDisplay: displayID)
+            renderer.setMuted(applied.muted, onDisplay: displayID)
+            renderer.setSpeed(applied.speed, onDisplay: displayID)
+            renderer.setPower(applied.powerState, fps: applied.fps, onDisplay: displayID)
         }
-        lastAppliedPlaybackState = state
+        lastAppliedPlayback[key] = applied
     }
 
-    private func applyPlaybackPolicy(_ action: GSPlayback, runtime: WallpaperRuntimeState,
-                                     on displayID: CGDirectDisplayID) {
-        if action == .stop {
-            renderer.stop(displayID: displayID)
-            return
-        }
-        let paused = runtime.speed == 0 || action == .pause
-        let muted = runtime.muted || globalMuted || runtime.volume == 0 || action == .mute
-        let volume = runtime.volume * masterVolume
-        let throttledFps = AppDelegate.shared.globalSettingsViewModel.throttledFps(base: globalFps)
-        let powerState: MiragePowerState = paused ? .pause
-            : (throttledFps < globalFps ? .throttle : .run)
+    // MARK: 状态栏菜单项文字同步
 
-        if paused {
-            renderer.setPower(powerState, fps: throttledFps, onDisplay: displayID)
-            renderer.setVolume(volume, onDisplay: displayID)
-            renderer.setMuted(muted, onDisplay: displayID)
-        } else {
-            renderer.setVolume(volume, onDisplay: displayID)
-            renderer.setMuted(muted, onDisplay: displayID)
-            renderer.setSpeed(runtime.speed, onDisplay: displayID)
-            renderer.setPower(powerState, fps: throttledFps, onDisplay: displayID)
+    private func syncStatusItems() {
+        let active = displayStates.filter { DisplayRegistry.shared.displayID(for: $0.key) != nil }
+        let muted = !active.isEmpty && active.values.allSatisfy {
+            $0.runtime.muted || $0.runtime.volume == 0
         }
+        let paused = !active.isEmpty && active.values.allSatisfy { $0.runtime.speed == 0 }
+        syncStatusPauseItem(isPaused: paused)
+        syncStatusMuteItem(isMuted: muted)
     }
-
-    // MARK: 状态栏菜单项文字同步（保留原 UI 行为）
 
     private func syncStatusPauseItem(isPaused: Bool) {
         guard let menu = AppDelegate.shared.statusItem?.menu else { return }
+        let pauseTitle = L("暂停")
+        let resumeTitle = L("继续")
         for item in menu.items {
-            if isPaused, item.title == "暂停" {
-                item.title = "继续"
+            if isPaused, item.title == pauseTitle {
+                item.title = resumeTitle
                 item.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
                 item.action = #selector(AppDelegate.resume)
                 item.target = AppDelegate.shared
-            } else if !isPaused, item.title == "继续" {
-                item.title = "暂停"
+            } else if !isPaused, item.title == resumeTitle {
+                item.title = pauseTitle
                 item.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: nil)
                 item.action = #selector(AppDelegate.pause)
                 item.target = AppDelegate.shared
@@ -692,13 +901,19 @@ class WallpaperViewModel: ObservableObject {
 
     private func syncStatusMuteItem(isMuted: Bool) {
         guard let menu = AppDelegate.shared.statusItem?.menu else { return }
+        let muteTitle = L("静音")
+        let unmuteTitle = L("取消静音")
         for (i, item) in menu.items.enumerated() {
-            if isMuted, item.title == "静音" {
-                menu.items[i] = .init(title: "取消静音", systemImage: "speaker.fill",
-                                      action: #selector(AppDelegate.unmute), keyEquivalent: "")
-            } else if !isMuted, item.title == "取消静音" {
-                menu.items[i] = .init(title: "静音", systemImage: "speaker.slash.fill",
-                                      action: #selector(AppDelegate.mute), keyEquivalent: "")
+            if isMuted, item.title == muteTitle {
+                let replacement = NSMenuItem(title: unmuteTitle, systemImage: "speaker.fill",
+                                             action: #selector(AppDelegate.unmute), keyEquivalent: "")
+                replacement.target = AppDelegate.shared
+                menu.items[i] = replacement
+            } else if !isMuted, item.title == unmuteTitle {
+                let replacement = NSMenuItem(title: muteTitle, systemImage: "speaker.slash.fill",
+                                             action: #selector(AppDelegate.mute), keyEquivalent: "")
+                replacement.target = AppDelegate.shared
+                menu.items[i] = replacement
             }
         }
     }

@@ -41,7 +41,6 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("FilterReveal") var isFilterReveal = false
     @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 170
     
-    @Published var isDisplaySettingsReveal = false
     @Published var importAlertPresented = false
     @Published var isStaging = false
     
@@ -62,6 +61,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
         enum Action {
             case applyToCurrent
             case applyOnDisplay(CGDirectDisplayID)
+            case applyToAllDisplays
         }
         let id = UUID()
         let wallpaper: WEWallpaper

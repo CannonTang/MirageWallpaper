@@ -75,6 +75,8 @@ struct UnsafeWallpaper: View {
                         vm.currentWallpaper = wallpaper
                     case .applyOnDisplay(let displayID):
                         vm.applyOnDisplay(wallpaper, displayID: displayID)
+                    case .applyToAllDisplays:
+                        vm.applyToAllDisplays(wallpaper)
                     }
 
                     dismiss()

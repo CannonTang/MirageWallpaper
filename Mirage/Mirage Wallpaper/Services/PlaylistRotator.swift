@@ -244,11 +244,7 @@ final class PlaylistRotator {
         PlaylistTransitionOverlay.shared.present(
             on: screen, duration: duration, kind: settings.transition
         ) {
-            if self.screen == 0 {
-                vm.currentWallpaper = wallpaper
-            } else {
-                vm.applyOnScreen(wallpaper, screen: self.screen)
-            }
+            vm.applyOnScreen(wallpaper, screen: self.screen)
         }
     }
 }
