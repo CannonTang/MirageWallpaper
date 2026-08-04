@@ -495,6 +495,139 @@ void TestEffectAndMaterialCompatibility() {
           "effect material property writes resolve aliases and preserve Vec4 values");
 }
 
+void TestTimelineAnimationCompatibility() {
+    auto playback = std::make_shared<sr::SceneAnimationPlayback>(
+        "face", 10.0f, 10, "single", false, true);
+    sr::SceneAnimationCurve alpha;
+    alpha.fps      = 10.0f;
+    alpha.length   = 10;
+    alpha.mode     = "single";
+    alpha.playback = playback;
+    alpha.c0.push_back({ .frame = 0, .value = 0.0f });
+    alpha.c0.push_back({ .frame = 10, .value = 1.0f });
+
+    sr::SceneNode node;
+    node.SetAlphaAnimation(std::move(alpha));
+
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let step = 0;
+            export function update() {
+                const animation = thisLayer.getAnimation('face');
+                if (step === 0) {
+                    animation.rate = 2;
+                    animation.setFrame(4);
+                    animation.play();
+                    ++step;
+                    return new Vec4(animation.fps, animation.frameCount,
+                        animation.duration, animation.name === 'face' && animation.isPlaying()
+                            ? animation.getFrame() : -1);
+                }
+                if (step === 1) {
+                    animation.pause();
+                    ++step;
+                    return new Vec4(animation.getFrame(), animation.isPlaying() ? 1 : 0,
+                        animation.rate, 0);
+                }
+                animation.stop();
+                return new Vec4(animation.getFrame(), animation.isPlaying() ? 1 : 0, 0, 0);
+            }
+        )JS",
+        "test/timeline_animation_compatibility",
+        sr::script::FieldKind::Vec4,
+        Parse("{}"),
+        Parse("\"0 0 0 0\""),
+        &node);
+    Check(script != nullptr, "timeline animation script compiles");
+    if (! script) return;
+
+    runtime.TickAll();
+    const auto* metadata = std::get_if<sr::script::Vec4Value>(&script->last_value());
+    Check(metadata && std::abs(metadata->x - 10.0) < 0.001 &&
+              std::abs(metadata->y - 10.0) < 0.001 &&
+              std::abs(metadata->z - 1.0) < 0.001 &&
+              std::abs(metadata->w - 4.0) < 0.001,
+          "getAnimation exposes live metadata and playback state");
+
+    node.TickFieldAnimations(0.0);
+    node.TickFieldAnimations(0.25);
+    Check(std::abs(node.UserAlpha() - 0.9f) < 0.001,
+          "script-controlled rate and frame drive the field curve");
+
+    runtime.TickAll();
+    const auto* paused = std::get_if<sr::script::Vec4Value>(&script->last_value());
+    Check(paused && std::abs(paused->x - 9.0) < 0.001 && paused->y == 0.0 &&
+              std::abs(paused->z - 2.0) < 0.001,
+          "animation pause preserves frame and rate");
+
+    runtime.TickAll();
+    const auto* stopped = std::get_if<sr::script::Vec4Value>(&script->last_value());
+    Check(stopped && stopped->x == 0.0 && stopped->y == 0.0,
+          "animation stop resets the script-visible frame");
+}
+
+void TestCursorClickOrder() {
+    sr::SceneNode node({ 960.0f, 540.0f, 0.0f },
+                       { 1.0f, 1.0f, 1.0f },
+                       { 0.0f, 0.0f, 0.0f });
+    node.SetSize({ 100.0f, 100.0f });
+
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let order = 0;
+            export function cursorDown() { order = order * 10 + 1; }
+            export function cursorUp() { order = order * 10 + 2; }
+            export function cursorClick() { order = order * 10 + 3; }
+            export function update() { return order; }
+        )JS",
+        "test/cursor_click_order",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        &node);
+    Check(script != nullptr, "cursor event script compiles");
+    if (! script) return;
+
+    sr::script::FrameInputs input;
+    input.cursor_x             = 0.5f;
+    input.cursor_y             = 0.5f;
+    input.cursor_in_window     = true;
+    input.mouse_buttons_down   = 1;
+    input.mouse_buttons_pressed = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    const auto* pressed = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(pressed && pressed->v == 1.0, "mouse press dispatches cursorDown without cursorClick");
+
+    input.mouse_buttons_down     = 0;
+    input.mouse_buttons_pressed  = 0;
+    input.mouse_buttons_released = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    const auto* released = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(released && released->v == 123.0,
+          "same-node release dispatches cursorUp before cursorClick");
+
+    input.mouse_buttons_down     = 1;
+    input.mouse_buttons_pressed  = 1;
+    input.mouse_buttons_released = 0;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+
+    input.cursor_x               = 0.0f;
+    input.cursor_y               = 0.0f;
+    input.mouse_buttons_down     = 0;
+    input.mouse_buttons_pressed  = 0;
+    input.mouse_buttons_released = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    const auto* outside = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(outside && outside->v == 12312.0,
+          "release outside the pressed node does not dispatch cursorClick");
+}
+
 } // namespace
 
 int main() {
@@ -510,6 +643,8 @@ int main() {
     TestDynamicLayerCompatibility();
     TestParticleInstanceCompatibility();
     TestEffectAndMaterialCompatibility();
+    TestTimelineAnimationCompatibility();
+    TestCursorClickOrder();
     if (g_failures == 0) std::cout << "ScriptCompatibilityRegression: ok\n";
     return g_failures == 0 ? 0 : 1;
 }

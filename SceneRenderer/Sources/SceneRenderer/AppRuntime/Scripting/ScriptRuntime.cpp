@@ -1758,9 +1758,12 @@ function __wwCreateAnimationStub() {
     let frame = 0, playing = false;
     const o = {
         rate: 1,
+        fps: 30,
         frameCount: 1,
+        duration: 0,
+        name: '',
         play()     { playing = true;  },
-        stop()     { playing = false; },
+        stop()     { playing = false; frame = 0; },
         pause()    { playing = false; },
         setFrame(n){ frame = Math.max(0, n | 0); },
         getFrame() { return frame;    },
@@ -3059,10 +3062,6 @@ JSValue NodeGetTextureAnimation(JSContext* ctx, JSValueConst this_val, int, JSVa
     return obj;
 }
 
-// Sprite-image .getAnimation() and puppet-bone .getAnimationLayer(name).
-// Renderer doesn't yet expose either through the C-class, so route both
-// through the JS-side __wwCreateAnimationStub which gives scripts a
-// no-op handle with `rate` / play / stop / isPlaying.
 JSValue NodeGetAnimationStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue f = JS_GetPropertyStr(ctx, g, "__wwCreateAnimationStub");
@@ -3070,6 +3069,134 @@ JSValue NodeGetAnimationStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JS_FreeValue(ctx, f);
     JS_FreeValue(ctx, g);
     return r;
+}
+
+static JSClassID s_animation_class_id = 0;
+
+struct AnimationHandle {
+    std::shared_ptr<sr::SceneAnimationPlayback> playback;
+};
+
+void AnimationFinalizer(JSRuntime*, JSValue value) {
+    delete static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
+}
+
+JSClassDef s_animation_class_def {
+    .class_name = "WWAnimation",
+    .finalizer  = AnimationFinalizer,
+};
+
+sr::SceneAnimationPlayback* GetAnimationPlayback(JSValueConst value) {
+    auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
+    return handle != nullptr ? handle->playback.get() : nullptr;
+}
+
+JSValue AnimationGetFps(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Fps() : 30.0);
+}
+
+JSValue AnimationGetFrameCount(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewInt32(ctx, playback != nullptr ? playback->FrameCount() : 1);
+}
+
+JSValue AnimationGetDuration(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Duration() : 0.0);
+}
+
+JSValue AnimationGetName(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    if (playback == nullptr) return JS_NewString(ctx, "");
+    return JS_NewStringLen(ctx, playback->Name().data(), playback->Name().size());
+}
+
+JSValue AnimationGetRate(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Rate() : 1.0);
+}
+
+JSValue AnimationSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    double rate = 1.0;
+    if (JS_ToFloat64(ctx, &rate, value) == 0 && std::isfinite(rate)) {
+        if (auto* playback = GetAnimationPlayback(this_val)) playback->SetRate(rate);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationPlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetAnimationPlayback(this_val)) playback->Play();
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetAnimationPlayback(this_val)) playback->Stop();
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationPause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetAnimationPlayback(this_val)) playback->Pause();
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationSetFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    double frame = 0.0;
+    if (JS_ToFloat64(ctx, &frame, argv[0]) == 0) {
+        if (auto* playback = GetAnimationPlayback(this_val)) playback->SetFrame(frame);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationGetFrame(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Frame() : 0.0);
+}
+
+JSValue AnimationIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewBool(ctx, playback != nullptr && playback->IsPlaying());
+}
+
+const JSCFunctionListEntry s_animation_proto_funcs[] = {
+    JS_CGETSET_DEF("fps", AnimationGetFps, NodeSetIgnore),
+    JS_CGETSET_DEF("frameCount", AnimationGetFrameCount, NodeSetIgnore),
+    JS_CGETSET_DEF("duration", AnimationGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("name", AnimationGetName, NodeSetIgnore),
+    JS_CGETSET_DEF("rate", AnimationGetRate, AnimationSetRate),
+    JS_CFUNC_DEF("play", 0, AnimationPlay),
+    JS_CFUNC_DEF("stop", 0, AnimationStop),
+    JS_CFUNC_DEF("pause", 0, AnimationPause),
+    JS_CFUNC_DEF("setFrame", 1, AnimationSetFrame),
+    JS_CFUNC_DEF("getFrame", 0, AnimationGetFrame),
+    JS_CFUNC_DEF("isPlaying", 0, AnimationIsPlaying),
+};
+
+void InitAnimationClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_animation_class_id == 0) JS_NewClassID(rt, &s_animation_class_id);
+    JS_NewClass(rt, s_animation_class_id, &s_animation_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx,
+                               proto,
+                               s_animation_proto_funcs,
+                               sizeof(s_animation_proto_funcs) /
+                                   sizeof(s_animation_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_animation_class_id, proto);
+}
+
+JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* node = GetLayerNode(this_val);
+    if (node == nullptr || argc < 1) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (name == nullptr) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    auto playback = node->FindAnimation(name);
+    JS_FreeCString(ctx, name);
+    if (! playback) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    JSValue object = JS_NewObjectClass(ctx, s_animation_class_id);
+    if (JS_IsException(object)) return object;
+    JS_SetOpaque(object, new AnimationHandle { .playback = std::move(playback) });
+    return object;
 }
 
 static JSClassID s_video_texture_class_id = 0;
@@ -3226,7 +3353,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getBoneTransform", 1, NodeGetBoneTransform),
     JS_CFUNC_DEF("getTextureAnimation", 0, NodeGetTextureAnimation),
     JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTexture),
-    JS_CFUNC_DEF("getAnimation", 0, NodeGetAnimationStub),
+    JS_CFUNC_DEF("getAnimation", 1, NodeGetAnimation),
     JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationStub),
     JS_CFUNC_DEF("createLayer", 1, NodeSceneCreateLayer),
     JS_CFUNC_DEF("destroyLayer", 1, NodeSceneDestroyLayer),
@@ -3421,6 +3548,7 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
     InitEffectClass(m_impl->ctx, m_impl->rt);
     InitMaterialClass(m_impl->ctx, m_impl->rt);
     InitTexAnimClass(m_impl->ctx, m_impl->rt);
+    InitAnimationClass(m_impl->ctx, m_impl->rt);
     InitVideoTextureClass(m_impl->ctx, m_impl->rt);
     InstallEngineGlobal(m_impl->ctx);
     // Bootstrap created stub `thisLayer` / `thisScene` on globalThis.
@@ -3704,8 +3832,6 @@ void JsRuntime::TickAll() {
                     I->captured_buttons |= (1u << b);
                     InvokeEventCallback(
                         ctx, I->module_ns, "cursorDown", ensure_ev(b), m_impl.get(), I->sha);
-                    InvokeEventCallback(
-                        ctx, I->module_ns, "cursorClick", ensure_ev(b), m_impl.get(), I->sha);
                 }
             }
         }
@@ -3718,6 +3844,10 @@ void JsRuntime::TickAll() {
                 if (ending & (1u << b)) {
                     InvokeEventCallback(
                         ctx, I->module_ns, "cursorUp", ensure_ev(b), m_impl.get(), I->sha);
+                    if (over_node) {
+                        InvokeEventCallback(
+                            ctx, I->module_ns, "cursorClick", ensure_ev(b), m_impl.get(), I->sha);
+                    }
                 }
             }
             I->captured_buttons &= ~btn_release;

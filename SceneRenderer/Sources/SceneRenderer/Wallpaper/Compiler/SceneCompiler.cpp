@@ -760,18 +760,68 @@ void AssignCurve(SceneAnimationCurve& dst, const wpscene::FieldBindings& binding
     if (it != bindings.animations.end()) dst = ToSceneAnimationCurve(it->second);
 }
 
+std::optional<std::string> AnimationLinkKey(const Json& link) {
+    std::string key;
+    if (! GetJsonValue(link, "key", key, false) || key.empty()) return std::nullopt;
+    return key;
+}
+
 void AssignNodeFieldAnimations(SceneNode& node, const wpscene::FieldBindings& bindings) {
-    auto origin_it = bindings.animations.find("origin");
-    if (origin_it != bindings.animations.end())
-        node.SetOriginAnimation(ToSceneAnimationCurve(origin_it->second));
-    auto scale_it = bindings.animations.find("scale");
-    if (scale_it != bindings.animations.end())
-        node.SetScaleAnimation(ToSceneAnimationCurve(scale_it->second));
-    auto angles_it = bindings.animations.find("angles");
-    if (angles_it != bindings.animations.end())
-        node.SetRotationAnimation(ToSceneAnimationCurve(angles_it->second));
-    auto it = bindings.animations.find("alpha");
-    if (it != bindings.animations.end()) node.SetAlphaAnimation(ToSceneAnimationCurve(it->second));
+    std::unordered_map<std::string, std::string> parents;
+    for (const auto& [field, animation] : bindings.animations) {
+        if (auto children = animation.options.children.as_array(); children.is_some()) {
+            for (const auto& child : **children) {
+                if (auto key = AnimationLinkKey(child)) parents[*key] = field;
+            }
+        }
+    }
+    for (const auto& [field, animation] : bindings.animations) {
+        if (auto parent = AnimationLinkKey(animation.options.parent)) parents[field] = *parent;
+    }
+
+    auto root_field = [&](std::string field) {
+        std::unordered_set<std::string> visited;
+        while (visited.insert(field).second) {
+            auto it = parents.find(field);
+            if (it == parents.end() || ! bindings.animations.contains(it->second)) break;
+            field = it->second;
+        }
+        return field;
+    };
+
+    std::unordered_map<std::string, std::shared_ptr<SceneAnimationPlayback>> playbacks;
+    auto make_curve = [&](std::string_view field) -> std::optional<SceneAnimationCurve> {
+        auto it = bindings.animations.find(std::string(field));
+        if (it == bindings.animations.end()) return std::nullopt;
+        auto curve = ToSceneAnimationCurve(it->second);
+        auto root  = root_field(std::string(field));
+        auto root_it = bindings.animations.find(root);
+        const auto& source = root_it != bindings.animations.end() ? root_it->second : it->second;
+        if (root != field) {
+            curve.fps      = source.options.fps;
+            curve.length   = source.options.length;
+            curve.mode     = source.options.mode;
+            curve.wraploop = source.options.wraploop;
+        }
+        if (! source.options.name.empty() || source.options.startpaused) {
+            auto& playback = playbacks[root];
+            if (! playback) {
+                playback = std::make_shared<SceneAnimationPlayback>(source.options.name,
+                                                                    source.options.fps,
+                                                                    source.options.length,
+                                                                    source.options.mode,
+                                                                    source.options.wraploop,
+                                                                    source.options.startpaused);
+            }
+            curve.playback = playback;
+        }
+        return curve;
+    };
+
+    if (auto curve = make_curve("origin")) node.SetOriginAnimation(std::move(*curve));
+    if (auto curve = make_curve("scale")) node.SetScaleAnimation(std::move(*curve));
+    if (auto curve = make_curve("angles")) node.SetRotationAnimation(std::move(*curve));
+    if (auto curve = make_curve("alpha")) node.SetAlphaAnimation(std::move(*curve));
 }
 
 std::optional<SceneCameraLookAtKey> ParseLookAtKey(const Json& json) {

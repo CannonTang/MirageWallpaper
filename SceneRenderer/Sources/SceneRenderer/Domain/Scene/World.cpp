@@ -718,16 +718,108 @@ RenderSceneSnapshot ExtractRenderSceneSnapshot(Scene& scene) {
 
 bool SceneAnimationCurve::Empty() const { return c0.empty() && c1.empty() && c2.empty(); }
 
+SceneAnimationPlayback::SceneAnimationPlayback(std::string name, float fps,
+                                               std::int32_t frame_count, std::string mode,
+                                               bool wraploop, bool start_paused)
+    : m_name(std::move(name)),
+      m_fps(fps > 0.0f ? fps : 30.0f),
+      m_frame_count(std::max(frame_count, 0)),
+      m_mode(std::move(mode)),
+      m_wraploop(wraploop),
+      m_status(start_paused ? SceneAnimationPlaybackStatus::Paused
+                            : SceneAnimationPlaybackStatus::Playing) {}
+
+bool SceneAnimationPlayback::Loops() const {
+    return m_wraploop || m_mode == "loop" || m_mode == "repeat";
+}
+
+float SceneAnimationPlayback::Frame() const {
+    if (m_frame_count <= 0) return 0.0f;
+    const double end = static_cast<double>(m_frame_count);
+    if (m_mode == "mirror") {
+        const double period = 2.0 * end;
+        double       folded = std::fmod(m_phase_frame, period);
+        if (folded < 0.0) folded += period;
+        return static_cast<float>(folded <= end ? folded : period - folded);
+    }
+    if (Loops()) {
+        double frame = std::fmod(m_phase_frame, end);
+        if (frame < 0.0) frame += end;
+        return static_cast<float>(frame);
+    }
+    return static_cast<float>(std::clamp(m_phase_frame, 0.0, end));
+}
+
+bool SceneAnimationPlayback::IsPlaying() const {
+    return m_status == SceneAnimationPlaybackStatus::Playing;
+}
+
+double SceneAnimationPlayback::Duration() const {
+    return m_fps > 0.0f ? static_cast<double>(m_frame_count) / m_fps : 0.0;
+}
+
+void SceneAnimationPlayback::Tick(double runtime) {
+    if (! m_last_runtime) {
+        m_last_runtime = runtime;
+        return;
+    }
+    const double delta = std::max(runtime - *m_last_runtime, 0.0);
+    m_last_runtime     = runtime;
+    if (! IsPlaying() || delta == 0.0 || m_frame_count <= 0) return;
+    m_phase_frame += delta * static_cast<double>(m_fps) * m_rate;
+    if (m_mode == "mirror" || Loops()) return;
+    const double end = static_cast<double>(m_frame_count);
+    if (m_rate >= 0.0 && m_phase_frame >= end) {
+        m_phase_frame = end;
+        m_status      = SceneAnimationPlaybackStatus::Completed;
+    } else if (m_rate < 0.0 && m_phase_frame <= 0.0) {
+        m_phase_frame = 0.0;
+        m_status      = SceneAnimationPlaybackStatus::Completed;
+    }
+}
+
+void SceneAnimationPlayback::Play() {
+    if (m_status == SceneAnimationPlaybackStatus::Stopped ||
+        m_status == SceneAnimationPlaybackStatus::Completed) {
+        m_phase_frame = m_rate < 0.0 ? static_cast<double>(m_frame_count) : 0.0;
+    }
+    m_status = SceneAnimationPlaybackStatus::Playing;
+}
+
+void SceneAnimationPlayback::Stop() {
+    m_phase_frame = 0.0;
+    m_status      = SceneAnimationPlaybackStatus::Stopped;
+}
+
+void SceneAnimationPlayback::Pause() {
+    if (m_status == SceneAnimationPlaybackStatus::Playing)
+        m_status = SceneAnimationPlaybackStatus::Paused;
+}
+
+void SceneAnimationPlayback::SetFrame(double frame) {
+    if (! std::isfinite(frame)) return;
+    m_phase_frame = std::clamp(frame, 0.0, static_cast<double>(m_frame_count));
+    if (m_status == SceneAnimationPlaybackStatus::Stopped ||
+        m_status == SceneAnimationPlaybackStatus::Completed)
+        m_status = SceneAnimationPlaybackStatus::Paused;
+}
+
+void SceneAnimationPlayback::SetRate(double rate) {
+    if (std::isfinite(rate)) m_rate = rate;
+}
+
 float SceneAnimationCurve::EvaluateScalar(float base, double runtime) const {
     if (c0.empty()) return base;
-    float value = eval_axis(c0, animation_frame(*this, runtime));
+    const double local_runtime = playback && fps > 0.0f ? playback->Frame() / fps : runtime;
+    float value = eval_axis(c0, animation_frame(*this, local_runtime));
     return relative ? base + value : value;
 }
 
 Eigen::Vector3f SceneAnimationCurve::EvaluateVec3(const Eigen::Vector3f& base,
                                                   double                 runtime) const {
     if (Empty()) return base;
-    const auto      frame = animation_frame(*this, runtime);
+    const double local_runtime = playback && fps > 0.0f ? playback->Frame() / fps : runtime;
+    const auto      frame = animation_frame(*this, local_runtime);
     Eigen::Vector3f value = base;
     if (! c0.empty())
         value.x() = relative ? base.x() + eval_axis(c0, frame) : eval_axis(c0, frame);
@@ -739,10 +831,26 @@ Eigen::Vector3f SceneAnimationCurve::EvaluateVec3(const Eigen::Vector3f& base,
 }
 
 void SceneNode::TickFieldAnimations(double runtime) {
+    for (const auto& playback : m_field_animation_playbacks) playback->Tick(runtime);
     if (m_origin_curve) SetTranslate(m_origin_curve->EvaluateVec3(m_origin_base, runtime));
     if (m_scale_curve) SetScale(m_scale_curve->EvaluateVec3(m_scale_base, runtime));
     if (m_rotation_curve) SetRotation(m_rotation_curve->EvaluateVec3(m_rotation_base, runtime));
     if (m_alpha_curve) SetUserAlpha(m_alpha_curve->EvaluateScalar(m_base_alpha, runtime));
+}
+
+void SceneNode::RegisterFieldAnimation(
+    const std::shared_ptr<SceneAnimationPlayback>& playback) {
+    if (! playback) return;
+    if (std::find(m_field_animation_playbacks.begin(), m_field_animation_playbacks.end(), playback) ==
+        m_field_animation_playbacks.end())
+        m_field_animation_playbacks.push_back(playback);
+    if (! playback->Name().empty()) m_named_field_animations[playback->Name()] = playback;
+}
+
+std::shared_ptr<SceneAnimationPlayback>
+SceneNode::FindAnimation(std::string_view name) const {
+    auto it = m_named_field_animations.find(std::string(name));
+    return it == m_named_field_animations.end() ? nullptr : it->second;
 }
 
 void SceneCameraPath::CaptureViewport() {

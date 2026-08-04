@@ -160,6 +160,73 @@ void TestWrappedAnimationCurves() {
           "mirror mode takes precedence over wraploop");
 }
 
+void TestFieldAnimationPlayback() {
+    auto playback = std::make_shared<sr::SceneAnimationPlayback>(
+        "face", 10.0f, 10, "single", false, true);
+
+    sr::SceneAnimationCurve origin;
+    origin.fps      = 10.0f;
+    origin.length   = 10;
+    origin.mode     = "single";
+    origin.relative = true;
+    origin.playback = playback;
+    origin.c0.push_back({ .frame = 0, .value = 0.0f });
+    origin.c0.push_back({ .frame = 10, .value = 10.0f });
+
+    sr::SceneAnimationCurve angles;
+    angles.fps      = 10.0f;
+    angles.length   = 10;
+    angles.mode     = "single";
+    angles.playback = playback;
+    angles.c2.push_back({ .frame = 0, .value = 0.0f });
+    angles.c2.push_back({ .frame = 10, .value = 1.0f });
+
+    sr::SceneNode node;
+    node.SetOriginAnimation(std::move(origin));
+    node.SetRotationAnimation(std::move(angles));
+    Check(node.FindAnimation("face") == playback, "named field animation is registered");
+
+    node.TickFieldAnimations(0.0);
+    node.TickFieldAnimations(1.0);
+    Check(Near(node.Translate().x(), 0.0f) && Near(node.Rotation().z(), 0.0f),
+          "start-paused combined animation remains at frame zero");
+
+    playback->Play();
+    node.TickFieldAnimations(1.5);
+    Check(Near(playback->Frame(), 5.0f) && Near(node.Translate().x(), 5.0f) &&
+              Near(node.Rotation().z(), 0.5f),
+          "combined animation tracks share one playback frame");
+
+    playback->Pause();
+    node.TickFieldAnimations(2.0);
+    Check(Near(playback->Frame(), 5.0f) && Near(node.Translate().x(), 5.0f),
+          "paused animation holds its current frame");
+
+    playback->SetFrame(8.0);
+    node.TickFieldAnimations(2.0);
+    Check(Near(node.Translate().x(), 8.0f) && Near(node.Rotation().z(), 0.8f),
+          "setFrame applies to every combined track");
+
+    playback->Stop();
+    node.TickFieldAnimations(2.0);
+    Check(Near(playback->Frame(), 0.0f) && Near(node.Translate().x(), 0.0f),
+          "stop restores the first frame");
+
+    playback->SetRate(2.0);
+    playback->Play();
+    node.TickFieldAnimations(2.25);
+    node.TickFieldAnimations(2.5);
+    Check(playback->Status() == sr::SceneAnimationPlaybackStatus::Completed &&
+              Near(playback->Frame(), 10.0f) && Near(node.Translate().x(), 10.0f),
+          "single animation completes at and holds the last frame");
+
+    playback->Play();
+    node.TickFieldAnimations(2.5);
+    Check(playback->IsPlaying() && Near(playback->Frame(), 0.0f) &&
+              Near(node.Translate().x(), 0.0f),
+          "completed single animation replays from frame zero");
+}
+
 void TestSoundVisibilityAndVolume() {
     sr::SceneNode node;
     node.SetVolume(0.4f);
@@ -437,6 +504,7 @@ int main() {
     TestAuthoredSceneZoom();
     TestPlanarReflectionSemantics();
     TestWrappedAnimationCurves();
+    TestFieldAnimationPlayback();
     TestSoundVisibilityAndVolume();
     TestCameraTransformControls();
     TestMaterialKeyAliases();

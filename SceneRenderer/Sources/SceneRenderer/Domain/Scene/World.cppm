@@ -1046,6 +1046,43 @@ struct SceneAnimationKey {
     float        back_y { 0.0f };
 };
 
+enum class SceneAnimationPlaybackStatus { Playing, Paused, Stopped, Completed };
+
+class SceneAnimationPlayback {
+public:
+    SceneAnimationPlayback(std::string name, float fps, std::int32_t frame_count,
+                           std::string mode, bool wraploop, bool start_paused);
+
+    void Tick(double runtime);
+    void Play();
+    void Stop();
+    void Pause();
+    void SetFrame(double frame);
+    void SetRate(double rate);
+
+    float                        Frame() const;
+    bool                         IsPlaying() const;
+    double                       Rate() const { return m_rate; }
+    float                        Fps() const { return m_fps; }
+    std::int32_t                 FrameCount() const { return m_frame_count; }
+    double                       Duration() const;
+    const std::string&           Name() const { return m_name; }
+    SceneAnimationPlaybackStatus Status() const { return m_status; }
+
+private:
+    bool Loops() const;
+
+    std::string                  m_name;
+    float                        m_fps { 30.0f };
+    std::int32_t                 m_frame_count { 0 };
+    std::string                  m_mode;
+    bool                         m_wraploop { false };
+    double                       m_rate { 1.0 };
+    double                       m_phase_frame { 0.0 };
+    std::optional<double>        m_last_runtime;
+    SceneAnimationPlaybackStatus m_status { SceneAnimationPlaybackStatus::Playing };
+};
+
 struct SceneAnimationCurve {
     std::vector<SceneAnimationKey> c0;
     std::vector<SceneAnimationKey> c1;
@@ -1055,6 +1092,7 @@ struct SceneAnimationCurve {
     std::string                    mode;
     bool                           wraploop { false };
     bool                           relative { false };
+    std::shared_ptr<SceneAnimationPlayback> playback;
 
     bool            Empty() const;
     float           EvaluateScalar(float base, double runtime) const;
@@ -1270,18 +1308,25 @@ public:
     }
     void SetOriginAnimation(SceneAnimationCurve curve) {
         m_origin_base  = m_translate;
+        RegisterFieldAnimation(curve.playback);
         m_origin_curve = std::move(curve);
     }
     void SetScaleAnimation(SceneAnimationCurve curve) {
         m_scale_base  = m_scale;
+        RegisterFieldAnimation(curve.playback);
         m_scale_curve = std::move(curve);
     }
     void SetRotationAnimation(SceneAnimationCurve curve) {
         m_rotation_base  = m_rotation;
+        RegisterFieldAnimation(curve.playback);
         m_rotation_curve = std::move(curve);
     }
-    void SetAlphaAnimation(SceneAnimationCurve curve) { m_alpha_curve = std::move(curve); }
+    void SetAlphaAnimation(SceneAnimationCurve curve) {
+        RegisterFieldAnimation(curve.playback);
+        m_alpha_curve = std::move(curve);
+    }
     void TickFieldAnimations(double runtime);
+    std::shared_ptr<SceneAnimationPlayback> FindAnimation(std::string_view name) const;
     bool HasFieldAnimations() const {
         return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve;
     }
@@ -1472,6 +1517,7 @@ public:
 
 private:
     void MarkTransDirty();
+    void RegisterFieldAnimation(const std::shared_ptr<SceneAnimationPlayback>& playback);
 
     i32         m_id { -1 };
     std::string m_name;
@@ -1499,6 +1545,10 @@ private:
     std::optional<SceneAnimationCurve> m_scale_curve;
     std::optional<SceneAnimationCurve> m_rotation_curve;
     std::optional<SceneAnimationCurve> m_alpha_curve;
+    std::vector<std::shared_ptr<SceneAnimationPlayback>>
+        m_field_animation_playbacks;
+    std::unordered_map<std::string, std::shared_ptr<SceneAnimationPlayback>>
+        m_named_field_animations;
     float                              m_brightness { 1.0f };
     bool                               m_brightness_overridden { false };
     Eigen::Vector3f                    m_color { 1.0f, 1.0f, 1.0f };
