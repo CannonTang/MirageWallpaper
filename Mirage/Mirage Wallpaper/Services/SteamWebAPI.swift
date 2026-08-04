@@ -87,7 +87,7 @@ final class SteamWebAPI {
             "page": "\(page)",
             "numperpage": "\(perPage)",
             "appid": appId,
-            "filetype": "0",
+            "filetype": "18",
             "return_tags": "true",
             "return_previews": "true",
             "return_metadata": "true",
