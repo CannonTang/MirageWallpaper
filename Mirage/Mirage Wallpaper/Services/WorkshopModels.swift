@@ -669,6 +669,41 @@ struct WorkshopCreator: Identifiable, Hashable {
     }
 }
 
+extension WEWallpaper {
+    /// Returns a Workshop ID only when the manifest or a trusted Steam source
+    /// provides one. Imported folders are never identified by name alone.
+    func verifiedWorkshopID() -> String? {
+        if let manifestID = project.workshopid?.rawValue,
+           Self.isValidWorkshopID(manifestID) {
+            return manifestID
+        }
+        guard WallpaperLibrary.shared.isWorkshopSource(self) else { return nil }
+        let directoryID = wallpaperDirectory.lastPathComponent
+        return Self.isValidWorkshopID(directoryID) ? directoryID : nil
+    }
+
+    func verifiedWorkshopURL() -> URL? {
+        guard let id = verifiedWorkshopID() else { return nil }
+        if let raw = project.workshopurl,
+           let url = URL(string: raw),
+           let host = url.host?.lowercased(),
+           host == "steamcommunity.com" || host == "www.steamcommunity.com",
+           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           components.path.contains("sharedfiles/filedetails") {
+            let queryID = components.queryItems?.first(where: { $0.name == "id" })?.value
+            if queryID == id { return url }
+        }
+        return URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)")
+    }
+
+    private static func isValidWorkshopID(_ value: String) -> Bool {
+        guard !value.isEmpty, value.allSatisfy(\.isNumber), let number = UInt64(value) else {
+            return false
+        }
+        return number > 0
+    }
+}
+
 struct SteamPlayerSummariesResponse: Codable {
     var response: SteamPlayerSummariesBody
 }

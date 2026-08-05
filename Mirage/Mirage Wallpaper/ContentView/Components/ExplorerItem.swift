@@ -8,6 +8,8 @@ import SwiftUI
 
 struct ExplorerItem: View {
     let wallpaper: WEWallpaper
+    let authorName: String?
+    let authorAvatarURL: URL?
     // Selection is passed in as a plain value so the cell no longer observes the
     // shared view models. Hovering or selecting one cell then cannot force every
     // other cell in the grid to rebuild.
@@ -30,14 +32,41 @@ struct ExplorerItem: View {
             .aspectRatio(1.0, contentMode: .fit)
             .clipped()
 
-            Text(wallpaper.project.title)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, minHeight: 30)
-                .padding(4)
-                .background(Color(white: 0, opacity: hovering ? 0.4 : 0.2))
-                .font(.footnote)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color(white: hovering ? 0.9 : 0.7))
+            VStack(spacing: 0) {
+                if let authorName, !authorName.isEmpty {
+                    HStack(spacing: 4) {
+                        AsyncImage(url: authorAvatarURL) { phase in
+                            if case .success(let image) = phase {
+                                image.resizable().scaledToFill()
+                            } else {
+                                Image(systemName: "person.fill")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: 13, height: 13)
+                        .clipShape(Circle())
+                        Text(authorName)
+                            .lineLimit(1)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(Color(white: hovering ? 0.82 : 0.62))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .padding(.top, 4)
+                    .padding(.bottom, 2)
+                }
+
+                Text(wallpaper.project.title)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, minHeight: 30)
+                    .padding(4)
+                    .background(Color(white: 0, opacity: hovering ? 0.4 : 0.2))
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color(white: hovering ? 0.9 : 0.7))
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(

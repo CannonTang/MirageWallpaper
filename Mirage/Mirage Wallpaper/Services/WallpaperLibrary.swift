@@ -394,6 +394,19 @@ final class WallpaperLibrary {
         wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectory.path)
     }
 
+    /// True when a wallpaper lives in one of the Steam/SteamCMD sources. This
+    /// is intentionally separate from `isImported`: a numeric folder name in a
+    /// user-selected import directory is not enough evidence that it is a
+    /// Workshop item.
+    func isWorkshopSource(_ wallpaper: WEWallpaper) -> Bool {
+        let path = wallpaper.wallpaperDirectory.standardizedFileURL.path
+        return librarySources.contains { source in
+            guard source.role != .imported else { return false }
+            let prefix = source.url.standardizedFileURL.path
+            return path == prefix || path.hasPrefix(prefix + "/")
+        }
+    }
+
     // MARK: - Directory Monitoring
 
     func startMonitoringWorkshopDirectory(onChange: @escaping () -> Void) {

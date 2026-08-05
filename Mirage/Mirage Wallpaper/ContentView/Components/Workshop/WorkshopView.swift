@@ -10,6 +10,7 @@ struct WorkshopView: View {
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
 
     @State private var hoveredId: String?
     @State private var isDownloadPopoverPresented = false
@@ -189,7 +190,26 @@ struct WorkshopView: View {
                                         workshopViewModel.selectWorkshopItem(item)
                                     }
                                     .contextMenu {
-                                        WallpaperGridViewMenu(viewModel: viewModel)
+                                        if let wallpaper = workshopViewModel.installedItem(
+                                            workshopId: item.publishedFileId
+                                        ) {
+                                            ExplorerItemMenu(
+                                                contentViewModel: viewModel,
+                                                wallpaperViewModel: wallpaperViewModel,
+                                                workshopViewModel: workshopViewModel,
+                                                current: wallpaper
+                                            )
+                                            ExplorerGlobalMenu(
+                                                contentViewModel: viewModel,
+                                                wallpaperViewModel: wallpaperViewModel
+                                            )
+                                        } else {
+                                            WorkshopCardContextMenu(
+                                                item: item,
+                                                workshopViewModel: workshopViewModel
+                                            )
+                                            WallpaperGridViewMenu(viewModel: viewModel)
+                                        }
                                     }
                                 }
                             }

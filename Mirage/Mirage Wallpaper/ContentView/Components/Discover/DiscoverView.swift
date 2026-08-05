@@ -10,6 +10,7 @@ struct DiscoverView: View {
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
 
     @State private var showAPIKeyReminder = false
 
@@ -78,6 +79,7 @@ struct DiscoverView: View {
                                     items: items,
                                     workshopViewModel: workshopViewModel,
                                     contentViewModel: viewModel,
+                                    wallpaperViewModel: wallpaperViewModel,
                                     onSeeAll: { showAll(category) }
                                 )
                             }

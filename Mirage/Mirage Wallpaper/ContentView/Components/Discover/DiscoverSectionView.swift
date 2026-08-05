@@ -13,6 +13,7 @@ struct DiscoverSectionView: View {
     var items: [WorkshopItem]
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var contentViewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
     var onSeeAll: () -> Void
 
     @State private var hoveredId: String?
@@ -63,7 +64,26 @@ struct DiscoverSectionView: View {
                                     workshopViewModel.selectWorkshopItem(item)
                                 }
                                 .contextMenu {
-                                    WallpaperGridViewMenu(viewModel: contentViewModel)
+                                    if let wallpaper = workshopViewModel.installedItem(
+                                        workshopId: item.publishedFileId
+                                    ) {
+                                        ExplorerItemMenu(
+                                            contentViewModel: contentViewModel,
+                                            wallpaperViewModel: wallpaperViewModel,
+                                            workshopViewModel: workshopViewModel,
+                                            current: wallpaper
+                                        )
+                                        ExplorerGlobalMenu(
+                                            contentViewModel: contentViewModel,
+                                            wallpaperViewModel: wallpaperViewModel
+                                        )
+                                    } else {
+                                        WorkshopCardContextMenu(
+                                            item: item,
+                                            workshopViewModel: workshopViewModel
+                                        )
+                                        WallpaperGridViewMenu(viewModel: contentViewModel)
+                                    }
                                 }
                             }
                         }

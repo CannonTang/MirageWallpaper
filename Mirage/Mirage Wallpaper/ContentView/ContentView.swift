@@ -49,6 +49,7 @@ struct ContentView: View {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
 
     init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
         self.viewModel = viewModel
@@ -71,7 +72,9 @@ struct ContentView: View {
                             FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                     FilterResults(viewModel: viewModel)
                             }, content: {
-                                WallpaperExplorer(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                                WallpaperExplorer(contentViewModel: viewModel,
+                                                  wallpaperViewModel: wallpaperViewModel,
+                                                  workshopViewModel: workshopViewModel)
                                     .onDrop(of: [.fileURL], delegate: viewModel)
                                     .contextMenu {
                                         ExplorerGlobalMenu(contentViewModel: viewModel,
@@ -81,7 +84,8 @@ struct ContentView: View {
                         case 1:
                             DiscoverView(
                                 workshopViewModel: workshopViewModel,
-                                viewModel: viewModel
+                                viewModel: viewModel,
+                                wallpaperViewModel: wallpaperViewModel
                             )
                         case 2:
                             FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
@@ -89,7 +93,8 @@ struct ContentView: View {
                             }, content: {
                                 WorkshopView(
                                     workshopViewModel: workshopViewModel,
-                                    viewModel: viewModel
+                                    viewModel: viewModel,
+                                    wallpaperViewModel: wallpaperViewModel
                                 )
                             })
                         default:
@@ -102,11 +107,22 @@ struct ContentView: View {
                     }
                     .padding()
 
-                    if viewModel.topTabBarSelection == 0 {
-                        WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                    if workshopViewModel.showCreatorProfile,
+                       let creator = workshopViewModel.selectedCreator {
+                        CreatorProfileView(
+                            creator: creator,
+                            workshopViewModel: workshopViewModel
+                        )
+                        .frame(maxWidth: 420)
+                    } else if viewModel.topTabBarSelection == 0 {
+                        WallpaperPreview(contentViewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        workshopViewModel: workshopViewModel)
                             .frame(maxWidth: 320)
                     } else if workshopViewModel.showCustomization {
-                        WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                        WallpaperPreview(contentViewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        workshopViewModel: workshopViewModel)
                             .frame(maxWidth: 320)
                     } else {
                         WorkshopItemDetail(
@@ -180,6 +196,14 @@ struct ContentView: View {
         .sheet(isPresented: $globalSettingsViewModel.isFirstLaunch) {
             FirstLaunchView()
                 .environmentObject(globalSettingsViewModel)
+        }
+        .sheet(item: $shortcutManager.recordingWallpaper, onDismiss: {
+            shortcutManager.cancelRecording()
+        }) { wallpaper in
+            WallpaperShortcutRecorderSheet(
+                wallpaper: wallpaper,
+                manager: shortcutManager
+            )
         }
         .sheet(item: $viewModel.pendingTrustRequest) { request in
             UnsafeWallpaper(request: request)

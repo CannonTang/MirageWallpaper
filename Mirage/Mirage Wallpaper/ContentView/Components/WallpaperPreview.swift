@@ -9,6 +9,7 @@ import SwiftUI
 struct WallpaperPreview: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @ObservedObject var workshopViewModel: WorkshopViewModel
     
     @Environment(\.undoManager) var undoManager
     
@@ -23,9 +24,12 @@ struct WallpaperPreview: SubviewOfContentView {
     // 目录大小异步计算并缓存，避免每次重绘在主线程遍历整个壁纸目录造成卡顿。
     @State private var sizeText: String = "…"
 
-    init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
+    init(contentViewModel viewModel: ContentViewModel,
+         wallpaperViewModel: WallpaperViewModel,
+         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
+        self.workshopViewModel = workshopViewModel
     }
 
     private func recomputeSize(for wallpaper: WEWallpaper) {
@@ -110,14 +114,7 @@ struct WallpaperPreview: SubviewOfContentView {
                             
                         }
                     }
-                    HStack {
-                        Image(systemName: "person.crop.circle.fill")
-                            .resizable()
-                            .frame(width: 32, height: 32)
-                            .foregroundStyle(.secondary)
-                        Text(wallpaperViewModel.currentWallpaper.project.resolvedAuthor ?? L("佚名作者"))
-                            .lineLimit(1)
-                    }
+                    authorSection
                     HStack {
                         HStack(spacing: 5) {
                             Image(systemName: "star")
@@ -337,6 +334,49 @@ struct WallpaperPreview: SubviewOfContentView {
             }
             .padding()
         }
+        .onAppear {
+            workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
+            recomputeSize(for: wallpaperViewModel.currentWallpaper)
+        }
+        .onChange(of: wallpaperViewModel.currentWallpaper.id) { _, _ in
+            workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
+            recomputeSize(for: wallpaperViewModel.currentWallpaper)
+        }
+    }
+
+    private var authorSection: some View {
+        let wallpaper = wallpaperViewModel.currentWallpaper
+        let creator = workshopViewModel.installedCreator(for: wallpaper)
+        let name = workshopViewModel.installedAuthorName(for: wallpaper) ?? L("佚名作者")
+        return Button {
+            if let creator {
+                workshopViewModel.openCreatorProfile(creator)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                AsyncImage(url: creator?.avatarURL) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFill()
+                    } else {
+                        Image(systemName: "person.crop.circle.fill")
+                            .resizable()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+                Text(name)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if creator != nil {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(creator == nil)
     }
     
     func sectionHeader(_ title: LocalizedStringKey) -> some View {
