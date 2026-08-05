@@ -14,14 +14,14 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: ea3bf0188f85c419b5e2e65ce60672b766373985
+            <description sparkle:format="plain-text"><![CDATA[Commit: 2b14f36a5d937cccebf6588b506a9db978b5c297
 Channel: beta
 
-fix(app): repair wallpaper filters and video playback
+fix(wallpaper): resolve playback, filtering, and workshop issues
 
 
 ]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-249-ea3bf0188f85-macOS-arm64.zip" length="193590538" type="application/octet-stream" sparkle:edSignature="lC+ieDHcsNtmcQlEetMb8d25i3JSdy5IAWaC7BXlb+7GyuaCHtmW03FuODjXueHt1+M3TqZAnnLM3NXcWSA3DQ=="/>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-249-2b14f36a5d93-macOS-arm64.zip" length="193631891" type="application/octet-stream" sparkle:edSignature="KMqSxqXMiShTB4bkZC+ZEpvV263ZrLl0kC7TXhR/jC8SbkIhBhSxcDRhME4T98l7KJ7zjexqz2xCT2lU4F9nDA=="/>
         </item>
         <item>
             <title>1.0.0</title>
@@ -133,6 +133,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: aQxreEqoopupi0sEz3RFcBfijGniM0SxWpogwaII5+Umm4geuHKhzoKRQ4fhZecBoVv27SjzoJ3hdNrdM+2RCw==
-length: 7639
+edSignature: 8D6WUZuFMK5DW2fWq6HvaxHq70zZxyUxcrnNrLPJPp5cIjPlmyToeZAKBotqdpLROAf5TSsRi7TMUG0NuCjvDg==
+length: 7650
 -->
