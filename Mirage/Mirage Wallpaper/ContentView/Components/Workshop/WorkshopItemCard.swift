@@ -201,7 +201,7 @@ struct WorkshopItemCard: View {
         }
     }
 
-    private func badge(_ text: String, systemImage: String, color: Color) -> some View {
+    private func badge(_ text: LocalizedStringKey, systemImage: String, color: Color) -> some View {
         HStack(spacing: 3) {
             Image(systemName: systemImage).font(.caption2)
             Text(text).font(.caption2)

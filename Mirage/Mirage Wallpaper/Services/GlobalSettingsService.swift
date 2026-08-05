@@ -511,11 +511,6 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {
-        for (key, state) in states {
-            guard let displayID = DisplayRegistry.shared.displayID(for: key) else { continue }
-            DesktopOverrideService.shared.scheduleCapture(
-                forDisplay: displayID, wallpaper: state.wallpaper)
-        }
         if playbackPolicySettingsCancellable != nil {
             DispatchQueue.main.async { [weak self] in self?.configurePlaybackMonitoring() }
         }

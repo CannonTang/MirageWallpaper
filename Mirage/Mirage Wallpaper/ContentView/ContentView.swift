@@ -10,6 +10,38 @@ protocol SubviewOfContentView: View {
     var viewModel: ContentViewModel { get set }
 }
 
+private struct FilterSidebarLayout<Sidebar: View, Content: View>: View {
+    private let isPresented: Bool
+    private let sidebar: Sidebar
+    private let content: Content
+
+    init(
+        isPresented: Bool,
+        @ViewBuilder sidebar: () -> Sidebar,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.isPresented = isPresented
+        self.sidebar = sidebar()
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            content
+                .padding(.leading, isPresented ? 235 : 0)
+                .animation(nil, value: isPresented)
+            sidebar
+                .frame(width: 225)
+                .offset(x: isPresented ? 0 : -225)
+                .opacity(isPresented ? 1 : 0)
+                .allowsHitTesting(isPresented)
+                .accessibilityHidden(!isPresented)
+                .animation(.easeInOut(duration: 0.18), value: isPresented)
+        }
+        .clipped()
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject private var localization = MirageLocalization.shared
@@ -36,42 +68,30 @@ struct ContentView: View {
                         case 0:
                             ExplorerTopBar(contentViewModel: viewModel)
                                 .environmentObject(globalSettingsViewModel)
-                            HStack(spacing: 0) {
-                                HStack(spacing: 0) {
+                            FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                     FilterResults(viewModel: viewModel)
-                                }
-                                .frame(width: viewModel.isFilterReveal ? 225 : 0)
-                                .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                .animation(.spring(), value: viewModel.isFilterReveal)
-
+                            }, content: {
                                 WallpaperExplorer(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
                                     .onDrop(of: [.fileURL], delegate: viewModel)
                                     .contextMenu {
                                         ExplorerGlobalMenu(contentViewModel: viewModel,
                                                            wallpaperViewModel: wallpaperViewModel)
                                     }
-                                    .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
-                            }
-                            .animation(.default, value: viewModel.isFilterReveal)
+                            })
                         case 1:
                             DiscoverView(
                                 workshopViewModel: workshopViewModel,
                                 viewModel: viewModel
                             )
                         case 2:
-                            HStack(spacing: 0) {
+                            FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                 WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
-                                    .frame(width: viewModel.isFilterReveal ? 225 : 0)
-                                    .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                    .animation(.spring(), value: viewModel.isFilterReveal)
-
+                            }, content: {
                                 WorkshopView(
                                     workshopViewModel: workshopViewModel,
                                     viewModel: viewModel
                                 )
-                                .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
-                            }
-                            .animation(.default, value: viewModel.isFilterReveal)
+                            })
                         default:
                             EmptyView()
                         }
@@ -130,7 +150,7 @@ struct ContentView: View {
                 viewModel.hoveredWallpaper = nil
             }
         } message: {
-            Text("确定要删除“\(viewModel.hoveredWallpaper?.project.title ?? "该壁纸")”吗？")
+            Text(L("确定要删除“%@”吗？", viewModel.hoveredWallpaper?.project.title ?? L("该壁纸")))
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
         .alert(item: $viewModel.screenSaverFeedback) { feedback in

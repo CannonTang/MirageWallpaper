@@ -12,13 +12,14 @@ struct FilterSection<Content>: View where Content: View {
     private var spacing: CGFloat?
     private let titleKey: LocalizedStringKey
     
-    @State private var isExpanded: Bool = true
+    @AppStorage private var isExpanded: Bool
     
-    init(_ titleKey: LocalizedStringKey, alignment: HorizontalAlignment = .center, spacing: CGFloat? = nil, @ViewBuilder content: () -> Content) {
+    init(_ titleKey: LocalizedStringKey, id: String, alignment: HorizontalAlignment = .center, spacing: CGFloat? = nil, @ViewBuilder content: () -> Content) {
         self.content = content()
         self.alignment = alignment
         self.spacing = spacing
         self.titleKey = titleKey
+        self._isExpanded = AppStorage(wrappedValue: true, "FilterSection.\(id).isExpanded")
     }
     
     var body: some View {
@@ -40,6 +41,40 @@ struct FilterSection<Content>: View where Content: View {
             .buttonStyle(.plain)
             if isExpanded {
                 content.padding(.leading, (self.alignment == .leading) ? 10 : 0)
+            }
+        }
+    }
+}
+
+private struct ResolutionFilterGroup<Filter>: View where Filter: FilterResultsModel {
+    private let titleKey: LocalizedStringKey
+    private let options: [String]
+    @Binding private var selection: Filter
+
+    init(_ titleKey: LocalizedStringKey, selection: Binding<Filter>, options: [String]) {
+        self.titleKey = titleKey
+        self._selection = selection
+        self.options = options
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(titleKey)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            ForEach(options.indices, id: \.self) { index in
+                let option = Filter.option(at: index)
+                Toggle(LocalizedStringKey(options[index]), isOn: Binding(
+                    get: { selection.contains(option) },
+                    set: { isSelected in
+                        if isSelected {
+                            selection.insert(option)
+                        } else {
+                            selection.remove(option)
+                        }
+                    }
+                ))
+                .toggleStyle(.checkbox)
             }
         }
     }
@@ -117,7 +152,7 @@ struct FilterResults: View {
                     }
 
                     VStack(spacing: 15) {
-                        FilterSection("类型", alignment: .leading) {
+                        FilterSection("类型", id: "library.type", alignment: .leading) {
                             ForEach(Array(zip(FRType.allOptions.indices, FRType.allOptions)), id: \.0) { (i, option) in
                                 Toggle(LocalizedStringKey(option), isOn: Binding<Bool>(get: {
                                     viewModel.type.contains(FRType(rawValue: 1 << i))
@@ -131,7 +166,7 @@ struct FilterResults: View {
                                 }))
                             }
                         }
-                        FilterSection("分级", alignment: .leading) {
+                        FilterSection("分级", id: "library.ageRating", alignment: .leading) {
                             ForEach(Array(zip(FRAgeRating.allOptions.indices, FRAgeRating.allOptions)), id: \.0) { (i, option) in
                                 Toggle(LocalizedStringKey(option), isOn: Binding<Bool>(get: {
                                     viewModel.ageRating.contains(FRAgeRating(rawValue: 1 << i))
@@ -145,7 +180,17 @@ struct FilterResults: View {
                                 }))
                             }
                         }
-                        FilterSection("来源", alignment: .leading) {
+                        FilterSection("分辨率", id: "library.resolution", alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 16) {
+                                ResolutionFilterGroup("其他", selection: $viewModel.miscResolution, options: FRMiscResolution.allOptions)
+                                ResolutionFilterGroup("宽屏", selection: $viewModel.widescreenResolution, options: FRWidescreenResolution.allOptions)
+                                ResolutionFilterGroup("超宽屏", selection: $viewModel.ultraWidescreenResolution, options: FRUltraWidescreenResolution.allOptions)
+                                ResolutionFilterGroup("双显示器", selection: $viewModel.dualscreenResolution, options: FRDualscreenResolution.allOptions)
+                                ResolutionFilterGroup("三显示器", selection: $viewModel.triplescreenResolution, options: FRTriplescreenResolution.allOptions)
+                                ResolutionFilterGroup("纵向监视器/手机", selection: $viewModel.potraitscreenResolution, options: FRPortraitScreenResolution.allOptions)
+                            }
+                        }
+                        FilterSection("来源", id: "library.source", alignment: .leading) {
                             Group {
                                 ForEach(Array(zip(FRSource.allOptions.indices, FRSource.allOptions)), id: \.0) { (i, option) in
                                     // 仅工坊 / 我的壁纸 两项有意义
@@ -164,7 +209,7 @@ struct FilterResults: View {
                             }
                             .toggleStyle(.checkbox)
                         }
-                        FilterSection("标签", alignment: .leading) {
+                        FilterSection("标签", id: "library.tags", alignment: .leading) {
                             HStack {
                                 Button("全选")  {
                                     viewModel.tag = .all

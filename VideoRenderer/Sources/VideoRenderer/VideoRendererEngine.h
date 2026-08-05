@@ -34,6 +34,7 @@ typedef struct {
 
 - (void)play;
 - (void)pause;
+- (void)setPlaybackRate:(float)playbackRate;
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
@@ -74,6 +75,7 @@ typedef struct {
 
 @property (nonatomic, strong, readonly) AVQueuePlayer *player;
 @property (nonatomic, assign, readonly) BOOL loaded;
+@property (nonatomic, assign, readonly) float playbackRate;
 @property (nonatomic, assign, readonly) float volume;
 @property (nonatomic, assign, readonly) BOOL muted;
 @property (nonatomic, assign, readonly) VRVideoFillMode fillMode;

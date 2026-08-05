@@ -67,6 +67,13 @@ static float VRClampVolume(float value) {
     return value;
 }
 
+static float VRClampPlaybackRate(float value) {
+    if (!isfinite(value)) return 1.0f;
+    if (value < 0.0f) return 0.0f;
+    if (value > 2.0f) return 2.0f;
+    return value;
+}
+
 // HEIC keeps a 5K still in the low hundreds of KB. Macs without an HEVC encoder
 // return a null destination, so fall back to JPEG rather than writing nothing.
 static BOOL VRWriteImage(CGImageRef image, NSString *path, CFStringRef type) {
@@ -92,6 +99,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
 @property (nonatomic, strong) AVPlayerLooper *looper;
 @property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, assign) float playbackRate;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, assign) VRVideoFillMode fillMode;
@@ -119,6 +127,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 - (void)reportPlaybackFailure:(NSError *)error fallback:(NSString *)fallback;
 - (BOOL)startPlaybackOfURL:(NSURL *)url error:(NSError **)error;
 - (void)armFirstFrameWatchdogForGeneration:(uint64_t)generation deadline:(NSDate *)deadline;
+- (void)applyPlaybackState;
 @end
 
 @implementation VRVideoRendererEngine
@@ -156,6 +165,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
         _volume = _player.volume;
         _muted = config.muted;
+        _playbackRate = 1.0f;
         _autoplay = config.autoplay;
         _hostPaused = !config.autoplay;
         _loadFromMemory = config.loadFromMemory;
@@ -451,7 +461,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
                                     deadline:[NSDate dateWithTimeIntervalSinceNow:
                                                  kVRFirstFrameTimeout]];
 
-    if (self.autoplay) [self play];
+    [self applyPlaybackState];
     return YES;
 }
 
@@ -471,14 +481,12 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
         AVPlayerItem *current = strongSelf.player.currentItem;
         if (current == nil) {
-            if (!strongSelf.hostPaused && deadline.timeIntervalSinceNow <= 0) {
+            if (deadline.timeIntervalSinceNow <= 0) {
                 [strongSelf reportPlaybackFailure:nil
                                         fallback:@"video produced no playable item"];
                 return;
             }
-            NSDate *nextDeadline = strongSelf.hostPaused
-                ? [NSDate dateWithTimeIntervalSinceNow:kVRFirstFrameTimeout] : deadline;
-            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:nextDeadline];
+            [strongSelf armFirstFrameWatchdogForGeneration:generation deadline:deadline];
             return;
         }
         AVPlayerItemVideoOutput *probe = strongSelf.frameProbe;
@@ -496,17 +504,9 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
             strongSelf.frameProbe = nil;
             if (!strongSelf.firstFrameReported) {
                 strongSelf.firstFrameReported = YES;
+                [strongSelf applyPlaybackState];
                 if (strongSelf.firstFrameReadyBlock) strongSelf.firstFrameReadyBlock();
             }
-            return;
-        }
-        // Only an explicit host pause suspends the deadline. AVPlayer also has
-        // rate == 0 while stalled or unable to start, and those states must end
-        // in a bounded error instead of retrying forever.
-        if (strongSelf.hostPaused) {
-            [strongSelf armFirstFrameWatchdogForGeneration:generation
-                                                 deadline:[NSDate dateWithTimeIntervalSinceNow:
-                                                              kVRFirstFrameTimeout]];
             return;
         }
         if (deadline.timeIntervalSinceNow > 0) {
@@ -527,14 +527,32 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 // it has frames to present, and a wallpaper that gets throttled while it is
 // fully occluded is the desired behaviour, not a bug.
 - (void)play {
-    if (!self.loaded) return;
     self.hostPaused = NO;
-    [self.player play];
+    [self applyPlaybackState];
 }
 
 - (void)pause {
     self.hostPaused = YES;
-    [self.player pause];
+    [self applyPlaybackState];
+}
+
+- (void)setPlaybackRate:(float)playbackRate {
+    _playbackRate = VRClampPlaybackRate(playbackRate);
+    [self applyPlaybackState];
+}
+
+- (void)applyPlaybackState {
+    if (!self.loaded) return;
+    if (!self.firstFrameReported) {
+        float startupRate = self.playbackRate > 0.0f ? self.playbackRate : 1.0f;
+        [self.player playImmediatelyAtRate:startupRate];
+        return;
+    }
+    if (self.hostPaused || self.playbackRate <= 0.0f) {
+        [self.player pause];
+        return;
+    }
+    [self.player playImmediatelyAtRate:self.playbackRate];
 }
 
 - (void)setVolume:(float)volume {

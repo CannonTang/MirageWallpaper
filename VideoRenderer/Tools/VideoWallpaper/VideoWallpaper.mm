@@ -597,12 +597,11 @@ int main(int argc, char *argv[]) {
                         [eng pause];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
                         [eng play];
+                    } else if ([name isEqualToString:@"speed"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) {
+                            [eng setPlaybackRate:[value floatValue]];
+                        }
                     } else if ([name isEqualToString:@"power"]) {
-                        // Authoritative playback state from the app, which is the
-                        // only process that can see occlusion, lock and sleep.
-                        // AVPlayer has no frame-rate control, so "throttle" and
-                        // "run" are equivalent here — the accompanying fps is
-                        // meaningful only to the other renderers.
                         NSString *state = [cmd[@"state"] isKindOfClass:[NSString class]]
                             ? cmd[@"state"] : nil;
                         if ([state isEqualToString:@"pause"]) {

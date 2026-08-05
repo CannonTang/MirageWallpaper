@@ -154,6 +154,43 @@ class WallpaperViewModel: ObservableObject {
         set { assign(newValue, to: selectedDisplayKey) }
     }
 
+    @discardableResult
+    func updateStoredMetadata(title: String? = nil,
+                              tags: [String]? = nil,
+                              for key: DisplayKey? = nil) -> WEWallpaper? {
+        let targetKey = key ?? selectedDisplayKey
+        guard let current = displayStates[targetKey],
+              let updated = current.wallpaper.updateStoredMetadata(title: title, tags: tags) else {
+            return nil
+        }
+        let targetID = current.wallpaper.id
+        var states = displayStates
+        for displayKey in states.keys {
+            guard states[displayKey]?.wallpaper.id == targetID else { continue }
+            states[displayKey]?.wallpaper = updated
+        }
+        displayStates = states
+
+        var currentWallpapers = currentByScreen
+        for screen in currentWallpapers.keys {
+            guard currentWallpapers[screen]?.id == targetID else { continue }
+            currentWallpapers[screen] = updated
+        }
+        currentByScreen = currentWallpapers
+
+        for displayID in pendingAssignmentProposals.keys {
+            guard let proposals = pendingAssignmentProposals[displayID] else { continue }
+            pendingAssignmentProposals[displayID] = proposals.map { proposal in
+                guard proposal.state.wallpaper.id == targetID else { return proposal }
+                var state = proposal.state
+                state.wallpaper = updated
+                return PendingAssignmentProposal(id: proposal.id, key: proposal.key, state: state)
+            }
+        }
+        persistStates()
+        return updated
+    }
+
     var runtime: WallpaperRuntimeState {
         get { runtime(for: selectedDisplayKey) }
         set {

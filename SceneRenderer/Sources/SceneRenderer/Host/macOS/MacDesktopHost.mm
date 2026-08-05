@@ -61,6 +61,7 @@ struct MacDesktopHost {
     std::atomic<bool>                first_frame_presented { false };
     std::atomic<bool>                activation_requested { false };
     std::atomic<bool>                activation_confirmed { false };
+    std::atomic<bool>                activation_frame_pending { false };
     std::atomic<bool>                activation_failure_pending { false };
     std::atomic<bool>                activation_failure_reported { false };
     std::atomic<bool>                deactivation_requested { false };
@@ -268,25 +269,6 @@ void ConfirmActivated(SRHostRef* ref, int attempts_left) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{
       ConfirmActivated(ref, attempts_left - 1);
-    });
-}
-
-void PrepareActivation(SRHostRef* ref, int attempts_left) {
-    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
-    if (host == nullptr || ! host->activation_requested.load()) return;
-    if (ValidateGeometry(host, false)) {
-        host->window.alphaValue = 1.0;
-        [CATransaction flush];
-        ConfirmActivated(ref, 200);
-        return;
-    }
-    if (attempts_left <= 0) {
-        BeginActivationFailure(ref);
-        return;
-    }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC),
-                   dispatch_get_main_queue(), ^{
-      PrepareActivation(ref, attempts_left - 1);
     });
 }
 
@@ -517,6 +499,15 @@ extern "C" void SceneRendererMacDesktopWake(void* handle) {
           current->callbacks.first_frame_presented(current->callbacks.userdata);
       }
       if (current->activation_requested.load() &&
+          current->activation_frame_pending.load() &&
+          ValidateGeometry(current, false)) {
+          current->activation_frame_pending.store(false);
+          current->window.alphaValue = 1.0;
+          [CATransaction flush];
+          ConfirmActivated(ref, 200);
+          return;
+      }
+      if (current->activation_requested.load() &&
           ! current->activation_confirmed.load() && ValidateGeometry(current, true)) {
           if (! current->activation_confirmed.exchange(true) &&
               current->callbacks.activated != nullptr) {
@@ -538,6 +529,7 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
       host->activation_failure_pending.store(false);
       host->activation_failure_reported.store(false);
       host->activation_requested.store(true);
+      host->activation_frame_pending.store(true);
       host->window.backgroundColor = NSColor.blackColor;
       host->window.opaque          = YES;
       if (host->surface_layer != nil) host->surface_layer.opaque = YES;
@@ -549,7 +541,6 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
       host->window.alphaValue = 0.0;
       [host->window orderFrontRegardless];
       [CATransaction flush];
-      PrepareActivation(host->hostRef, 200);
     };
     if (NSThread.isMainThread) {
         activate();

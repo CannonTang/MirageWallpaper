@@ -43,20 +43,19 @@ struct WorkshopSearchBar: View {
                 Text("排序")
                 Menu {
                     sortOption(.topRated)
-                    sortOption(.trending, period: .year)
-                    sortOption(.trending, period: .month)
                     sortOption(.trending, period: .week)
                     sortOption(.trending, period: .day)
-                    sortOption(.mostRecent)
-                    sortOption(.mostUpvoted)
                     sortOption(.mostSubscribed)
                 } label: {
-                    Text(workshopViewModel.sortOrder.workshopLabel(
-                        period: workshopViewModel.trendPeriod
-                    ))
+                    Text(workshopViewModel.isTextRelevanceSearch
+                        ? WorkshopSortOrder.textRelevance.label
+                        : workshopViewModel.sortOrder.workshopLabel(
+                            period: workshopViewModel.trendPeriod
+                        ))
                     .lineLimit(1)
                 }
                 .fixedSize()
+                .disabled(workshopViewModel.isTextRelevanceSearch)
             }
         }
     }

@@ -1100,13 +1100,20 @@ private:
 
 void SceneRenderController::on(RenderStop&& m) {
     m_stopped = m.stop;
-    if (m.stop)
+    if (m.stop) {
         frame_timer.Stop();
-    else
+        m_render->flushPendingFrame();
+    } else {
         frame_timer.Run();
+    }
 }
 
 void SceneRenderController::on(RenderDraw&&) {
+    if (m_stopped) {
+        frame_timer.FrameBegin();
+        frame_timer.FrameEnd();
+        return;
+    }
     frame_timer.FrameBegin();
     if (m_rg) {
         m_scene->shaderValueUpdater->FrameBegin();

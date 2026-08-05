@@ -15,6 +15,7 @@ struct WallpaperPreview: SubviewOfContentView {
     @State var isEditingId = ""
     @State var title = ""
     @State var newTag = ""
+    @FocusState private var titleFieldFocused: Bool
     
     @State var hoveredTag: String?
     @State var isTagsHovered = false
@@ -35,6 +36,26 @@ struct WallpaperPreview: SubviewOfContentView {
             let text = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
             await MainActor.run { self.sizeText = text }
         }
+    }
+
+    private func beginTitleEditing() {
+        title = wallpaperViewModel.currentWallpaper.project.title
+        isEditingId = "title"
+        titleFieldFocused = true
+    }
+
+    private func saveTitle() {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              wallpaperViewModel.updateStoredMetadata(title: value) != nil else { return }
+        isEditingId = ""
+        titleFieldFocused = false
+        viewModel.refresh()
+    }
+
+    private func saveTags(_ tags: [String]) {
+        guard wallpaperViewModel.updateStoredMetadata(tags: tags) != nil else { return }
+        viewModel.refresh()
     }
     
     var body: some View {
@@ -64,12 +85,13 @@ struct WallpaperPreview: SubviewOfContentView {
                         HStack {
                             if isEditingId == "title" {
                                 TextField("壁纸名称", text: $title)
+                                    .focused($titleFieldFocused)
                                     .onSubmit {
-                                        guard let wallpaper = wallpaperViewModel.currentWallpaper
-                                            .updateStoredMetadata(title: title) else { return }
-                                        wallpaperViewModel.currentWallpaper = wallpaper
-                                        
+                                        saveTitle()
+                                    }
+                                    .onExitCommand {
                                         isEditingId = ""
+                                        titleFieldFocused = false
                                     }
                             } else {
                                 Text(wallpaperViewModel.currentWallpaper.project.title.isEmpty ? L("未命名") : wallpaperViewModel.currentWallpaper.project.title)
@@ -77,10 +99,13 @@ struct WallpaperPreview: SubviewOfContentView {
                                     .id("title")
                                     .lineLimit(1)
                                     .onTapGesture(count: 2) {
-                                        title = wallpaperViewModel.currentWallpaper.project.title
-                                        isEditingId = "title"
+                                        beginTitleEditing()
                                     }
-                                Image(systemName: "square.and.pencil")
+                                Button(action: beginTitleEditing) {
+                                    Image(systemName: "square.and.pencil")
+                                }
+                                .buttonStyle(.plain)
+                                .help("编辑壁纸名称")
                             }
                             
                         }
@@ -112,9 +137,9 @@ struct WallpaperPreview: SubviewOfContentView {
                     }
                     HStack {
                         Text(wallpaperViewModel.currentWallpaper.isPreset
-                            ? (wallpaperViewModel.currentWallpaper.presetStatusDescription.map { "预设 · \($0)" }
-                                ?? "预设 · \(wallpaperViewModel.currentWallpaper.kind.displayName)")
-                            : wallpaperViewModel.currentWallpaper.project.type)
+                            ? (wallpaperViewModel.currentWallpaper.presetStatusDescription.map { L("预设 · %@", $0) }
+                                ?? L("预设 · %@", wallpaperViewModel.currentWallpaper.kind.displayName))
+                            : wallpaperViewModel.currentWallpaper.kind.displayName)
                         Text(sizeText)
                     }
                     .font(.footnote)
@@ -161,8 +186,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     tags = Array(Set(tags))
                                     
-                                    guard let wallpaper = current.updateStoredMetadata(tags: tags.sorted()) else { return }
-                                    wallpaperViewModel.currentWallpaper = wallpaper
+                                    saveTags(tags.sorted())
                                 }
                         }
                     }
@@ -200,7 +224,8 @@ struct WallpaperPreview: SubviewOfContentView {
                             Text(String(format: "%.0f", wallpaperViewModel.playVolume * 100) + "%")
                                 .frame(width: 35)
                         }
-                        if wallpaperViewModel.currentWallpaper.kind == .scene {
+                        if wallpaperViewModel.currentWallpaper.kind == .scene ||
+                            wallpaperViewModel.currentWallpaper.kind == .video {
                             HStack {
                                 Label("速度", systemImage: "gauge.with.dots.needle.67percent")
                                 Spacer()
@@ -348,8 +373,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     tags.remove(at: index)
                                     
-                                    guard let wallpaper = current.updateStoredMetadata(tags: tags) else { return }
-                                    wallpaperViewModel.currentWallpaper = wallpaper
+                                    saveTags(tags)
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
                                 }

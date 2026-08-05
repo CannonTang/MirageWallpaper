@@ -112,11 +112,11 @@ struct DownloadPopover: View {
         guard let path = SteamCMDManager.shared.downloadedItemDirectory(
             workshopId: task.workshopItem.publishedFileId
         ) else {
-            revealError = "未找到该壁纸的本地下载目录。"
+            revealError = L("未找到该壁纸的本地下载目录。")
             return
         }
         if !NSWorkspace.shared.open(path) {
-            revealError = "Finder 无法打开该壁纸目录。"
+            revealError = L("Finder 无法打开该壁纸目录。")
         }
     }
 }

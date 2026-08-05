@@ -1372,10 +1372,6 @@ final class RendererController {
         candidate.send(["cmd": "fps", "value": candidate.desiredFps])
         candidate.send(["cmd": "fillmode", "value": candidate.desiredFillMode.rawValue])
         candidate.send(["cmd": "speed", "value": candidate.desiredSpeed])
-        if candidate.desiredPowerState == .pause {
-            candidate.send(Self.powerCommand(state: .pause,
-                                             fps: candidate.desiredPowerFps))
-        }
         candidate.send(["cmd": "activate"])
         scheduleCandidateActivationTimeoutLocked(transition)
     }
@@ -1485,6 +1481,7 @@ final class RendererController {
         }
         transition.phase = .restoringStandby
         standby.send(["cmd": "activate"])
+        standby.send(Self.powerCommand(state: .run, fps: standby.desiredPowerFps))
         scheduleStandbyRestoreTimeoutLocked(transition, standby: standby)
     }
 

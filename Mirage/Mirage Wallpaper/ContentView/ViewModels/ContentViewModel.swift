@@ -134,6 +134,26 @@ class ContentViewModel: ObservableObject, DropDelegate {
         default:
             explorerIconSize = 170
         }
+        let resolutionMigrationKey = "FRWidescreenResolutionMigrationV2"
+        if !UserDefaults.standard.bool(forKey: resolutionMigrationKey) {
+            let raw = widescreenResolution.rawValue
+            if raw == FRWidescreenResolution.legacyAll.rawValue
+                || raw == FRWidescreenResolution.interimAll.rawValue
+                || raw == FRWidescreenResolution.all.rawValue {
+                widescreenResolution = .all
+            } else {
+                var migratedRaw = 0
+                if raw & (1 << 0) != 0 { migratedRaw |= 1 << 0 }
+                if raw & (1 << 1) != 0 { migratedRaw |= 1 << 1 }
+                if raw & (1 << 2) != 0 { migratedRaw |= 1 << 3 }
+                if raw & (1 << 3) != 0 { migratedRaw |= 1 << 4 }
+                if raw & (1 << 4) != 0 { migratedRaw |= 1 << 5 }
+                if raw & (1 << 5) != 0 { migratedRaw |= 1 << 2 }
+                if raw & (1 << 6) != 0 { migratedRaw |= 1 << 0 }
+                widescreenResolution = FRWidescreenResolution(rawValue: migratedRaw)
+            }
+            UserDefaults.standard.set(true, forKey: resolutionMigrationKey)
+        }
         downloadObserver = NotificationCenter.default.publisher(for: .workshopItemDownloaded)
             .debounce(for: .seconds(1), scheduler: RunLoop.main)
             .sink { [weak self] _ in
@@ -197,6 +217,12 @@ class ContentViewModel: ObservableObject, DropDelegate {
         let showOnly: FRShowOnly
         let type: FRType
         let ageRating: FRAgeRating
+        let widescreenResolution: FRWidescreenResolution
+        let ultraWidescreenResolution: FRUltraWidescreenResolution
+        let dualscreenResolution: FRDualscreenResolution
+        let triplescreenResolution: FRTriplescreenResolution
+        let potraitscreenResolution: FRPortraitScreenResolution
+        let miscResolution: FRMiscResolution
         let source: FRSource
         let tag: FRTag
         let sortingBy: WEWallpaperSortingMethod
@@ -214,6 +240,12 @@ class ContentViewModel: ObservableObject, DropDelegate {
             showOnly: showOnly,
             type: type,
             ageRating: ageRating,
+            widescreenResolution: widescreenResolution,
+            ultraWidescreenResolution: ultraWidescreenResolution,
+            dualscreenResolution: dualscreenResolution,
+            triplescreenResolution: triplescreenResolution,
+            potraitscreenResolution: potraitscreenResolution,
+            miscResolution: miscResolution,
             source: source,
             tag: tag,
             sortingBy: sortingBy,
@@ -346,6 +378,16 @@ class ContentViewModel: ObservableObject, DropDelegate {
                 source = .workshop
             }
             guard input.source.contains(source) else { return false }
+
+            guard FRResolutionFilter.matches(
+                wallpaper: wallpaper,
+                widescreen: input.widescreenResolution,
+                ultraWidescreen: input.ultraWidescreenResolution,
+                dualscreen: input.dualscreenResolution,
+                triplescreen: input.triplescreenResolution,
+                portrait: input.potraitscreenResolution,
+                misc: input.miscResolution
+            ) else { return false }
 
             if input.tag != FRTag.all {
                 let wallpaperTags = FRTag.bits(from: wallpaper.project.tags ?? [])

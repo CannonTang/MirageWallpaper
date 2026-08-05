@@ -578,6 +578,7 @@ struct VulkanRender::Impl {
     void destroy();
 
     void drawFrame(Scene&);
+    void flushPendingFrame();
 
     bool CreateRenderingResource(RenderingResources&);
     void DestroyRenderingResource(RenderingResources&);
@@ -758,6 +759,7 @@ void VulkanRender::driverUuid(uint8_t out[16]) const {
 bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(std::move(info)); }
 void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
+void VulkanRender::flushPendingFrame() { pImpl->flushPendingFrame(); }
 void VulkanRender::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     pImpl->clearLastRenderGraph(retention);
 };
@@ -1162,7 +1164,10 @@ void VulkanRender::Impl::retireInFlightFrame() {
     m_device->tex_cache().ReleaseRecordedUploads();
     rr.pending_upload_value = 0;
     VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+    if (m_redraw_cb) m_redraw_cb();
 }
+
+void VulkanRender::Impl::flushPendingFrame() { retireInFlightFrame(); }
 
 void VulkanRender::Impl::drawFrameSwapchain() {
     RenderingResources& rr = m_rendering_resources;
@@ -1292,8 +1297,6 @@ void VulkanRender::Impl::drawFrameSwapchain() {
             rstd_error("vkQueuePresentKHR failed: {}", vvk::ToString(res));
         }
     }
-    if (m_redraw_cb) m_redraw_cb();
-
     // Submitted successfully: the fence is now owned by the GPU and is awaited
     // at the head of the next frame, which is also where a pending swapchain
     // rebuild is handled — rebuilding here would tear down images this frame's

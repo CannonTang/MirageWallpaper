@@ -234,7 +234,7 @@ struct WorkshopItemDetail: View {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
                     Label(
-                        workshopViewModel.steamSetupState == .steamCMDMissing ? "安装 SteamCMD" : "登录全球 Steam",
+                        LocalizedStringKey(workshopViewModel.steamSetupState == .steamCMDMissing ? "安装 SteamCMD" : "登录全球 Steam"),
                         systemImage: "person.crop.circle.badge.exclamationmark"
                     )
                     .frame(maxWidth: .infinity)

@@ -54,7 +54,7 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     }
 
     var displayTypeName: String {
-        isPreset ? "预设 · \(kind.displayName)" : kind.displayName
+        isPreset ? L("预设 · %@", kind.displayName) : kind.displayName
     }
 
     var formattedFileSize: String {
@@ -108,7 +108,7 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     static func dependencyPlaceholder(id: String) -> WorkshopItem {
         WorkshopItem(
             publishedFileId: id,
-            title: "基础壁纸 \(id)",
+            title: L("基础壁纸 %@", id),
             itemDescription: "",
             previewImageURL: nil,
             tags: [],
@@ -207,10 +207,8 @@ struct WorkshopAgeRatingFilter: OptionSet, Codable, Equatable {
 
 enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
     case trending = 0
-    case mostRecent = 1
     case mostSubscribed = 2
     case topRated = 3
-    case mostUpvoted = 4
     case playtimeTrend = 5
     case totalPlaytime = 6
     case averagePlaytimeTrend = 7
@@ -218,16 +216,15 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
     case sessionsTrend = 9
     case lifetimeSessions = 10
     case lastUpdated = 11
+    case textRelevance = 12
 
     var id: Int { rawValue }
 
     var label: String {
         switch self {
         case .trending: return L("热门趋势")
-        case .mostRecent: return L("最新发布")
         case .mostSubscribed: return L("订阅最多")
         case .topRated: return L("评分最高")
-        case .mostUpvoted: return L("最多投票")
         case .playtimeTrend: return L("播放时长最多")
         case .totalPlaytime: return L("总播放时长最多")
         case .averagePlaytimeTrend: return L("平均播放时长最长")
@@ -235,23 +232,23 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
         case .sessionsTrend: return L("播放次数最多")
         case .lifetimeSessions: return L("总播放次数最多")
         case .lastUpdated: return L("最近更新")
+        case .textRelevance: return L("文本相关性")
         }
     }
 
     var apiValue: Int {
         switch self {
         case .trending: return 3
-        case .mostRecent: return 1
-        case .mostSubscribed: return 12
+        case .mostSubscribed: return 9
         case .topRated: return 0
-        case .mostUpvoted: return 10
         case .playtimeTrend: return 13
         case .totalPlaytime: return 14
         case .averagePlaytimeTrend: return 15
         case .lifetimeAveragePlaytime: return 16
         case .sessionsTrend: return 17
         case .lifetimeSessions: return 18
-        case .lastUpdated: return 19
+        case .lastUpdated: return 21
+        case .textRelevance: return 12
         }
     }
 
@@ -268,8 +265,6 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
         switch self {
         case .topRated: return L("评分最高")
         case .trending: return L("最热门（%@）", period.workshopLabel)
-        case .mostRecent: return L("最近")
-        case .mostUpvoted: return L("最多投票")
         case .mostSubscribed: return L("最多订阅")
         default:
             return usesTrendPeriod ? L("%@（%@）", label, period.workshopLabel) : label
@@ -280,10 +275,6 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
 enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
     case day = 1
     case week = 7
-    case month = 30
-    case threeMonths = 90
-    case sixMonths = 180
-    case year = 365
 
     var id: Int { rawValue }
 
@@ -291,27 +282,18 @@ enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
         switch self {
         case .day: return L("今日")
         case .week: return L("本周")
-        case .month: return L("本月")
-        case .threeMonths: return L("三个月")
-        case .sixMonths: return L("半年")
-        case .year: return L("一年")
         }
     }
 
     var workshopLabel: String {
-        switch self {
-        case .year: return L("今年")
-        default: return label
-        }
+        label
     }
 }
 
 enum WorkshopDiscoverCategory: String, CaseIterable, Identifiable {
     case trending
-    case mostUpvoted
     case mostSubscribed
     case topRated
-    case mostRecent
     case lastUpdated
     case playtimeTrend
     case averagePlaytimeTrend
@@ -329,10 +311,8 @@ enum WorkshopDiscoverCategory: String, CaseIterable, Identifiable {
     var sortOrder: WorkshopSortOrder? {
         switch self {
         case .trending: return .trending
-        case .mostUpvoted: return .mostUpvoted
         case .mostSubscribed: return .mostSubscribed
         case .topRated: return .topRated
-        case .mostRecent: return .mostRecent
         case .lastUpdated: return .lastUpdated
         case .playtimeTrend: return .playtimeTrend
         case .averagePlaytimeTrend: return .averagePlaytimeTrend
@@ -499,7 +479,7 @@ struct PresetDependencyPrompt: Identifiable {
     var id: String { "\(presetID):\(dependencyID)" }
 
     var message: String {
-        let size = dependencyItem.fileSize > 0 ? "（\(dependencyItem.formattedFileSize)）" : ""
+        let size = dependencyItem.fileSize > 0 ? L("（%@）", dependencyItem.formattedFileSize) : ""
         return L("预设“%@”需要基础壁纸“%@”%@才能使用。是否一起下载？", presetTitle, dependencyItem.title, size)
     }
 }
@@ -638,7 +618,7 @@ struct SteamPublishedFile: Codable {
 
         return WorkshopItem(
             publishedFileId: publishedfileid ?? "",
-            title: title ?? "无标题",
+            title: title ?? L("无标题"),
             itemDescription: file_description ?? "",
             previewImageURL: URL(string: preview_url ?? ""),
             additionalPreviewImageURLs: previews?.compactMap { preview in

@@ -75,16 +75,22 @@ class WorkshopViewModel: ObservableObject {
         }.count
     }
 
+    var isTextRelevanceSearch: Bool {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !query.isEmpty && !Self.isPublishedFileId(query) && !Self.isSteamUserId(query)
+    }
+
     private static let ageRatingStorageKey = "WorkshopAgeRatingFilter"
 
     private var searchDebounce: AnyCancellable?
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
-    private var pendingPresetApplication: (presetID: String, dependencyID: String)?
+    private var pendingPresetApplication: (presetID: String, dependencyID: String, selectionGeneration: Int)?
     private var searchTask: Task<Void, Never>?
     private var discoverTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var discoverGeneration = 0
+    private var selectionGeneration = 0
     private var loadedPage = 1
 
     init() {
@@ -214,7 +220,7 @@ class WorkshopViewModel: ObservableObject {
                     self.steamServiceStatus.steamCMD = .available(path.path)
                     cmdManager.refreshSessionIfNeeded()
                 } else {
-                    self.steamServiceStatus.steamCMD = .unavailable("未安装 SteamCMD")
+                    self.steamServiceStatus.steamCMD = .unavailable(L("未安装 SteamCMD"))
                 }
                 self.steamServiceStatus.authentication = cmdManager.authenticationState
                 self.refreshSetupState()
@@ -226,18 +232,18 @@ class WorkshopViewModel: ObservableObject {
         let cmdManager = SteamCMDManager.shared
         if cmdManager.steamCMDPath == nil {
             steamSetupState = .steamCMDMissing
-            steamServiceStatus.workshopDownload = .needsAction("需要先安装 SteamCMD")
+            steamServiceStatus.workshopDownload = .needsAction(L("需要先安装 SteamCMD"))
         } else if !cmdManager.isLoggedIn {
             steamSetupState = .needsLogin
             if cmdManager.savedUsername.isEmpty {
-                steamServiceStatus.authentication = .needsAction("需要登录 Steam")
+                steamServiceStatus.authentication = .needsAction(L("需要登录 Steam"))
             }
-            steamServiceStatus.workshopDownload = .needsAction("需要有效的 Steam 会话")
+            steamServiceStatus.workshopDownload = .needsAction(L("需要有效的 Steam 会话"))
         } else {
             steamSetupState = .ready
-            steamServiceStatus.authentication = .available("会话已验证")
+            steamServiceStatus.authentication = .available(L("会话已验证"))
             if case .unknown = steamServiceStatus.workshopDownload {
-                steamServiceStatus.workshopDownload = .needsAction("尚未开始下载")
+                steamServiceStatus.workshopDownload = .needsAction(L("尚未开始下载"))
             }
         }
     }
@@ -300,7 +306,7 @@ class WorkshopViewModel: ObservableObject {
                         retainedPage
                     )
                     self.isLoading = false
-                    self.steamServiceStatus.browsingAPI = .available("Steam Web API 可用")
+                    self.steamServiceStatus.browsingAPI = .available(L("Steam Web API 可用"))
                     return
                 }
                 self.items = result.items
@@ -311,7 +317,7 @@ class WorkshopViewModel: ObservableObject {
                     self.rememberCreator(matchedCreator)
                 }
                 self.isLoading = false
-                self.steamServiceStatus.browsingAPI = .available("Steam Web API 可用")
+                self.steamServiceStatus.browsingAPI = .available(L("Steam Web API 可用"))
             } catch {
                 guard !Task.isCancelled, generation == self.searchGeneration else { return }
                 self.error = error.localizedDescription
@@ -508,11 +514,14 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Download
 
     func downloadItem(_ item: WorkshopItem, purpose: DownloadPurpose = .wallpaper) {
-        if let existing = downloadQueue.first(where: { $0.id == item.publishedFileId }) {
-            switch existing.state {
+        if let existingIndex = downloadQueue.firstIndex(where: { $0.id == item.publishedFileId }) {
+            switch downloadQueue[existingIndex].state {
             case .failed, .completed:
                 downloadQueue.removeAll { $0.id == item.publishedFileId }
             case .queued, .starting, .downloading, .validating:
+                if purpose == .presetDependency {
+                    downloadQueue[existingIndex].purpose = purpose
+                }
                 return
             }
         }
@@ -557,6 +566,7 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func selectWorkshopItem(_ item: WorkshopItem) {
+        selectionGeneration += 1
         let installed = installedItem(workshopId: item.publishedFileId)
         if let wallpaper = installed, wallpaper.needsPresetDependency {
             showCustomization = false
@@ -610,13 +620,21 @@ class WorkshopViewModel: ObservableObject {
             }
 
             if case .completed = state {
-                self.steamServiceStatus.workshopDownload = .available("最近一次下载已验证")
+                let purpose = self.downloadQueue[idx].purpose
+                let selectedItemID = self.selectedItem?.publishedFileId
+                let selectionGeneration = self.selectionGeneration
+                self.steamServiceStatus.workshopDownload = .available(L("最近一次下载已验证"))
                 self.downloadQueue[idx].completedAt = Date()
                 self.processDownloadQueue()
                 NotificationCenter.default.post(name: .workshopItemDownloaded, object: workshopId)
-                self.handleCompletedDownload(workshopId: workshopId)
+                self.handleCompletedDownload(
+                    workshopId: workshopId,
+                    purpose: purpose,
+                    selectedItemID: selectedItemID,
+                    selectionGeneration: selectionGeneration
+                )
             } else if case .failed = state {
-                self.steamServiceStatus.workshopDownload = .unavailable("最近一次下载失败")
+                self.steamServiceStatus.workshopDownload = .unavailable(L("最近一次下载失败"))
                 if SteamCMDManager.shared.isLoggedIn {
                     self.processDownloadQueue()
                 }
@@ -665,8 +683,8 @@ class WorkshopViewModel: ObservableObject {
             self.isLoggingOut = false
             switch result {
             case .success:
-                self.steamServiceStatus.authentication = .needsAction("已退出登录")
-                self.logoutResultMessage = "已退出 Mirage 专用 SteamCMD 会话。"
+                self.steamServiceStatus.authentication = .needsAction(L("已退出登录"))
+                self.logoutResultMessage = L("已退出 Mirage 专用 SteamCMD 会话。")
             case .failure(let error):
                 self.steamServiceStatus.authentication = .needsAction(error.localizedDescription)
                 self.logoutResultMessage = error.localizedDescription
@@ -722,6 +740,7 @@ class WorkshopViewModel: ObservableObject {
             } catch {
                 dependencyItem = .dependencyPlaceholder(id: dependencyID)
             }
+            guard self.selectedItem?.publishedFileId == presetID else { return }
             self.presetDependencyPrompt = PresetDependencyPrompt(
                 presetID: presetID,
                 presetTitle: presetTitle,
@@ -733,7 +752,8 @@ class WorkshopViewModel: ObservableObject {
 
     func confirmPresetDependencyDownload(_ prompt: PresetDependencyPrompt) {
         presetDependencyPrompt = nil
-        pendingPresetApplication = (prompt.presetID, prompt.dependencyID)
+        guard selectedItem?.publishedFileId == prompt.presetID else { return }
+        pendingPresetApplication = (prompt.presetID, prompt.dependencyID, selectionGeneration)
 
         if let preset = installedItem(workshopId: prompt.presetID), preset.isValid {
             pendingPresetApplication = nil
@@ -751,19 +771,32 @@ class WorkshopViewModel: ObservableObject {
         presetDependencyPrompt = nil
     }
 
-    private func handleCompletedDownload(workshopId: String) {
+    private func handleCompletedDownload(
+        workshopId: String,
+        purpose: DownloadPurpose,
+        selectedItemID: String?,
+        selectionGeneration: Int
+    ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self else { return }
 
-            if let pending = self.pendingPresetApplication,
-               pending.dependencyID == workshopId,
-               let preset = self.installedItem(workshopId: pending.presetID),
-               preset.isValid {
+            if purpose == .presetDependency {
+                guard let pending = self.pendingPresetApplication,
+                      pending.dependencyID == workshopId,
+                      pending.selectionGeneration == selectionGeneration,
+                      selectedItemID == pending.presetID,
+                      self.selectionGeneration == selectionGeneration,
+                      self.selectedItem?.publishedFileId == pending.presetID,
+                      let preset = self.installedItem(workshopId: pending.presetID),
+                      preset.isValid else { return }
                 self.pendingPresetApplication = nil
                 self.openInstalledWallpaper(preset)
                 return
             }
 
+            guard selectedItemID == workshopId,
+                  self.selectionGeneration == selectionGeneration,
+                  self.selectedItem?.publishedFileId == workshopId else { return }
             guard let wallpaper = self.installedItem(workshopId: workshopId) else { return }
             if wallpaper.needsPresetDependency {
                 self.requestPresetDependency(for: wallpaper)

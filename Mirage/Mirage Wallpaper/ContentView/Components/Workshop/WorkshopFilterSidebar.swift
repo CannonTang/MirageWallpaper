@@ -22,7 +22,7 @@ struct WorkshopFilterSidebar: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    FilterSection("类型", alignment: .leading) {
+                    FilterSection("类型", id: "workshop.type", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in
                                 Toggle(filter.label, isOn: Binding(
@@ -38,7 +38,7 @@ struct WorkshopFilterSidebar: View {
                         }
                     }
 
-                    FilterSection("分级", alignment: .leading) {
+                    FilterSection("分级", id: "workshop.ageRating", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopAgeRating.allCases) { rating in
                                 Toggle(rating.displayName, isOn: Binding(
@@ -57,7 +57,7 @@ struct WorkshopFilterSidebar: View {
                         }
                     }
 
-                    FilterSection("标签", alignment: .leading) {
+                    FilterSection("标签", id: "workshop.tags", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Button("全选") {

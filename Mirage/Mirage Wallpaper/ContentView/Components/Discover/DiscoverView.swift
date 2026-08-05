@@ -129,10 +129,8 @@ private extension WorkshopDiscoverCategory {
     func title(period: WorkshopTrendPeriod) -> String {
         switch self {
         case .trending: return L("%@最热门", period.label)
-        case .mostUpvoted: return L("%@最多投票", period.label)
         case .mostSubscribed: return L("订阅最多")
         case .topRated: return L("评分最高")
-        case .mostRecent: return L("最新发布")
         case .lastUpdated: return L("最近更新")
         case .playtimeTrend: return L("%@播放时长最多", period.label)
         case .averagePlaytimeTrend: return L("%@平均播放时长最长", period.label)
@@ -150,10 +148,8 @@ private extension WorkshopDiscoverCategory {
     var icon: String {
         switch self {
         case .trending: return "flame.fill"
-        case .mostUpvoted: return "hand.thumbsup.fill"
         case .mostSubscribed: return "arrow.down.circle.fill"
         case .topRated: return "star.fill"
-        case .mostRecent: return "clock.fill"
         case .lastUpdated: return "clock.arrow.circlepath"
         case .playtimeTrend, .totalPlaytime: return "hourglass"
         case .averagePlaytimeTrend, .lifetimeAveragePlaytime: return "timer"
@@ -168,10 +164,8 @@ private extension WorkshopDiscoverCategory {
     var iconColor: Color {
         switch self {
         case .trending: return .orange
-        case .mostUpvoted: return .pink
         case .mostSubscribed: return .green
         case .topRated: return .yellow
-        case .mostRecent: return .blue
         case .lastUpdated: return .indigo
         case .playtimeTrend: return .mint
         case .averagePlaytimeTrend: return .cyan

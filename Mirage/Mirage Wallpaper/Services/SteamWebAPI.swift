@@ -81,9 +81,14 @@ final class SteamWebAPI {
     ) async throws -> (items: [WorkshopItem], total: Int) {
         try await throttle()
 
+        let normalizedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveSortOrder: WorkshopSortOrder = normalizedSearchText.isEmpty
+            ? sortOrder
+            : .textRelevance
+
         var params: [String: String] = [
             "key": apiKey,
-            "query_type": "\(sortOrder.apiValue)",
+            "query_type": "\(effectiveSortOrder.apiValue)",
             "page": "\(page)",
             "numperpage": "\(perPage)",
             "appid": appId,
@@ -94,15 +99,13 @@ final class SteamWebAPI {
             "strip_description_bbcode": "true",
         ]
 
-        if sortOrder.usesTrendPeriod {
-            params["days"] = "\(trendDays ?? WorkshopTrendPeriod.week.rawValue)"
-        }
-        if sortOrder == .trending {
-            params["include_recent_votes_only"] = "true"
+        if effectiveSortOrder.usesTrendPeriod {
+            let days = min(7, max(1, trendDays ?? WorkshopTrendPeriod.week.rawValue))
+            params["days"] = "\(days)"
         }
 
-        if !searchText.isEmpty {
-            params["search_text"] = searchText
+        if !normalizedSearchText.isEmpty {
+            params["search_text"] = normalizedSearchText
         }
 
         let selectableTags = Set(WorkshopTag.allCases.map(\.rawValue))
@@ -225,11 +228,6 @@ final class SteamWebAPI {
 
     func fetchTrending(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
         let result = try await queryFiles(sortOrder: .trending, ageRating: ageRating, page: 1, perPage: count)
-        return result.items
-    }
-
-    func fetchMostRecent(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .mostRecent, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
