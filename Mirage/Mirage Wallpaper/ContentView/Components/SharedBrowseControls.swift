@@ -84,11 +84,10 @@ struct PageNavigator: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.14))
-        }
+        .mirageGlass(
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous),
+            fallback: AnyShapeStyle(.regularMaterial)
+        )
         .onChange(of: currentPage) { _, value in
             pageText = String(value)
         }

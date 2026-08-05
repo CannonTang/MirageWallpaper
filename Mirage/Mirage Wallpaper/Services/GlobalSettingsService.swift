@@ -20,6 +20,11 @@ enum GSPlayback: String, CaseIterable, Identifiable, Codable {
     case keepRunning, mute, pause, stop
 }
 
+enum GSAnimatedPreviewPlayback: String, CaseIterable, Identifiable, Codable {
+    var id: Self { self }
+    case hover, visible
+}
+
 enum GSAntiAliasingQuality: String, CaseIterable, Identifiable, Codable {
     var id: Self { self }
     case none, msaa_x2, msaa_x4, msaa_x8
@@ -92,8 +97,13 @@ struct GlobalSettings: Codable, Equatable {
     var textureResolution = GSTextureResolutionQuality.automatic
     // Optional keeps settings written by older Mirage versions decodable.
     var wallpaperLoadSource: GSWallpaperLoadSource? = .disk
+    var animatedPreviewPlayback: GSAnimatedPreviewPlayback? = .hover
     var reflections = false
     var fps: Double = 30
+
+    var animatedPreviewPlaybackMode: GSAnimatedPreviewPlayback {
+        animatedPreviewPlayback ?? .hover
+    }
     
     // MARK: Automatic Setup
     var autoStart = false
@@ -202,6 +212,7 @@ class GlobalSettingsViewModel: ObservableObject {
         if !MirageRegion.isMainlandChina {
             initial.steamAPIEndpoint = .official
         }
+        initial.animatedPreviewPlayback = initial.animatedPreviewPlayback ?? .hover
         self.settings = initial
         self.savedSettings = initial
         MirageLocalization.shared.apply(self.settings.language)
@@ -522,6 +533,7 @@ class GlobalSettingsViewModel: ObservableObject {
                 from: UserDefaults.standard.data(forKey: "GlobalSettings")
             ?? Data()))
         ?? GlobalSettings()
+        settings.animatedPreviewPlayback = settings.animatedPreviewPlayback ?? .hover
         savedSettings = settings
     }
 

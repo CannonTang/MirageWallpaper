@@ -723,3 +723,6 @@
 "预设“%@”需要基础壁纸“%@”%@才能使用。是否一起下载？" = "Preset \"%@\" requires base wallpaper \"%@\"%@. Download both?";
 "HTTP 错误: %@" = "HTTP error: %@";
 "数据解析错误: %@" = "Data parsing error: %@";
+"动图预览播放方式" = "Animated preview playback";
+"鼠标悬停时播放" = "Play on hover";
+"当前可见壁纸持续播放" = "Play all visible previews";

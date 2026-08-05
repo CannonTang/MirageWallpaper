@@ -182,6 +182,17 @@ struct FilterResults: View {
                         }
                         FilterSection("分辨率", id: "library.resolution", alignment: .leading) {
                             VStack(alignment: .leading, spacing: 16) {
+                                HStack {
+                                    Button("全选") {
+                                        viewModel.selectAllResolutions()
+                                    }
+                                    .disabled(viewModel.areAllResolutionsSelected)
+                                    Button("清空") {
+                                        viewModel.clearResolutions()
+                                    }
+                                    .disabled(viewModel.areAllResolutionsCleared)
+                                }
+                                .buttonStyle(.link)
                                 ResolutionFilterGroup("其他", selection: $viewModel.miscResolution, options: FRMiscResolution.allOptions)
                                 ResolutionFilterGroup("宽屏", selection: $viewModel.widescreenResolution, options: FRWidescreenResolution.allOptions)
                                 ResolutionFilterGroup("超宽屏", selection: $viewModel.ultraWidescreenResolution, options: FRUltraWidescreenResolution.allOptions)
@@ -240,6 +251,5 @@ struct FilterResults: View {
             }
             .lineLimit(1)
         }
-        Divider()
     }
 }

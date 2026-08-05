@@ -80,6 +80,14 @@ struct PerformancePage: SettingsPage {
                     Text("从内存加载（减少磁盘读取）").tag(GSWallpaperLoadSource.memory)
                 }
 
+                Picker("动图预览播放方式", selection: Binding(
+                    get: { viewModel.settings.animatedPreviewPlaybackMode },
+                    set: { viewModel.settings.animatedPreviewPlayback = $0 }
+                )) {
+                    Text("鼠标悬停时播放").tag(GSAnimatedPreviewPlayback.hover)
+                    Text("当前可见壁纸持续播放").tag(GSAnimatedPreviewPlayback.visible)
+                }
+
                 HStack {
                     Text("帧率")
                     Spacer()

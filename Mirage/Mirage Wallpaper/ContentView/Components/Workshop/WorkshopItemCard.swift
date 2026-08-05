@@ -14,9 +14,16 @@ struct WorkshopItemCard: View {
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
 
+    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
+
     var body: some View {
         ZStack(alignment: .bottom) {
-            WorkshopImage(url: item.previewImageURL, contentMode: .fill, isAnimating: isHovered)
+            WorkshopImage(
+                url: item.previewImageURL,
+                contentMode: .fill,
+                isAnimating: isHovered || isSelected ||
+                    globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible
+            )
 
             captionStrip
 

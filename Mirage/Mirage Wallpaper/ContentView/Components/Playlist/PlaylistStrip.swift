@@ -101,6 +101,7 @@ private struct PlaylistThumb: View {
     let onTap: () -> Void
     let onRemove: () -> Void
 
+    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @State private var hovering = false
 
     private let side: CGFloat = 72
@@ -169,7 +170,11 @@ private struct PlaylistThumb: View {
     @ViewBuilder
     private var thumbnail: some View {
         if let wallpaper, !wallpaper.project.preview.isEmpty {
-            GifImage(contentsOf: wallpaper.previewURL, animates: hovering || isPlaying)
+            GifImage(
+                contentsOf: wallpaper.previewURL,
+                animates: hovering || isPlaying ||
+                    globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible
+            )
                 .resizable()
                 .aspectRatio(1.0, contentMode: .fit)
         } else {

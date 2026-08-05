@@ -7,6 +7,44 @@
 import SwiftUI
 import AVFoundation
 
+extension ContentViewModel {
+    var areAllResolutionsSelected: Bool {
+        widescreenResolution == .all &&
+            ultraWidescreenResolution == .all &&
+            dualscreenResolution == .all &&
+            triplescreenResolution == .all &&
+            potraitscreenResolution == .all &&
+            miscResolution == .all
+    }
+
+    var areAllResolutionsCleared: Bool {
+        widescreenResolution.isEmpty &&
+            ultraWidescreenResolution.isEmpty &&
+            dualscreenResolution.isEmpty &&
+            triplescreenResolution.isEmpty &&
+            potraitscreenResolution.isEmpty &&
+            miscResolution.isEmpty
+    }
+
+    func selectAllResolutions() {
+        widescreenResolution = .all
+        ultraWidescreenResolution = .all
+        dualscreenResolution = .all
+        triplescreenResolution = .all
+        potraitscreenResolution = .all
+        miscResolution = .all
+    }
+
+    func clearResolutions() {
+        widescreenResolution = .none
+        ultraWidescreenResolution = .none
+        dualscreenResolution = .none
+        triplescreenResolution = .none
+        potraitscreenResolution = .none
+        miscResolution = .none
+    }
+}
+
 typealias FilterResultsViewModel = ContentViewModel
 
 protocol FilterResultsModel: OptionSet where Element == Self, RawValue == Int {

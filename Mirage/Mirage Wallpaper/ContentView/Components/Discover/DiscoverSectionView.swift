@@ -130,10 +130,17 @@ struct DiscoverCard: View {
     var downloadState: DownloadState?
     var cardWidth: CGFloat
 
+    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topTrailing) {
-                WorkshopImage(url: item.previewImageURL, contentMode: .fill, isAnimating: isHovered)
+                WorkshopImage(
+                    url: item.previewImageURL,
+                    contentMode: .fill,
+                    isAnimating: isHovered || isSelected ||
+                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible
+                )
                     .frame(width: cardWidth, height: cardWidth)
 
                 if isDownloaded {

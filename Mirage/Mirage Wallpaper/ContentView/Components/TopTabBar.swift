@@ -27,7 +27,7 @@ struct TopTabBar: SubviewOfContentView {
                 tab(index: 2, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
             }
             .padding(4)
-            .background(.quaternary.opacity(0.6), in: Capsule())
+            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)))
             .fixedSize()
 
             Spacer(minLength: 10)
@@ -39,6 +39,8 @@ struct TopTabBar: SubviewOfContentView {
                     AppDelegate.shared.openSettingsWindow()
                 }
             }
+            .padding(3)
+            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.32)))
             .fixedSize()
         }
         .padding(.vertical, 2)
