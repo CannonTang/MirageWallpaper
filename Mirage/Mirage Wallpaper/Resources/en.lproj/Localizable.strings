@@ -403,6 +403,9 @@
 "未命名" = "Unnamed";
 "未安装 SteamCMD" = "SteamCMD is not installed";
 "未找到 SteamCMD" = "SteamCMD not found";
+"需要安装 Rosetta 2" = "Rosetta 2 is required";
+"当前 Apple 芯片 Mac 尚未安装 Rosetta 2。请先通过 macOS 系统方式安装 Rosetta 2，再重新打开此设置页面。" = "Rosetta 2 is not installed on this Apple silicon Mac. Install Rosetta 2 through macOS, then reopen this setup page.";
+"当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD" = "Rosetta 2 must be installed on this Apple silicon Mac before SteamCMD can be used";
 "未找到该壁纸的本地下载目录。" = "The local download directory for this wallpaper was not found.";
 "未渲染壁纸" = "Unrendered wallpaper";
 "未登录" = "Not signed in";

@@ -8,6 +8,8 @@ import Cocoa
 import SwiftUI
 
 class MainWindowController: NSWindowController, NSWindowDelegate {
+    private let minimumContentSize = NSSize(width: 1000, height: 640)
+
     override var window: NSWindow! {
         get {
             return super.window
@@ -28,7 +30,6 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.titlebarAppearsTransparent = true
         self.window.setFrameAutosaveName("MainWindow")
         self.window.isMovableByWindowBackground = false
-        self.window.contentMinSize = NSSize(width: 1000, height: 640)
         let hostingView = NSHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
@@ -36,6 +37,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         )
         hostingView.sizingOptions = []
         self.window.contentView = hostingView
+        enforceMinimumSize()
     }
     
     required init?(coder: NSCoder) {
@@ -44,6 +46,24 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     override func windowDidLoad() {
         super.windowDidLoad()
+        enforceMinimumSize()
+    }
+
+    private func enforceMinimumSize() {
+        guard let window else { return }
+        window.contentMinSize = minimumContentSize
+        window.minSize = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: minimumContentSize)
+        ).size
+
+        let currentContentSize = window.contentRect(forFrameRect: window.frame).size
+        let clampedSize = NSSize(
+            width: max(currentContentSize.width, minimumContentSize.width),
+            height: max(currentContentSize.height, minimumContentSize.height)
+        )
+        if currentContentSize != clampedSize {
+            window.setContentSize(clampedSize)
+        }
     }
     
     func windowWillClose(_ notification: Notification) {

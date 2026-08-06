@@ -50,6 +50,7 @@ struct ContentView: View {
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
+    @StateObject private var steamSetupViewModel = SteamSetupViewModel()
 
     init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
         self.viewModel = viewModel
@@ -209,8 +210,10 @@ struct ContentView: View {
             UnsafeWallpaper(request: request)
                 .frame(width: 600, height: 300)
         }
-        .sheet(isPresented: $viewModel.isSteamSetupPresented) {
-            SteamSetupView(viewModel: SteamSetupViewModel())
+        .sheet(isPresented: $viewModel.isSteamSetupPresented, onDismiss: {
+            steamSetupViewModel.reset()
+        }) {
+            SteamSetupView(viewModel: steamSetupViewModel)
                 .frame(width: 560, height: 640)
         }
         .sheet(isPresented: $globalSettingsViewModel.isSettingsPresented, onDismiss: {

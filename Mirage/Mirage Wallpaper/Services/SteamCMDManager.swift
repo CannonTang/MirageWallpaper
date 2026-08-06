@@ -151,20 +151,32 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
 
     // MARK: - Detect
 
-    func detectSteamCMD() -> URL? {
+    func detectSteamCMD() -> SteamCMDDetectionResult {
         if let steamCMDPath, isReadyLauncher(steamCMDPath) {
-            return steamCMDPath
+            do {
+                try ensureSteamCMDCanRun(at: steamCMDPath)
+                return .found(steamCMDPath)
+            } catch SteamCMDError.rosettaRequired {
+                return markRosettaRequired()
+            } catch {
+            }
         }
 
         let managedLauncher = steamCMDDir.appending(path: "steamcmd.sh")
         if isUsableLauncher(managedLauncher), !fm.fileExists(atPath: installationMarker.path) {
+            do {
+                try ensureSteamCMDCanRun(at: steamCMDDir.appending(path: "steamcmd"))
+            } catch SteamCMDError.rosettaRequired {
+                return markRosettaRequired()
+            } catch {
+            }
             record(.steamCMDInstall, domain: "SteamCMD", "正在验证旧版 SteamCMD 安装状态")
             let health = runWithPTY(executable: managedLauncher, arguments: ["+quit"], onLine: { line in
                 self.record(.steamCMDInstall, domain: "SteamCMD", line)
             }, timeout: 300)
             if health.status == 0, !health.timedOut,
                (try? Data("ready".utf8).write(to: installationMarker, options: .atomic)) != nil {
-                return saveSteamCMDPath(managedLauncher)
+                return .found(saveSteamCMDPath(managedLauncher))
             }
         }
 
@@ -178,7 +190,14 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         for path in candidates {
             let url = preferredLauncher(for: URL(fileURLWithPath: path))
             if isReadyLauncher(url) {
-                return saveSteamCMDPath(url)
+                do {
+                    try ensureSteamCMDCanRun(at: url)
+                    return .found(saveSteamCMDPath(url))
+                } catch SteamCMDError.rosettaRequired {
+                    return markRosettaRequired()
+                } catch {
+                    continue
+                }
             }
         }
 
@@ -187,11 +206,29 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             let path = whichResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
             let url = preferredLauncher(for: URL(fileURLWithPath: path))
             if isReadyLauncher(url) {
-                return saveSteamCMDPath(url)
+                do {
+                    try ensureSteamCMDCanRun(at: url)
+                    return .found(saveSteamCMDPath(url))
+                } catch SteamCMDError.rosettaRequired {
+                    return markRosettaRequired()
+                } catch {
+                    return .notFound
+                }
             }
         }
 
-        return nil
+        do {
+            try ensureSteamCMDCanRun()
+        } catch SteamCMDError.rosettaRequired {
+            return markRosettaRequired()
+        } catch {
+        }
+        return .notFound
+    }
+
+    private func markRosettaRequired() -> SteamCMDDetectionResult {
+        clearSteamCMDPath()
+        return .rosettaRequired
     }
 
     private func saveSteamCMDPath(_ url: URL) -> URL {
@@ -202,6 +239,15 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
         UserDefaults.standard.set(url.path, forKey: pathKey)
         return url
+    }
+
+    private func clearSteamCMDPath() {
+        if Thread.isMainThread {
+            steamCMDPath = nil
+        } else {
+            DispatchQueue.main.sync { [weak self] in self?.steamCMDPath = nil }
+        }
+        UserDefaults.standard.removeObject(forKey: pathKey)
     }
 
     private func preferredLauncher(for url: URL) -> URL {
@@ -252,6 +298,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async { onProgress(.downloading(0)) }
 
             do {
+                try self.ensureSteamCMDCanRun()
                 try self.throwIfInstallationCancelled()
                 try self.ensureSufficientDiskSpace(minimumBytes: 150 * 1024 * 1024)
                 let archive = try self.downloadBootstrap { progress in
@@ -270,6 +317,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 guard self.isUsableLauncher(execPath) else {
                     throw SteamCMDError.installFailed("解压完成后未找到可执行的 steamcmd.sh")
                 }
+                try self.ensureSteamCMDCanRun(at: self.steamCMDDir.appending(path: "steamcmd"))
 
                 DispatchQueue.main.async { onProgress(.initializing) }
                 let health = self.runWithPTY(executable: execPath, arguments: ["+quit"], onLine: { line in
@@ -292,6 +340,10 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 _ = self.saveSteamCMDPath(execPath)
                 self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "SteamCMD 安装并完成首次初始化")
                 DispatchQueue.main.async { onProgress(.installed(execPath.path)) }
+            } catch SteamCMDError.rosettaRequired {
+                self.clearSteamCMDPath()
+                self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "当前机器需要 Rosetta 2 才能运行 SteamCMD")
+                DispatchQueue.main.async { onProgress(.rosettaRequired) }
             } catch is CancellationError {
                 self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "SteamCMD 安装已取消")
                 DispatchQueue.main.async { onProgress(.failed("SteamCMD 安装已取消")) }
@@ -376,6 +428,33 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func ensureSteamCMDCanRun(at executable: URL? = nil) throws {
+        guard isAppleSiliconHardware else { return }
+
+        if let executable {
+            let binary = executable.pathExtension == "sh"
+                ? executable.deletingPathExtension()
+                : executable
+            if let result = try? runShellSync("/usr/bin/lipo", arguments: ["-archs", binary.path]),
+               result.status == 0 {
+                let architectures = result.output.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\r" })
+                if architectures.contains(where: { $0 == "arm64" }) { return }
+                if !architectures.contains(where: { $0 == "x86_64" }) { return }
+            }
+        }
+
+        let rosetta = try runShellSync("/usr/bin/arch", arguments: ["-x86_64", "/usr/bin/true"])
+        guard rosetta.status == 0 else {
+            throw SteamCMDError.rosettaRequired
+        }
+    }
+
+    private var isAppleSiliconHardware: Bool {
+        var arm64: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("hw.optional.arm64", &arm64, &size, nil, 0) == 0 && arm64 == 1
+    }
+
     // MARK: - Session
 
     func refreshSessionIfNeeded() {
@@ -395,9 +474,17 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     func login(username: String, password: String,
                onLog: @escaping (String) -> Void,
                onResult: @escaping (SteamLoginState) -> Void) {
-        guard steamCMDPath != nil else {
+        guard let cmdPath = steamCMDPath else {
             onResult(.failed("SteamCMD 未安装"))
             return
+        }
+        do {
+            try ensureSteamCMDCanRun(at: cmdPath)
+        } catch SteamCMDError.rosettaRequired {
+            clearSteamCMDPath()
+            onResult(.failed(L("当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD")))
+            return
+        } catch {
         }
         guard beginLoginSession() else {
             onResult(.failed("SteamCMD 正在执行其他任务，请先等待或取消当前任务"))
@@ -685,6 +772,14 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         guard let cmdPath = steamCMDPath else {
             failWorkshopSessionStart(task: task, message: "SteamCMD 未安装")
             return
+        }
+        do {
+            try ensureSteamCMDCanRun(at: cmdPath)
+        } catch SteamCMDError.rosettaRequired {
+            clearSteamCMDPath()
+            failWorkshopSessionStart(task: task, message: L("当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD"))
+            return
+        } catch {
         }
 
         var masterFD: Int32 = 0
@@ -1577,12 +1672,14 @@ private final class SteamCMDDownloadDelegate: NSObject, URLSessionDownloadDelega
 }
 
 enum SteamCMDError: LocalizedError {
+    case rosettaRequired
     case downloadFailed(String)
     case installFailed(String)
     case operationFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .rosettaRequired: return L("当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD")
         case .downloadFailed(let message): return L("SteamCMD 下载失败：%@", message)
         case .installFailed(let message): return L("SteamCMD 安装失败：%@", message)
         case .operationFailed(let message): return message

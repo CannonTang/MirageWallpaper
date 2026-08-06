@@ -27,7 +27,7 @@ struct TopTabBar: SubviewOfContentView {
                 tab(index: 2, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
             }
             .padding(4)
-            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)))
+            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)), interactive: false)
             .fixedSize()
 
             Spacer(minLength: 10)
@@ -40,7 +40,7 @@ struct TopTabBar: SubviewOfContentView {
                 }
             }
             .padding(3)
-            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.32)))
+            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.32)), interactive: false)
             .fixedSize()
         }
         .padding(.vertical, 2)
@@ -83,8 +83,6 @@ struct TopTabBar: SubviewOfContentView {
         }
         .buttonStyle(.plain)
         .onHover { viewModel.topTabBarHoverSelection = $0 ? index : -1 }
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .animation(.easeOut(duration: 0.15), value: isHovering)
     }
 
     @ViewBuilder
@@ -115,6 +113,5 @@ private struct ChromeButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }

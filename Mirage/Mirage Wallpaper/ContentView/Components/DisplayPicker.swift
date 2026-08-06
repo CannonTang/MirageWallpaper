@@ -57,7 +57,6 @@ struct DisplayPicker: View {
         .menuIndicator(displays.count > 1 ? .visible : .hidden)
         .fixedSize()
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
         .help(helpText)
     }
 

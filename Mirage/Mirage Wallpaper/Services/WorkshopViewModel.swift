@@ -289,10 +289,13 @@ class WorkshopViewModel: ObservableObject {
             let path = cmdManager.detectSteamCMD()
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let path {
+                switch path {
+                case .found(let path):
                     self.steamServiceStatus.steamCMD = .available(path.path)
                     cmdManager.refreshSessionIfNeeded()
-                } else {
+                case .rosettaRequired:
+                    self.steamServiceStatus.steamCMD = .needsAction(L("需要安装 Rosetta 2"))
+                case .notFound:
                     self.steamServiceStatus.steamCMD = .unavailable(L("未安装 SteamCMD"))
                 }
                 self.steamServiceStatus.authentication = cmdManager.authenticationState

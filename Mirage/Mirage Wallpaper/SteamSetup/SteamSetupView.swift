@@ -97,9 +97,6 @@ struct SteamSetupView: View {
             }
             .padding(16)
         }
-        .onDisappear {
-            viewModel.cancelPendingWork()
-        }
     }
 
     // MARK: - Step Indicator

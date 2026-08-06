@@ -532,6 +532,7 @@ struct SteamServiceStatus: Equatable {
 
 enum SteamCMDInstallState: Equatable {
     case detecting
+    case rosettaRequired
     case found(String)
     case notFound
     case downloading(Double)
@@ -539,6 +540,12 @@ enum SteamCMDInstallState: Equatable {
     case initializing
     case installed(String)
     case failed(String)
+}
+
+enum SteamCMDDetectionResult: Equatable {
+    case found(URL)
+    case notFound
+    case rosettaRequired
 }
 
 enum SteamLoginState: Equatable {
