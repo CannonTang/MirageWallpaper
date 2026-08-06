@@ -38,6 +38,20 @@ class WorkshopViewModel: ObservableObject {
     @Published var selectedCreator: WorkshopCreator?
     @Published var showCreatorProfile: Bool = false
 
+    @Published var creatorItems: [WorkshopItem] = []
+    @Published var isLoadingCreatorItems = false
+    @Published var creatorItemsError: String?
+    @Published var creatorItemsPage = 1
+    @Published var creatorItemsTotal = 0
+    var creatorItemsPerPage: Int {
+        let stored = UserDefaults.standard.integer(forKey: "CreatorPerPage")
+        return stored > 0 ? stored : 10
+    }
+
+    var creatorTotalPages: Int {
+        max(1, creatorItemsTotal / creatorItemsPerPage + (creatorItemsTotal % creatorItemsPerPage > 0 ? 1 : 0))
+    }
+
     let itemsPerPage = 50
     let maximumPages = 1000
 
@@ -427,11 +441,45 @@ class WorkshopViewModel: ObservableObject {
         selectedCreator = creator
         showCreatorProfile = true
         showCustomization = false
+        creatorItems = []
+        creatorItemsPage = 1
+        creatorItemsTotal = 0
+        creatorItemsError = nil
+        loadCreatorItems(for: creator)
     }
 
     func openCreatorWorkshop(for item: WorkshopItem) {
         guard let creator = WorkshopCreator(item: item) else { return }
         openCreatorWorkshop(creator)
+    }
+
+    func loadCreatorItems(for creator: WorkshopCreator) {
+        guard !isLoadingCreatorItems else { return }
+        isLoadingCreatorItems = true
+        creatorItemsError = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await SteamWebAPI.shared.getUserFiles(
+                    steamId: creator.steamId,
+                    page: self.creatorItemsPage,
+                    perPage: self.creatorItemsPerPage
+                )
+                self.creatorItems = result.items
+                self.creatorItemsTotal = result.total
+            } catch {
+                self.creatorItemsError = error.localizedDescription
+            }
+            self.isLoadingCreatorItems = false
+        }
+    }
+
+    func goToCreatorPage(_ page: Int) {
+        let clamped = max(1, min(page, creatorTotalPages))
+        guard clamped != creatorItemsPage else { return }
+        creatorItemsPage = clamped
+        guard let creator = selectedCreator else { return }
+        loadCreatorItems(for: creator)
     }
 
     func downloadWorkshopID(_ workshopID: String, completion: ((Bool) -> Void)? = nil) {

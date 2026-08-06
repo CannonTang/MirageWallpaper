@@ -191,6 +191,32 @@ final class SteamWebAPI {
         return await enrichCreators(in: items)
     }
 
+    func getUserFiles(steamId: String, page: Int = 1, perPage: Int = 30) async throws -> (items: [WorkshopItem], total: Int) {
+        try await throttle()
+        var components = URLComponents(string: baseURL + "IPublishedFileService/GetUserFiles/v1/")!
+        components.queryItems = [
+            URLQueryItem(name: "key", value: apiKey),
+            URLQueryItem(name: "steamid", value: steamId),
+            URLQueryItem(name: "appid", value: appId),
+            URLQueryItem(name: "numperpage", value: "\(perPage)"),
+            URLQueryItem(name: "page", value: "\(page)"),
+            URLQueryItem(name: "return_tags", value: "true"),
+            URLQueryItem(name: "return_previews", value: "true"),
+            URLQueryItem(name: "return_metadata", value: "true"),
+            URLQueryItem(name: "strip_description_bbcode", value: "true"),
+        ]
+        guard let url = components.url else { throw SteamAPIError.invalidURL }
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse else { throw SteamAPIError.invalidResponse }
+        guard httpResponse.statusCode == 200 else { throw SteamAPIError.httpError(httpResponse.statusCode) }
+        let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
+        let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
+        let visibleItems = decodedItems.filter { $0.fileSize > 0 }
+        let items = await enrichCreators(in: visibleItems)
+        let total = apiResponse.response.total ?? items.count
+        return (items, total)
+    }
+
     func creatorProfile(steamId: String) async -> WorkshopCreator? {
         let normalized = steamId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }

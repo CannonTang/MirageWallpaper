@@ -5,12 +5,13 @@
 //
 
 import SwiftUI
-import WebKit
 import Combine
 
 struct WorkshopItemDetail: View {
     var item: WorkshopItem?
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    var isEmbedded: Bool = false
+    var embeddedCreatorSteamId: String?
 
     @State private var isLoaded = false
 
@@ -83,7 +84,9 @@ struct WorkshopItemDetail: View {
                     .multilineTextAlignment(.center)
 
                 if !item.creatorSteamId.isEmpty {
+                    let isSelf = isEmbedded && embeddedCreatorSteamId.map({ !$0.isEmpty && item.creatorSteamId == $0 }) ?? false
                     Button {
+                        if isSelf { return }
                         if let creator = WorkshopCreator(item: item) {
                             workshopViewModel.openCreatorProfile(creator)
                         }
@@ -94,20 +97,23 @@ struct WorkshopItemDetail: View {
                                 Text(item.creatorDisplayName)
                                     .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
-                                Text(LocalizedStringKey("查看作者主页和作品"))
+                                Text(LocalizedStringKey(isSelf ? "当前作者" : "查看作者主页和作品"))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
-                            Image(systemName: "arrow.up.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if !isSelf {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain)
+                    .disabled(isSelf)
 
                     if let creator = WorkshopCreator(item: item), creator.profileURL != nil {
                         Button {
@@ -196,21 +202,23 @@ struct WorkshopItemDetail: View {
             .padding([.horizontal, .top])
         }
 
-        HStack {
-            Spacer()
-            Button {
-                AppDelegate.shared.mainWindowController.close()
-            } label: {
-                Text("确定").frame(width: 50)
+        if !isEmbedded {
+            HStack {
+                Spacer()
+                Button {
+                    AppDelegate.shared.mainWindowController.close()
+                } label: {
+                    Text("确定").frame(width: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                Button {
+                    AppDelegate.shared.mainWindowController.close()
+                } label: {
+                    Text("取消").frame(width: 50)
+                }
             }
-            .buttonStyle(.borderedProminent)
-            Button {
-                AppDelegate.shared.mainWindowController.close()
-            } label: {
-                Text("取消").frame(width: 50)
-            }
+            .padding()
         }
-        .padding()
     }
 
     @ViewBuilder
@@ -238,6 +246,16 @@ struct WorkshopItemDetail: View {
             .buttonStyle(.borderedProminent)
             .tint(.green)
             .disabled(true)
+
+            if isEmbedded, let installed {
+                Button {
+                    workshopViewModel.openInstalledWallpaper(installed)
+                } label: {
+                    Label(LocalizedStringKey("设为壁纸"), systemImage: "play.rectangle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
         } else if workshopViewModel.steamSetupState != .ready {
             VStack(spacing: 6) {
                 Text(workshopViewModel.steamServiceStatus.workshopDownload.summary)
@@ -408,8 +426,26 @@ struct StatView: View {
 struct CreatorProfileView: View {
     let creator: WorkshopCreator
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @State private var selectedDetailItem: WorkshopItem?
+    @State private var hoveredItemID: String?
+    @AppStorage("ExplorerIconSize") private var iconSize: Double = 170
+    @AppStorage("CreatorPerPage") private var creatorPageSize: Int = 10
 
     var body: some View {
+        Group {
+            if let detailItem = selectedDetailItem {
+                creatorItemDetail(item: detailItem)
+            } else {
+                creatorGrid
+            }
+        }
+        .onChange(of: creatorPageSize) {
+            workshopViewModel.creatorItemsPage = 1
+            workshopViewModel.loadCreatorItems(for: creator)
+        }
+    }
+
+    private var creatorGrid: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 AsyncImage(url: creator.avatarURL) { phase in
@@ -458,258 +494,173 @@ struct CreatorProfileView: View {
 
             Divider()
 
-            if creator.workshopURL != nil {
-                CreatorWorkshopWebView(
-                    creator: creator,
-                    workshopViewModel: workshopViewModel
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "person.crop.circle.badge.exclamationmark")
-                        .font(.system(size: 30))
+            if workshopViewModel.isLoadingCreatorItems && workshopViewModel.creatorItems.isEmpty {
+                Spacer()
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text(LocalizedStringKey("加载中..."))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(L("无法打开作者主页"))
-                        .font(.headline)
-                    Text(L("该作者没有可用的 Steam 主页地址。"))
+                }
+                Spacer()
+            } else if let error = workshopViewModel.creatorItemsError, workshopViewModel.creatorItems.isEmpty {
+                Spacer()
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text(error)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Button(LocalizedStringKey("重试")) {
+                        workshopViewModel.loadCreatorItems(for: creator)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Spacer()
+            } else if workshopViewModel.creatorItems.isEmpty && !workshopViewModel.isLoadingCreatorItems {
+                Spacer()
+                VStack(spacing: 12) {
+                    Image(systemName: "rectangle.on.rectangle.slash")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text(L("该创作者暂未发布 Wallpaper Engine 作品"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: iconSize), spacing: 10)],
+                        spacing: 10
+                    ) {
+                        ForEach(workshopViewModel.creatorItems) { item in
+                            WorkshopItemCard(
+                                item: item,
+                                isHovered: hoveredItemID == item.id,
+                                isSelected: false,
+                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
+                            )
+                            .onHover { hovering in
+                                hoveredItemID = hovering ? item.id : nil
+                            }
+                            .onTapGesture {
+                                selectedDetailItem = item
+                            }
+                            .contextMenu {
+                                Section {
+                                    Button {
+                                        workshopViewModel.downloadItem(item)
+                                    } label: {
+                                        Label(
+                                            LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
+                                            systemImage: "arrow.down.circle.fill"
+                                        )
+                                    }
+                                    .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
+
+                                    Button {
+                                        selectedDetailItem = item
+                                    } label: {
+                                        Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
+                                    }
+                                }
+
+                                Section {
+                                    Button {
+                                        guard let url = URL(
+                                            string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+                                        ) else { return }
+                                        NSWorkspace.shared.open(url)
+                                    } label: {
+                                        Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
+                                    }
+                                }
+
+                                Section {
+                                    Picker(LocalizedStringKey("图标大小"), selection: $iconSize) {
+                                        Text(LocalizedStringKey("小图标")).tag(Double(140))
+                                        Text(LocalizedStringKey("中图标")).tag(Double(170))
+                                        Text(LocalizedStringKey("大图标")).tag(Double(200))
+                                    }
+                                    .pickerStyle(.inline)
+
+                                    Divider()
+
+                                    Picker(LocalizedStringKey("每页数量"), selection: $creatorPageSize) {
+                                        Text("10").tag(10)
+                                        Text("25").tag(25)
+                                        Text("50").tag(50)
+                                    }
+                                    .pickerStyle(.inline)
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+
+                    if workshopViewModel.creatorTotalPages > 1 {
+                        PageNavigator(
+                            currentPage: workshopViewModel.creatorItemsPage,
+                            pageCount: workshopViewModel.creatorTotalPages,
+                            onSelect: workshopViewModel.goToCreatorPage
+                        )
+                        .padding(.bottom, 12)
+                    }
+                }
             }
         }
     }
-}
 
-struct CreatorWorkshopWebView: NSViewRepresentable {
-    let creator: WorkshopCreator
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    private func creatorItemDetail(item: WorkshopItem) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    selectedDetailItem = nil
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.medium))
+                        Text(L("返回"))
+                            .font(.body.weight(.medium))
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
 
-    private static let messageHandlerName = "mirageDownload"
+                Spacer()
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(workshopViewModel: workshopViewModel)
-    }
+                Text(item.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
 
-    func makeNSView(context: Context) -> WKWebView {
-        let controller = WKUserContentController()
-        controller.addUserScript(WKUserScript(
-            source: Self.downloadButtonScript(),
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: false
-        ))
-        controller.add(context.coordinator, name: Self.messageHandlerName)
+                Spacer()
 
-        let configuration = WKWebViewConfiguration()
-        configuration.userContentController = controller
-        configuration.websiteDataStore = .default()
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
-        context.coordinator.attach(webView)
-        context.coordinator.load(creator: creator, in: webView)
-        return webView
-    }
-
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.load(creator: creator, in: webView)
-        context.coordinator.syncDownloadStatuses()
-    }
-
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.configuration.userContentController.removeScriptMessageHandler(
-            forName: Self.messageHandlerName
-        )
-        coordinator.detach()
-    }
-
-    private static func downloadButtonScript() -> String {
-        let labels = [
-            "download": L("下载"),
-            "queued": L("已加入下载队列"),
-            "downloading": L("下载中…"),
-            "downloaded": L("已下载"),
-            "retry": L("重试下载")
-        ]
-        let data = try? JSONSerialization.data(withJSONObject: labels)
-        let json = data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-
-        return """
-        (() => {
-          if (window.MirageWorkshop) return;
-          const labels = \(json);
-          const states = Object.create(null);
-
-          const style = document.createElement('style');
-          style.textContent = `
-            .mirage-download-button {
-              position: absolute; right: 8px; bottom: 8px; z-index: 2147483647;
-              min-height: 28px; padding: 5px 10px; border: 1px solid rgba(255,255,255,.35);
-              border-radius: 5px; color: #fff; background: rgba(20,22,26,.88);
-              font: 600 12px -apple-system, BlinkMacSystemFont, sans-serif;
-              box-shadow: 0 2px 8px rgba(0,0,0,.35); cursor: pointer;
+                Spacer().frame(width: 60)
             }
-            .mirage-download-button:hover { background: rgba(48,105,164,.96); }
-            .mirage-download-button[data-status="queued"],
-            .mirage-download-button[data-status="downloading"] { cursor: progress; opacity: .9; }
-            .mirage-download-button[data-status="downloaded"] { background: rgba(42,115,66,.94); cursor: default; }
-            .mirage-download-button[data-status="failed"] { background: rgba(145,52,52,.94); }
-          `;
-          (document.head || document.documentElement).appendChild(style);
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
 
-          function workshopID(link) {
-            try {
-              const url = new URL(link.href, location.href);
-              if (!url.pathname.includes('/sharedfiles/filedetails/')) return null;
-              const id = url.searchParams.get('id');
-              return id && /^[0-9]+$/.test(id) ? id : null;
-            } catch (_) { return null; }
-          }
+            Divider()
 
-          function applyState(button, state) {
-            const status = state?.status || 'download';
-            button.dataset.status = status;
-            button.textContent = state?.text || labels.download;
-            button.disabled = status === 'queued' || status === 'downloading' || status === 'downloaded';
-          }
-
-          function decorate() {
-            document.querySelectorAll('a[href*="sharedfiles/filedetails"]').forEach(link => {
-              const id = workshopID(link);
-              if (!id || link.querySelector(`.mirage-download-button[data-id="${id}"]`)) return;
-              const button = document.createElement('button');
-              button.type = 'button';
-              button.className = 'mirage-download-button';
-              button.dataset.id = id;
-              applyState(button, states[id]);
-              button.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                if (button.dataset.status === 'downloaded' || button.dataset.status === 'queued' || button.dataset.status === 'downloading') return;
-                states[id] = { status: 'queued', text: labels.queued };
-                applyState(button, states[id]);
-                window.webkit.messageHandlers.mirageDownload.postMessage({ type: 'download', id });
-              }, true);
-              if (getComputedStyle(link).position === 'static') link.style.position = 'relative';
-              link.appendChild(button);
-            });
-          }
-
-          window.MirageWorkshop = {
-            setStatuses(next) {
-              Object.keys(next || {}).forEach(id => { states[id] = next[id]; });
-              document.querySelectorAll('.mirage-download-button[data-id]').forEach(button => {
-                applyState(button, states[button.dataset.id]);
-              });
-            }
-          };
-
-          new MutationObserver(decorate).observe(document.documentElement, { childList: true, subtree: true });
-          decorate();
-        })();
-        """
-    }
-
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        private weak var workshopViewModel: WorkshopViewModel?
-        private weak var webView: WKWebView?
-        private var downloadObserver: AnyCancellable?
-        private var loadedCreatorID: String?
-
-        init(workshopViewModel: WorkshopViewModel) {
-            self.workshopViewModel = workshopViewModel
-            super.init()
-            downloadObserver = Publishers.CombineLatest(
-                workshopViewModel.$downloadQueue,
-                workshopViewModel.$installedWorkshopIDs
+            WorkshopItemDetail(
+                item: item,
+                workshopViewModel: workshopViewModel,
+                isEmbedded: true,
+                embeddedCreatorSteamId: creator.steamId
             )
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in
-                self?.syncDownloadStatuses()
-            }
-        }
-
-        func attach(_ webView: WKWebView) {
-            self.webView = webView
-        }
-
-        func detach() {
-            downloadObserver?.cancel()
-            downloadObserver = nil
-            webView = nil
-        }
-
-        func load(creator: WorkshopCreator, in webView: WKWebView) {
-            guard loadedCreatorID != creator.id else { return }
-            loadedCreatorID = creator.id
-            guard let url = creator.workshopURL else { return }
-            webView.load(URLRequest(url: url))
-        }
-
-        func userContentController(
-            _ userContentController: WKUserContentController,
-            didReceive message: WKScriptMessage
-        ) {
-            guard message.name == CreatorWorkshopWebView.messageHandlerName,
-                  let body = message.body as? [String: Any],
-                  body["type"] as? String == "download",
-                  let id = body["id"] as? String,
-                  !id.isEmpty,
-                  id.allSatisfy(\.isNumber),
-                  UInt64(id) ?? 0 > 0 else { return }
-
-            workshopViewModel?.downloadWorkshopID(id) { [weak self] accepted in
-                guard !accepted else { return }
-                self?.setStatus(
-                    for: id,
-                    status: "failed",
-                    text: L("无法获取壁纸信息，点击重试")
-                )
-            }
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            syncDownloadStatuses()
-        }
-
-        func syncDownloadStatuses() {
-            guard let workshopViewModel, let webView else { return }
-            var values: [String: [String: String]] = [:]
-            for id in workshopViewModel.installedWorkshopIDs {
-                values[id] = ["status": "downloaded", "text": L("已下载")]
-            }
-            for task in workshopViewModel.downloadQueue {
-                values[task.id] = Self.statusValue(for: task.state)
-            }
-            guard let data = try? JSONSerialization.data(withJSONObject: values),
-                  let json = String(data: data, encoding: .utf8) else { return }
-            webView.evaluateJavaScript("window.MirageWorkshop?.setStatuses(\(json));")
-        }
-
-        private func setStatus(for id: String, status: String, text: String) {
-            let value = [id: ["status": status, "text": text]]
-            guard let data = try? JSONSerialization.data(withJSONObject: value),
-                  let json = String(data: data, encoding: .utf8) else { return }
-            webView?.evaluateJavaScript("window.MirageWorkshop?.setStatuses(\(json));")
-        }
-
-        private static func statusValue(for state: DownloadState) -> [String: String] {
-            switch state {
-            case .queued:
-                return ["status": "queued", "text": L("已加入下载队列")]
-            case .starting:
-                return ["status": "downloading", "text": L("正在连接 Steam…")]
-            case .downloading(let percent):
-                let text = percent.map { L("%d%% 下载中…", Int($0 * 100)) } ?? L("下载中…")
-                return ["status": "downloading", "text": text]
-            case .validating:
-                return ["status": "downloading", "text": L("正在验证下载文件…")]
-            case .completed:
-                return ["status": "downloaded", "text": L("已下载")]
-            case .failed:
-                return ["status": "failed", "text": L("下载失败，点击重试")]
-            }
         }
     }
 }
+
+
