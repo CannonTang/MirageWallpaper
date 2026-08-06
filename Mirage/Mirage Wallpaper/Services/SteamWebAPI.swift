@@ -116,16 +116,36 @@ final class SteamWebAPI {
         if typeFilter != .all {
             allTags.append(typeFilter.rawValue.capitalized)
         }
+        // Age rating filtering. Rating tags are mutually exclusive (each wallpaper has only one rating), 
+        // so requiredtags AND combination cannot be used when multiple options are selected.
+        // Strategy:
+        //   - Only Questionable / Mature selected: use requiredtags for strict matching to exclude untagged wallpapers
+        //   - Questionable + Mature selected (Everyone not selected) with no other type tags: use requiredtags +
+        //     match_all_tags=false (OR semantics) to precisely return either Q or M
+        //   - Other cases (including Everyone selected): use excludedtags to filter out unselected ratings,
+        //     allowing untagged wallpapers to fall under "Everyone"
+        let selectedRatings = ageRating.selectedRatings
+        let hasEveryone = selectedRatings.contains(WorkshopAgeRating.everyone)
+        var useOrForTags = false
+
+        if selectedRatings.count == 1 && !hasEveryone {
+            allTags.append(selectedRatings[0].steamTag)
+        } else if selectedRatings.count == 2 && !hasEveryone && allTags.isEmpty {
+            allTags.append(WorkshopAgeRating.questionable.steamTag)
+            allTags.append(WorkshopAgeRating.mature.steamTag)
+            useOrForTags = true
+        } else {
+            let excluded = ageRating.excludedRatings
+            for (index, rating) in excluded.enumerated() {
+                params["excludedtags[\(index)]"] = rating.steamTag
+            }
+        }
+
         for (index, tag) in allTags.enumerated() {
             params["requiredtags[\(index)]"] = tag
         }
-
-        // Ratings are mutually exclusive, so AND-ing them as `requiredtags`
-        // would match nothing; the unchecked ones are excluded instead.
-        // `excludedtags` is orthogonal, so type/genre keep their AND semantics.
-        let excluded = ageRating.excludedRatings
-        for (index, rating) in excluded.enumerated() {
-            params["excludedtags[\(index)]"] = rating.steamTag
+        if useOrForTags {
+            params["match_all_tags"] = "false"
         }
 
         var components = URLComponents(string: baseURL + "IPublishedFileService/QueryFiles/v1/")!
