@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.0.1</title>
+            <pubDate>Thu, 06 Aug 2026 14:44:29 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>260</sparkle:version>
+            <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: f49690e035d0141e287056b31b5bc487fa648f32
+Channel: stable
+
+chore(release): bump version to 1.0.1
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.1/Mirage-260-f49690e035d0-macOS-arm64.zip" length="193815642" type="application/octet-stream" sparkle:edSignature="yi44dfg8hycqEaSVzei1GKVgeHciAkoQ+vijq/YXfoqPwKKU9mk/RiROd9AWqRb585xBuSBHtluvm9SmgWXMCA=="/>
+        </item>
+        <item>
             <title>1.0.0</title>
             <pubDate>Thu, 06 Aug 2026 14:09:08 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -25,42 +42,6 @@ fix(app): stabilize wallpaper preview and activation
         </item>
         <item>
             <title>1.0.0</title>
-            <pubDate>Thu, 06 Aug 2026 12:21:14 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>257</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: da22d51d9aa15f73bc801c6735c696c07b6aab23
-Channel: beta
-
-fix(app): stabilize steam setup and platform compatibility
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-257-da22d51d9aa1-macOS-arm64.zip" length="193821801" type="application/octet-stream" sparkle:edSignature="f6TQye66OkjU4oLS7awLyOe3KWaMd4Uy09nz/4AHsmaAuFmKjF/cHt2C1i8PHAkGejSgRzxJHdWsyaRGJYvRAg=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 06 Aug 2026 09:22:54 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>256</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: c32927d95f84c1812fed1cb3860921f42a862f18
-Channel: beta
-
-Merge pull request #9 from dawalishi821/main
-
-fix no tags
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-256-c32927d95f84-macOS-arm64.zip" length="193814275" type="application/octet-stream" sparkle:edSignature="grKwz1Kzls3B97Q40qCYQzgfhf3NTv8Sl5o2/Lqvmp609DTPUapiSZ54fwcGiTtSeIRE13Q2VHgmWpYfZm3KAg=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
             <pubDate>Thu, 06 Aug 2026 03:45:12 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:version>254</sparkle:version>
@@ -75,29 +56,6 @@ docs(workshop): fix docs url to mirage.simplehac.cn
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.0/Mirage-254-4e57bc82a387-macOS-arm64.zip" length="193813312" type="application/octet-stream" sparkle:edSignature="yAITXQM+AUErCWdhqAmtPf+jE8cL2GLwUDSKQp3lTaKsj86ZMhgLGgTWhBQlhbDRgzV3PpBgYfrsxeAMujGoCw=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 06 Aug 2026 02:11:38 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>252</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: fe0c550b7931a7d4d7173a005213c941d58fd3cd
-Channel: beta
-
-feat(workshop): native creator profile with pagination and view controls
-
-Replace WKWebView-based creator page with pure native SwiftUI implementation.
-Add GetUserFiles API for fetching creator works with pagination.
-Add icon size and per-page pickers to author page context menu.
-Fix back button hit area and embedded detail interactions.
-Add i18n keys for new UI strings.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-252-fe0c550b7931-macOS-arm64.zip" length="193813310" type="application/octet-stream" sparkle:edSignature="U8fbqtclzM5FbJZtSfH+tL0kkt+PD2hrjNmte5RJv3Io0NG8vkPl3FIhVc2TxAkQVOcgXKygD6LLKBTKb03mBQ=="/>
         </item>
         <item>
             <title>1.0.0</title>
@@ -119,6 +77,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: XIO4KsT7F/pW7JFWzMSRn7QV8HTOqmXC+Q/ekRdxNyxSmw8x9yDC8QV2sOctnEqXVXyWsucO/95OOxB5A5UUAw==
-length: 6858
+edSignature: K0spzyH9pq7SFMOBuKmjh/W+nMuUXbhfbsKsAS8/Edx5HNIPeBC1YcSmc4t0odR44pDbzBnzud9aLwvl5xy7Cg==
+length: 4388
 -->
