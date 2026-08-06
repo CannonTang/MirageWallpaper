@@ -7,6 +7,29 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Thu, 06 Aug 2026 02:11:38 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>252</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: fe0c550b7931a7d4d7173a005213c941d58fd3cd
+Channel: beta
+
+feat(workshop): native creator profile with pagination and view controls
+
+Replace WKWebView-based creator page with pure native SwiftUI implementation.
+Add GetUserFiles API for fetching creator works with pagination.
+Add icon size and per-page pickers to author page context menu.
+Fix back button hit area and embedded detail interactions.
+Add i18n keys for new UI strings.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-252-fe0c550b7931-macOS-arm64.zip" length="193813310" type="application/octet-stream" sparkle:edSignature="U8fbqtclzM5FbJZtSfH+tL0kkt+PD2hrjNmte5RJv3Io0NG8vkPl3FIhVc2TxAkQVOcgXKygD6LLKBTKb03mBQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Wed, 05 Aug 2026 16:09:01 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -97,24 +120,6 @@ fix(renderer): restore interactive x-ray effects
         </item>
         <item>
             <title>1.0.0</title>
-            <pubDate>Tue, 04 Aug 2026 14:17:31 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>246</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 54833222cd732a0656aff42338956805e23b9003
-Channel: beta
-
-fix(renderer): restore dynamic layers and text rendering
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-246-54833222cd73-macOS-arm64.zip" length="193546106" type="application/octet-stream" sparkle:edSignature="t78aoVP2y28B+uqg881YWaJCcVAVaSTAv1DFe7+LosNxfbLRCSjfDym6ZoqgKlV2jl+zhDbIuJdcsyzdig6lAg=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
             <pubDate>Mon, 03 Aug 2026 11:59:03 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:version>233</sparkle:version>
@@ -133,6 +138,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: X34yeD7ofYf8q1nXBKFjTZXBUn7V/oz1MAlXrcTmcTbdYn1M5NLCgUX75vV7yip3WXv5XBqaQf6+7smbHB6IAw==
-length: 7643
+edSignature: fL2x7il8AmpSLcDGI9TH6pnscjFgjt9tW9oOWkH2O/aUubt1WjSGnWeBS3JbCAH1BoOJnWu6IcsVkjXU4w7JCA==
+length: 7959
 -->
