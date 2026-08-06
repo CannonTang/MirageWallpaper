@@ -7,7 +7,7 @@ private struct MirageGlassModifier<S: Shape>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), interactive {
             content.glassEffect(.regular.interactive(interactive), in: shape)
         } else {
             content.background(fallback, in: shape)

@@ -49,6 +49,20 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         enforceMinimumSize()
     }
 
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        let minimumFrameSize = sender.frameRect(
+            forContentRect: NSRect(origin: .zero, size: minimumContentSize)
+        ).size
+        return NSSize(
+            width: max(frameSize.width, minimumFrameSize.width),
+            height: max(frameSize.height, minimumFrameSize.height)
+        )
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        enforceMinimumSize()
+    }
+
     private func enforceMinimumSize() {
         guard let window else { return }
         window.contentMinSize = minimumContentSize

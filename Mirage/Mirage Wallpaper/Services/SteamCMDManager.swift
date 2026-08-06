@@ -428,20 +428,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func ensureSteamCMDCanRun(at executable: URL? = nil) throws {
+    private func ensureSteamCMDCanRun(at _: URL? = nil) throws {
         guard isAppleSiliconHardware else { return }
-
-        if let executable {
-            let binary = executable.pathExtension == "sh"
-                ? executable.deletingPathExtension()
-                : executable
-            if let result = try? runShellSync("/usr/bin/lipo", arguments: ["-archs", binary.path]),
-               result.status == 0 {
-                let architectures = result.output.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\r" })
-                if architectures.contains(where: { $0 == "arm64" }) { return }
-                if !architectures.contains(where: { $0 == "x86_64" }) { return }
-            }
-        }
 
         let rosetta = try runShellSync("/usr/bin/arch", arguments: ["-x86_64", "/usr/bin/true"])
         guard rosetta.status == 0 else {

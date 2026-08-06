@@ -231,6 +231,7 @@ struct ContentView: View {
                 .allowsHitTesting(false)
         }
         .environment(\.locale, localization.locale)
+        .frame(minWidth: 1000, minHeight: 640)
     }
 }
 
