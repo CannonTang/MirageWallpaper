@@ -53,6 +53,10 @@ final class RendererProcess {
     var desiredSpeed: Float
     var desiredFillMode: FillMode
     var desiredUserProperties: [String: WEProjectProperty]
+    /// Scene renderers receive their initial properties through the launch-time
+    /// JSON file. Runtime snapshots must not replay that same set of values:
+    /// some complex scenes rebuild Vulkan resources on every property update.
+    var usesLaunchUserProperties = false
     let spectrumEnabled: Bool
     var spectrumDemanded: Bool
     var transitionCompletions: [(Bool) -> Void] = []
@@ -1054,6 +1058,7 @@ final class RendererController {
            let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
             args += ["--user-properties", propsFile.path]
             handle.tempFiles.append(propsFile)
+            handle.usesLaunchUserProperties = true
         }
 
         proc.arguments = args
@@ -1111,10 +1116,12 @@ final class RendererController {
             let registeredOptions = launchingRequests[displayID]?.options ?? options
             handle.launchOptions = registeredOptions
             updateDesiredStateLocked(handle, from: registeredOptions)
-            // Queue the latest property snapshot before exposing this candidate
-            // to live controls. Commands issued after registration will then be
-            // ordered after this snapshot instead of being overwritten by it.
-            applyInitialProperties(registeredOptions.userProperties, to: handle)
+            // The scene's initial property snapshot is already loaded by
+            // --user-properties. Only use the stdin fallback when writing that
+            // launch file failed.
+            if !handle.usesLaunchUserProperties {
+                applyInitialProperties(registeredOptions.userProperties, to: handle)
+            }
             candidates[displayID] = handle
             transitions[displayID] = ReplacementTransition(
                 candidate: handle, generation: generation)
@@ -1570,7 +1577,9 @@ final class RendererController {
         handle.send(["cmd": "speed", "value": handle.desiredSpeed])
         handle.send(Self.powerCommand(state: handle.desiredPowerState,
                                       fps: handle.desiredPowerFps))
-        applyInitialProperties(handle.desiredUserProperties, to: handle)
+        if handle.wallpaper.kind != .scene {
+            applyInitialProperties(handle.desiredUserProperties, to: handle)
+        }
     }
 
     @discardableResult
@@ -2324,7 +2333,9 @@ final class RendererController {
         handle.send(["cmd": "speed", "value": options.speed])
         handle.send(Self.powerCommand(state: options.powerState,
                                       fps: options.powerFps))
-        applyInitialProperties(options.userProperties, to: handle)
+        if handle.wallpaper.kind != .scene {
+            applyInitialProperties(options.userProperties, to: handle)
+        }
     }
 
     private func sendVolumeAndMute(_ volume: Float, muted: Bool,
@@ -2626,8 +2637,9 @@ final class RendererController {
                 "values": values
             ])
         case .scene:
-            // Scene receives a launch-time file as an optimization, then this
-            // ordered snapshot closes the launch-in-flight update window.
+            // The normal scene path loads this snapshot through
+            // --user-properties before parsing. This stdin path is only a
+            // fallback when the temporary launch file could not be written.
             for key in props.keys.sorted() {
                 guard let property = props[key] else { continue }
                 handle.send(Self.propertyCommand(key: key, property: property))
