@@ -164,7 +164,7 @@ bool ValidateGeometry(MacDesktopHost* host, bool activated) {
     if (host == nullptr || host->window == nil || host->surface_layer == nil) return false;
     NSScreen* screen = ResolveScreen(host->display_id);
     if (screen == nil || ScreenDisplayID(screen) != host->display_id) return false;
-    if (! AppKitRectMatches(host->window.frame, screen.frame) || ! host->window.isVisible) return false;
+    if (! AppKitRectMatches(host->window.frame, screen.frame)) return false;
     NSView* content_view = host->window.contentView;
     if (content_view == nil) return false;
     const NSRect expected_bounds = NSMakeRect(
@@ -493,8 +493,7 @@ extern "C" void SceneRendererMacDesktopWake(void* handle) {
       auto* current = static_cast<MacDesktopHost*>(ref.hostPtr);
       if (current == nullptr) return;
       if (! NormalizeGeometry(current)) return;
-      if (ValidateGeometry(current, false) &&
-          ! current->first_frame_presented.exchange(true) &&
+      if (! current->first_frame_presented.exchange(true) &&
           current->callbacks.first_frame_presented != nullptr) {
           current->callbacks.first_frame_presented(current->callbacks.userdata);
       }

@@ -8,8 +8,6 @@ import SwiftUI
 
 struct ExplorerItem: View {
     let wallpaper: WEWallpaper
-    let authorName: String?
-    let authorAvatarURL: URL?
     // Selection is passed in as a plain value so the cell no longer observes the
     // shared view models. Hovering or selecting one cell then cannot force every
     // other cell in the grid to rebuild.
@@ -33,31 +31,6 @@ struct ExplorerItem: View {
             .clipped()
 
             VStack(spacing: 0) {
-                if let authorName, !authorName.isEmpty {
-                    HStack(spacing: 4) {
-                        AsyncImage(url: authorAvatarURL) { phase in
-                            if case .success(let image) = phase {
-                                image.resizable().scaledToFill()
-                            } else {
-                                Image(systemName: "person.fill")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(width: 13, height: 13)
-                        .clipShape(Circle())
-                        Text(authorName)
-                            .lineLimit(1)
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(Color(white: hovering ? 0.82 : 0.62))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 6)
-                    .padding(.top, 4)
-                    .padding(.bottom, 2)
-                }
-
                 Text(wallpaper.project.title)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, minHeight: 30)

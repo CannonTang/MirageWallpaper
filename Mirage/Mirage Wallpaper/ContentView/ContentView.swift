@@ -74,8 +74,7 @@ struct ContentView: View {
                                     FilterResults(viewModel: viewModel)
                             }, content: {
                                 WallpaperExplorer(contentViewModel: viewModel,
-                                                  wallpaperViewModel: wallpaperViewModel,
-                                                  workshopViewModel: workshopViewModel)
+                                                  wallpaperViewModel: wallpaperViewModel)
                                     .onDrop(of: [.fileURL], delegate: viewModel)
                                     .contextMenu {
                                         ExplorerGlobalMenu(contentViewModel: viewModel,

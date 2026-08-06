@@ -36,6 +36,7 @@ class WallpaperViewModel: ObservableObject {
         let id: UUID
         let key: DisplayKey
         let state: DisplayWallpaperState
+        let restoreFocus: Bool
     }
 
     private struct FailedAssignmentRecovery {
@@ -151,7 +152,7 @@ class WallpaperViewModel: ObservableObject {
 
     var currentWallpaper: WEWallpaper {
         get { wallpaper(for: selectedDisplayKey) }
-        set { assign(newValue, to: selectedDisplayKey) }
+        set { assign(newValue, to: selectedDisplayKey, restoreFocus: true) }
     }
 
     @discardableResult
@@ -184,7 +185,8 @@ class WallpaperViewModel: ObservableObject {
                 guard proposal.state.wallpaper.id == targetID else { return proposal }
                 var state = proposal.state
                 state.wallpaper = updated
-                return PendingAssignmentProposal(id: proposal.id, key: proposal.key, state: state)
+                return PendingAssignmentProposal(id: proposal.id, key: proposal.key, state: state,
+                                                restoreFocus: proposal.restoreFocus)
             }
         }
         persistStates()
@@ -266,7 +268,7 @@ class WallpaperViewModel: ObservableObject {
 
     func trustAndApply(_ w: WEWallpaper) {
         trust(w)
-        assign(w, to: selectedDisplayKey)
+        assign(w, to: selectedDisplayKey, restoreFocus: true)
     }
 
     func requestApply(_ wallpaper: WEWallpaper) {
@@ -281,12 +283,12 @@ class WallpaperViewModel: ObservableObject {
                 which: wallpaper, action: .applyOnDisplay(displayID))
             return
         }
-        assign(wallpaper, to: key)
+        assign(wallpaper, to: key, restoreFocus: true)
     }
 
     // MARK: 指派与停止
 
-    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey) {
+    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool = false) {
         guard wallpaper.isValid, wallpaper.kind != .unsupported else {
             clear(key)
             return
@@ -300,10 +302,13 @@ class WallpaperViewModel: ObservableObject {
         }
         let state = DisplayWallpaperState(wallpaper: wallpaper, runtime: resolved)
         cancelPendingProperties(for: key)
+        let shouldRestoreFocus = restoreFocus && Thread.isMainThread && NSApp.isActive &&
+            AppDelegate.shared.mainWindowController?.window?.isVisible == true
 
         guard let displayID = DisplayRegistry.shared.displayID(for: key) else {
             discardPendingAssignment(for: key)
             commitAssignmentState(state, assignmentID: UUID(), for: key)
+            if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
             syncStatusItems()
             return
         }
@@ -311,8 +316,11 @@ class WallpaperViewModel: ObservableObject {
             pendingScreenAssignments[displayID] = nil
             pendingAssignmentProposals[displayID] = nil
             commitAssignmentState(state, assignmentID: UUID(), for: key)
+            if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
         } else {
-            submitAssignment(state, to: displayID, key: key, reuseActive: true)
+            submitAssignment(state, to: displayID, key: key, reuseActive: true,
+                             restoreFocus: shouldRestoreFocus)
+            if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
         }
         syncStatusItems()
     }
@@ -320,9 +328,11 @@ class WallpaperViewModel: ObservableObject {
     private func submitAssignment(_ state: DisplayWallpaperState,
                                   to displayID: CGDirectDisplayID,
                                   key: DisplayKey,
-                                  reuseActive: Bool) {
+                                  reuseActive: Bool,
+                                  restoreFocus: Bool) {
         let requestID = UUID()
-        let proposal = PendingAssignmentProposal(id: requestID, key: key, state: state)
+        let proposal = PendingAssignmentProposal(id: requestID, key: key, state: state,
+                                                 restoreFocus: restoreFocus)
         cancelFailedAssignmentRecovery(for: key)
         pendingAssignmentProposals[displayID, default: []].append(proposal)
         apply(state, to: displayID, key: key, reuseActive: reuseActive,
@@ -342,6 +352,10 @@ class WallpaperViewModel: ObservableObject {
             pendingAssignmentProposals[displayID] = nil
         } else {
             pendingAssignmentProposals[displayID] = proposals
+        }
+
+        if proposal.restoreFocus {
+            AppDelegate.shared.restoreMainWindowFocus()
         }
 
         if success {
@@ -416,26 +430,27 @@ class WallpaperViewModel: ObservableObject {
         }
     }
 
-    func applyOnDisplay(_ w: WEWallpaper, displayID targetDisplayID: CGDirectDisplayID) {
+    func applyOnDisplay(_ w: WEWallpaper, displayID targetDisplayID: CGDirectDisplayID,
+                        restoreFocus: Bool = true) {
         guard let key = DisplayRegistry.shared.key(forDisplay: targetDisplayID) else { return }
-        assign(w, to: key)
+        assign(w, to: key, restoreFocus: restoreFocus)
     }
 
-    func applyOnScreen(_ w: WEWallpaper, screen: Int) {
+    func applyOnScreen(_ w: WEWallpaper, screen: Int, restoreFocus: Bool = false) {
         guard let key = DisplayRegistry.shared.key(forScreenIndex: screen) else { return }
-        assign(w, to: key)
+        assign(w, to: key, restoreFocus: restoreFocus)
     }
 
-    func applyToAllDisplays(_ w: WEWallpaper) {
+    func applyToAllDisplays(_ w: WEWallpaper, restoreFocus: Bool = true) {
         guard w.isValid, w.kind != .unsupported else { return }
         for info in DisplayRegistry.shared.connected {
-            assign(w, to: info.key)
+            assign(w, to: info.key, restoreFocus: restoreFocus)
         }
     }
 
     func applyToAllScreens() {
         guard let state = displayStates[selectedDisplayKey] else { return }
-        applyToAllDisplays(state.wallpaper)
+        applyToAllDisplays(state.wallpaper, restoreFocus: true)
     }
 
     func clear(_ key: DisplayKey) {
@@ -512,7 +527,8 @@ class WallpaperViewModel: ObservableObject {
             // A user-triggered reapply is itself an assignment transaction. If
             // another request is in flight this queues deterministically behind
             // it and keeps UI/persistence aligned with the eventual renderer.
-            submitAssignment(state, to: displayID, key: key, reuseActive: false)
+            submitAssignment(state, to: displayID, key: key, reuseActive: false,
+                             restoreFocus: false)
         }
         applyPlaybackPolicy(currentPlaybackPolicy, for: key, force: true)
     }
@@ -719,7 +735,8 @@ class WallpaperViewModel: ObservableObject {
                     seeded = true
                 } else {
                     submitAssignment(inherited, to: info.displayID,
-                                     key: info.key, reuseActive: true)
+                                     key: info.key, reuseActive: true,
+                                     restoreFocus: false)
                     continue
                 }
             }

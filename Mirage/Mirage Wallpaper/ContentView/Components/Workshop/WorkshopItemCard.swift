@@ -52,13 +52,6 @@ struct WorkshopItemCard: View {
                 .lineLimit(1)
                 .foregroundStyle(.white)
 
-            if !item.creatorSteamId.isEmpty {
-                Label(item.creatorDisplayName, systemImage: "person.fill")
-                    .lineLimit(1)
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.82))
-            }
-
             HStack(spacing: 10) {
                 Label(item.formattedSubscriptions, systemImage: "arrow.down.circle.fill")
                     .lineLimit(1)

@@ -9,14 +9,11 @@ import SwiftUI
 struct WallpaperExplorer: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
 
     init(contentViewModel viewModel: ContentViewModel,
-         wallpaperViewModel: WallpaperViewModel,
-         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
+         wallpaperViewModel: WallpaperViewModel) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
-        self.workshopViewModel = workshopViewModel
     }
 
     var body: some View {
@@ -59,8 +56,6 @@ struct WallpaperExplorer: SubviewOfContentView {
                             ForEach(page.items) { wallpaper in
                                 ExplorerItem(
                                     wallpaper: wallpaper,
-                                    authorName: workshopViewModel.installedAuthorName(for: wallpaper),
-                                    authorAvatarURL: workshopViewModel.installedCreator(for: wallpaper)?.avatarURL,
                                     isSelected: wallpaper.wallpaperDirectory == selectedDirectory
                                 )
                                 .contextMenu {
