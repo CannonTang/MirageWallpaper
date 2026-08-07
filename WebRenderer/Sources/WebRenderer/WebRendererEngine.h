@@ -73,6 +73,7 @@ typedef struct {
 // Master volume: applies the "audio" property + mutes/unmutes registered streams.
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
+- (void)setPlaybackVolume:(float)volume muted:(BOOL)muted paused:(BOOL)paused;
 
 // Host-level media barrier. Unlike JavaScript muting, WebKit guarantees that a
 // suspended page cannot resume HTML media or WebAudio until the paired NO call

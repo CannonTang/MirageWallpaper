@@ -760,3 +760,12 @@
 "共 %lld 件作品" = "%lld works";
 "当前作者" = "Current Creator";
 "每页数量" = "Per Page";
+"隐藏菜单栏图标" = "Hide menu bar icon";
+"开发模式" = "Developer Mode";
+"需要在系统设置中批准" = "Approval required in System Settings";
+"打开登录项设置" = "Open Login Items Settings";
+"系统无法找到登录项服务" = "The login item service could not be found";
+"Mirage 开发日志" = "Mirage Developer Log";
+"实时日志" = "Live Log";
+"存储日志…" = "Save Log…";
+"最近发行" = "Recently Released";

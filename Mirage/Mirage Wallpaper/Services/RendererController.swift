@@ -433,14 +433,15 @@ final class RendererProcess {
             }
             self?.consumeStdout(data, onEvent: onEvent)
         }
-        stderrPipe.fileHandleForReading.readabilityHandler = { file in
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] file in
             let data = file.availableData
             if data.isEmpty {
                 file.readabilityHandler = nil
                 return
             }
             if let text = String(data: data, encoding: .utf8), !text.isEmpty {
-                NSLog("[Mirage] 渲染器 stderr: \(text)")
+                guard let self else { return }
+                MirageLogService.shared.append(text, source: "renderer.\(self.wallpaper.kind.rawValue).\(self.displayID)")
             }
         }
     }
@@ -974,6 +975,9 @@ final class RendererController {
 
         var args: [String] = []
         var env = ProcessInfo.processInfo.environment
+        if AppDelegate.shared.globalSettingsViewModel.settings.isDeveloperModeEnabled {
+            env["WR_DEBUG"] = "1"
+        }
 
         switch wallpaper.kind {
         case .scene:
@@ -1379,6 +1383,9 @@ final class RendererController {
         candidate.send(["cmd": "fps", "value": candidate.desiredFps])
         candidate.send(["cmd": "fillmode", "value": candidate.desiredFillMode.rawValue])
         candidate.send(["cmd": "speed", "value": candidate.desiredSpeed])
+        if candidate.wallpaper.kind == .web {
+            candidate.send(Self.webPlaybackStateCommand(for: candidate))
+        }
         candidate.send(["cmd": "activate"])
         scheduleCandidateActivationTimeoutLocked(transition)
     }
@@ -1487,8 +1494,13 @@ final class RendererController {
             return
         }
         transition.phase = .restoringStandby
+        if standby.wallpaper.kind == .web {
+            standby.send(Self.webPlaybackStateCommand(for: standby))
+        }
         standby.send(["cmd": "activate"])
-        standby.send(Self.powerCommand(state: .run, fps: standby.desiredPowerFps))
+        if standby.wallpaper.kind != .web {
+            standby.send(Self.powerCommand(state: .run, fps: standby.desiredPowerFps))
+        }
         scheduleStandbyRestoreTimeoutLocked(transition, standby: standby)
     }
 
@@ -1572,11 +1584,15 @@ final class RendererController {
     private func replayDesiredStateLocked(to handle: RendererProcess) {
         handle.send(["cmd": "fps", "value": handle.desiredFps])
         handle.send(["cmd": "fillmode", "value": handle.desiredFillMode.rawValue])
-        sendVolumeAndMute(handle.desiredVolume, muted: handle.desiredMuted,
-                          to: handle)
         handle.send(["cmd": "speed", "value": handle.desiredSpeed])
-        handle.send(Self.powerCommand(state: handle.desiredPowerState,
-                                      fps: handle.desiredPowerFps))
+        if handle.wallpaper.kind == .web {
+            handle.send(Self.webPlaybackStateCommand(for: handle))
+        } else {
+            sendVolumeAndMute(handle.desiredVolume, muted: handle.desiredMuted,
+                              to: handle)
+            handle.send(Self.powerCommand(state: handle.desiredPowerState,
+                                          fps: handle.desiredPowerFps))
+        }
         if handle.wallpaper.kind != .scene {
             applyInitialProperties(handle.desiredUserProperties, to: handle)
         }
@@ -2329,10 +2345,17 @@ final class RendererController {
                                      to handle: RendererProcess) {
         handle.send(["cmd": "fps", "value": options.fps])
         handle.send(["cmd": "fillmode", "value": options.fillMode.rawValue])
-        sendVolumeAndMute(options.volume, muted: options.muted, to: handle)
         handle.send(["cmd": "speed", "value": options.speed])
-        handle.send(Self.powerCommand(state: options.powerState,
-                                      fps: options.powerFps))
+        if handle.wallpaper.kind == .web {
+            handle.send(Self.webPlaybackStateCommand(volume: options.volume,
+                                                       muted: options.muted,
+                                                       state: options.powerState,
+                                                       fps: options.powerFps))
+        } else {
+            sendVolumeAndMute(options.volume, muted: options.muted, to: handle)
+            handle.send(Self.powerCommand(state: options.powerState,
+                                          fps: options.powerFps))
+        }
         if handle.wallpaper.kind != .scene {
             applyInitialProperties(options.userProperties, to: handle)
         }
@@ -2472,6 +2495,26 @@ final class RendererController {
 
     private static func powerCommand(state: MiragePowerState, fps: Int?) -> [String: Any] {
         var command: [String: Any] = ["cmd": "power", "state": state.rawValue]
+        if let fps { command["fps"] = fps }
+        return command
+    }
+
+    private static func webPlaybackStateCommand(for handle: RendererProcess) -> [String: Any] {
+        webPlaybackStateCommand(volume: handle.desiredVolume,
+                                muted: handle.desiredMuted,
+                                state: handle.desiredPowerState,
+                                fps: handle.desiredPowerFps)
+    }
+
+    private static func webPlaybackStateCommand(volume: Float, muted: Bool,
+                                                state: MiragePowerState,
+                                                fps: Int?) -> [String: Any] {
+        var command: [String: Any] = [
+            "cmd": "playbackState",
+            "volume": volume,
+            "muted": muted,
+            "state": state.rawValue
+        ]
         if let fps { command["fps"] = fps }
         return command
     }

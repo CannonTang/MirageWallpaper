@@ -16,6 +16,7 @@ private struct MirageSaverConfiguration {
     let kind: String
     let renderDirectory: URL
     let entryURL: URL
+    let playbackEntryURL: URL
     let entryRelativePath: String
     let overlays: [URL]
     let properties: [String: Any]
@@ -42,11 +43,21 @@ private struct MirageSaverConfiguration {
         let renderDirectory = URL(fileURLWithPath: renderPath, isDirectory: true)
         let entryURL = URL(fileURLWithPath: entryPath)
         guard FileManager.default.fileExists(atPath: entryURL.path) else { return nil }
+        let candidate = (object["playableEntryPath"] as? String).map(URL.init(fileURLWithPath:))
+        let playbackEntryURL: URL
+        if kind == "video", let candidate,
+           FileManager.default.fileExists(atPath: candidate.path),
+           Self.isCurrentCache(candidate, for: entryURL) {
+            playbackEntryURL = candidate
+        } else {
+            playbackEntryURL = entryURL
+        }
         return Self(
             title: object["title"] as? String ?? "Mirage",
             kind: kind,
             renderDirectory: renderDirectory,
             entryURL: entryURL,
+            playbackEntryURL: playbackEntryURL,
             entryRelativePath: entryURL.path.hasPrefix(renderDirectory.path + "/")
                 ? String(entryURL.path.dropFirst(renderDirectory.path.count + 1))
                 : entryURL.lastPathComponent,
@@ -57,6 +68,13 @@ private struct MirageSaverConfiguration {
             fillMode: object["fillMode"] as? String ?? "cover",
             language: object["language"] as? String ?? Locale.preferredLanguages.first ?? "en"
         )
+    }
+
+    private static func isCurrentCache(_ cache: URL, for source: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey]
+        guard let sourceDate = try? source.resourceValues(forKeys: keys).contentModificationDate,
+              let cacheDate = try? cache.resourceValues(forKeys: keys).contentModificationDate else { return false }
+        return cacheDate >= sourceDate
     }
 }
 
@@ -177,6 +195,9 @@ final class MirageScreenSaverView: ScreenSaverView {
     private var sceneLibrary: MirageSceneLibrary?
     private var sceneEngine: UnsafeMutableRawPointer?
     private var didLoadWallpaper = false
+    private var isAnimatingWallpaper = false
+    private var videoLoadTask: Task<Void, Never>?
+    private var videoLoadID = UUID()
     private var hostReportedSize = CGSize.zero
 
     override init?(frame: NSRect, isPreview: Bool) {
@@ -208,6 +229,7 @@ final class MirageScreenSaverView: ScreenSaverView {
     deinit {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         player?.pause()
+        videoLoadTask?.cancel()
         webView?.stopLoading()
         if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
     }
@@ -331,52 +353,56 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     private func loadVideo(_ configuration: MirageSaverConfiguration) {
-        // A track with no decoder on this Mac still yields a ready, advancing
-        // player that renders nothing, so the saver would be a black screen with
-        // no explanation. Rewriting to H.264 takes seconds and belongs to the
-        // main app; say so rather than showing black.
-        let asset = AVURLAsset(url: configuration.entryURL)
-        guard videoAssetIsDecodable(asset) else {
-            showMessage(localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
-            return
-        }
-        let player = AVPlayer(url: configuration.entryURL)
-        player.isMuted = true
-        let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.frame = bounds
-        playerLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        switch configuration.fillMode {
-        case "contain": playerLayer.videoGravity = .resizeAspect
-        case "stretch": playerLayer.videoGravity = .resize
-        default: playerLayer.videoGravity = .resizeAspectFill
-        }
-        layer?.addSublayer(playerLayer)
-        self.player = player
-        self.playerLayer = playerLayer
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
-        ) { [weak player] _ in
-            player?.seek(to: .zero)
-            player?.play()
-        }
-    }
-
-    private func videoAssetIsDecodable(_ asset: AVURLAsset) -> Bool {
-        let done = DispatchSemaphore(value: 0)
-        var decodable = false
-        Task {
-            defer { done.signal() }
-            guard let playable = try? await asset.load(.isPlayable), playable else { return }
-            guard let tracks = try? await asset.loadTracks(withMediaType: .video),
-                  !tracks.isEmpty else { return }
-            for track in tracks {
-                guard let ok = try? await track.load(.isDecodable), ok else { return }
+        videoLoadTask?.cancel()
+        let loadID = UUID()
+        videoLoadID = loadID
+        let asset = AVURLAsset(url: configuration.playbackEntryURL)
+        videoLoadTask = Task { [weak self] in
+            guard let playable = try? await asset.load(.isPlayable), playable,
+                  let tracks = try? await asset.loadTracks(withMediaType: .video),
+                  !tracks.isEmpty else {
+                await MainActor.run {
+                    guard let self, self.videoLoadID == loadID else { return }
+                    self.showMessage(self.localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
+                }
+                return
             }
-            decodable = true
+            for track in tracks {
+                guard let decodable = try? await track.load(.isDecodable), decodable else {
+                    await MainActor.run {
+                        guard let self, self.videoLoadID == loadID else { return }
+                        self.showMessage(self.localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
+                    }
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.videoLoadID == loadID else { return }
+                let item = AVPlayerItem(asset: asset)
+                let player = AVPlayer(playerItem: item)
+                player.isMuted = true
+                let playerLayer = AVPlayerLayer(player: player)
+                playerLayer.frame = self.bounds
+                playerLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+                switch configuration.fillMode {
+                case "contain": playerLayer.videoGravity = .resizeAspect
+                case "stretch": playerLayer.videoGravity = .resize
+                default: playerLayer.videoGravity = .resizeAspectFill
+                }
+                self.layer?.addSublayer(playerLayer)
+                self.player = player
+                self.playerLayer = playerLayer
+                self.endObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    self.player?.seek(to: .zero)
+                    if self.isAnimatingWallpaper { self.player?.play() }
+                }
+                if self.isAnimatingWallpaper { player.play() }
+            }
         }
-        // Local metadata only; the bound just keeps a pathological file from
-        // wedging the screen saver host.
-        return done.wait(timeout: .now() + 10) == .success && decodable
     }
 
     private func loadWeb(_ configuration: MirageSaverConfiguration) {
@@ -511,6 +537,7 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     override func startAnimation() {
         super.startAnimation()
+        isAnimatingWallpaper = true
         loadWallpaper()
         player?.play()
         webView?.evaluateJavaScript("window.wallpaperEngine_paused=false;if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(false);")
@@ -518,6 +545,7 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     override func stopAnimation() {
+        isAnimatingWallpaper = false
         player?.pause()
         webView?.evaluateJavaScript("window.wallpaperEngine_paused=true;if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(true);")
         if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 1) }

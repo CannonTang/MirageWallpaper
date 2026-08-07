@@ -208,6 +208,7 @@ final class ScreenSaverManager {
             // of the wallpaper directory is a symlink.
             "renderDirectory": wallpaper.renderDirectory.resolvingSymlinksInPath().path,
             "entryPath": wallpaper.resolvedEntryURL.path,
+            "playableEntryPath": playableVideoCacheURL(for: wallpaper.resolvedEntryURL).path,
             "assetOverlays": wallpaper.assetOverlayDirectories.map(\.path),
             "properties": propertyValues,
             "rawProperties": rawPropertyValues,
@@ -225,6 +226,15 @@ final class ScreenSaverManager {
         guard let data = try? Data(contentsOf: configurationURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object["wallpaperID"] as? String
+    }
+
+    private func playableVideoCacheURL(for source: URL) -> URL {
+        let path = source.resolvingSymlinksInPath().path
+        let digest = SHA256.hash(data: Data(path.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined() + ".mp4"
+        return fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Mirage/VideoCache", directoryHint: .isDirectory)
+            .appending(path: name)
     }
 
     func configuredWallpaperTitle() -> String? {

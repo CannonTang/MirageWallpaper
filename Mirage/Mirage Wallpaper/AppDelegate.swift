@@ -19,6 +19,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var workshopViewModel = WorkshopViewModel()
 
     var importOpenPanel: NSOpenPanel!
+    private var developerLogWindowController: DeveloperLogWindowController?
+    private var developerLogWindowWasOpened = false
     private var localizationObserver: NSObjectProtocol?
 
     static var shared = AppDelegate()
@@ -27,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
+        applyDeveloperMode(enabled: globalSettingsViewModel.settings.isDeveloperModeEnabled)
         localizationObserver = NotificationCenter.default.addObserver(
             forName: MirageLocalization.didChangeNotification,
             object: MirageLocalization.shared,
@@ -103,6 +106,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        globalSettingsViewModel.refreshLoginItemStatus(persist: true)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -114,6 +118,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if developerLogWindowWasOpened {
+            MirageLogService.shared.saveAutomatically()
+        }
         wallpaperViewModel.saveRuntime()
         // This method returns directly into process exit, so the renderers must
         // be reaped here and now. Anything deferred would never run and a hung
@@ -157,6 +164,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    func applyStatusItemVisibility(hidden: Bool) {
+        statusItem?.isVisible = !hidden
+    }
+
+    func applyDeveloperMode(enabled: Bool) {
+        if enabled {
+            MirageLogService.shared.start()
+            developerLogWindowWasOpened = true
+            if developerLogWindowController == nil {
+                developerLogWindowController = DeveloperLogWindowController()
+            }
+            developerLogWindowController?.showWindow(nil)
+        } else if developerLogWindowController?.window?.isVisible == true {
+            developerLogWindowController?.close()
+        }
+    }
+
     @MainActor @objc func toggleFilter() {
         self.contentViewModel.isFilterReveal.toggle()
     }
@@ -169,5 +193,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setMainMenu()
         setStatusMenu()
         mainWindowController?.refreshLocalizedTitle()
+        developerLogWindowController?.refreshLocalization()
     }
 }

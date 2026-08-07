@@ -1,6 +1,7 @@
 #import "VRTranscoder.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 
@@ -89,14 +90,22 @@ static NSString *VRAVErrorString(int code) {
 }
 
 + (NSURL *)playableURLForSourceURL:(NSURL *)url {
-    static NSSet<NSString *> *substitutable;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-      substitutable = [NSSet setWithArray:@[ @"mp4", @"m4v", @"mov", @"qt" ]];
-    });
-    NSString *extension = url.pathExtension.lowercaseString;
-    if ([substitutable containsObject:extension]) return url;
-    return [url.URLByDeletingPathExtension URLByAppendingPathExtension:@"mp4"];
+    if (url == nil) return nil;
+    NSString *path = url.URLByResolvingSymlinksInPath.path;
+    NSData *data = [path dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH] = {0};
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *name = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2 + 4];
+    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+        [name appendFormat:@"%02x", digest[i]];
+    }
+    [name appendString:@".mp4"];
+    NSURL *base = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory
+                                                        inDomains:NSUserDomainMask].firstObject;
+    NSURL *directory = [base URLByAppendingPathComponent:@"Mirage/VideoCache" isDirectory:YES];
+    [NSFileManager.defaultManager createDirectoryAtURL:directory
+                            withIntermediateDirectories:YES attributes:nil error:nil];
+    return [directory URLByAppendingPathComponent:name];
 }
 
 #pragma mark - Colour

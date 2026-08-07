@@ -59,9 +59,6 @@ final class DesktopOverrideService {
     /// What we put on each screen. Authoritative for pruning: reading it back
     /// from `desktopImageURL(for:)` races WallpaperAgent's own bookkeeping.
     private var installedByScreen: [CGDirectDisplayID: URL] = [:]
-    /// Debounce: a playlist rotating quickly would otherwise ask every renderer
-    /// for a snapshot on every hop.
-    private static let captureDebounce: TimeInterval = 1.5
     /// A renderer that is still starting up cannot produce a frame yet, and a
     /// scene's first frame can be seconds away. Back off rather than immediately
     /// settling for the packaged preview. The delays are cumulative: this budget
@@ -184,7 +181,7 @@ final class DesktopOverrideService {
             self.capture(forDisplay: displayID, wallpaper: wallpaper, request: request)
         }
         pendingCapture[displayID] = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureDebounce, execute: work)
+        DispatchQueue.main.async(execute: work)
     }
 
     /// Re-takes the still for every screen that currently has a wallpaper.
@@ -306,9 +303,14 @@ final class DesktopOverrideService {
         if mode != wanted {
             mode = wanted
         }
-        setDesktopImage(url, for: screen)
+        guard setDesktopImage(url, for: screen) else {
+            try? FileManager.default.removeItem(at: url)
+            captureRequests[displayID] = nil
+            return
+        }
         installedByScreen[displayID] = url
         captureRequests[displayID] = nil
+        verifyDesktopImage(url, forDisplay: displayID, screen: screen)
         pruneAllExcept(Set(installedByScreen.values.map { $0.resolvingSymlinksInPath() }))
     }
 
@@ -441,11 +443,28 @@ final class DesktopOverrideService {
         }
     }
 
-    private func setDesktopImage(_ url: URL, for screen: NSScreen) {
+    @discardableResult
+    private func setDesktopImage(_ url: URL, for screen: NSScreen) -> Bool {
         do {
             try NSWorkspace.shared.setDesktopImageURL(url, for: screen)
+            return true
         } catch {
             NSLog("[Mirage] 设置桌面图片失败: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func verifyDesktopImage(_ url: URL, forDisplay displayID: CGDirectDisplayID,
+                                    screen: NSScreen, attempt: Int = 0) {
+        let delays: [TimeInterval] = [0.08, 0.25, 0.6]
+        guard attempt < delays.count else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delays[attempt]) { [weak self] in
+            guard let self, self.installedByScreen[displayID] == url else { return }
+            let current = NSWorkspace.shared.desktopImageURL(for: screen)?.resolvingSymlinksInPath()
+            if current == url.resolvingSymlinksInPath() { return }
+            guard self.setDesktopImage(url, for: screen) else { return }
+            self.verifyDesktopImage(url, forDisplay: displayID, screen: screen,
+                                    attempt: attempt + 1)
         }
     }
 

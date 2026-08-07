@@ -66,11 +66,6 @@ enum GSProcessPiority: String, CaseIterable, Identifiable, Codable {
     case normal, belowNormal
 }
 
-enum GSLogLevel: String, CaseIterable, Identifiable, Codable {
-    var id: Self { self }
-    case error, verbose, none
-}
-
 enum GSSteamAPIEndpoint: String, CaseIterable, Identifiable, Codable {
     var id: Self { self }
     case official
@@ -107,6 +102,7 @@ struct GlobalSettings: Codable, Equatable {
     
     // MARK: Automatic Setup
     var autoStart = false
+    var hideMenuBarIcon: Bool? = false
     var safeMode = false
     // Optional solely for backwards-compatible decoding of settings written
     // before the software-update section existed.
@@ -154,8 +150,15 @@ struct GlobalSettings: Codable, Equatable {
     var restartAfterCrashing = false
     
     // MARK: Developer
-    var logLevel = GSLogLevel.none
-    var verboseLog = false
+    var developerMode: Bool? = false
+
+    var shouldHideMenuBarIcon: Bool {
+        hideMenuBarIcon ?? false
+    }
+
+    var isDeveloperModeEnabled: Bool {
+        developerMode ?? false
+    }
 
     // MARK: Misc
     var autoRefresh = true
@@ -193,6 +196,8 @@ class GlobalSettingsViewModel: ObservableObject {
     var didFinishLaunchingNotificationCancellable: Cancellable?
     var didCurrentWallpaperChangeCancellable: Cancellable?
     var didAddToLoginItemCancellable: Cancellable?
+    var didChangeStatusItemVisibilityCancellable: Cancellable?
+    var didChangeDeveloperModeCancellable: Cancellable?
     var didChangeOverrideWallpaperCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
@@ -200,6 +205,7 @@ class GlobalSettingsViewModel: ObservableObject {
     // whether there are unsaved edits with a cheap value comparison instead of
     // decoding GlobalSettings JSON from UserDefaults on every footer render.
     @Published private(set) var savedSettings: GlobalSettings
+    @Published private(set) var loginItemStatus = SMAppService.mainApp.status
 
     init() {
         var initial: GlobalSettings
@@ -213,8 +219,18 @@ class GlobalSettingsViewModel: ObservableObject {
             initial.steamAPIEndpoint = .official
         }
         initial.animatedPreviewPlayback = initial.animatedPreviewPlayback ?? .hover
+        let loginStatus = SMAppService.mainApp.status
+        switch loginStatus {
+        case .enabled, .requiresApproval:
+            initial.autoStart = true
+        case .notRegistered, .notFound:
+            initial.autoStart = false
+        @unknown default:
+            initial.autoStart = false
+        }
         self.settings = initial
         self.savedSettings = initial
+        self.loginItemStatus = loginStatus
         MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)
@@ -225,6 +241,8 @@ class GlobalSettingsViewModel: ObservableObject {
         didFinishLaunchingNotificationCancellable?.cancel()
         didCurrentWallpaperChangeCancellable?.cancel()
         didAddToLoginItemCancellable?.cancel()
+        didChangeStatusItemVisibilityCancellable?.cancel()
+        didChangeDeveloperModeCancellable?.cancel()
         didChangeOverrideWallpaperCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
@@ -234,7 +252,6 @@ class GlobalSettingsViewModel: ObservableObject {
         }
         if let desktopClickMonitor { NSEvent.removeMonitor(desktopClickMonitor) }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        DistributedNotificationCenter.default().removeObserver(self)
         NotificationCenter.default.removeObserver(self)
     }
     
@@ -248,6 +265,18 @@ class GlobalSettingsViewModel: ObservableObject {
             .removeDuplicates { $0.autoStart == $1.autoStart }
             .map { $0.autoStart }
             .sink { [weak self] in self?.didAddToLoginItem($0) }
+
+        self.didChangeStatusItemVisibilityCancellable =
+        self.$settings
+            .removeDuplicates { $0.shouldHideMenuBarIcon == $1.shouldHideMenuBarIcon }
+            .map { $0.shouldHideMenuBarIcon }
+            .sink { AppDelegate.shared.applyStatusItemVisibility(hidden: $0) }
+
+        self.didChangeDeveloperModeCancellable =
+        self.$settings
+            .removeDuplicates { $0.isDeveloperModeEnabled == $1.isDeveloperModeEnabled }
+            .map { $0.isDeveloperModeEnabled }
+            .sink { AppDelegate.shared.applyDeveloperMode(enabled: $0) }
         
         self.didChangeOverrideWallpaperCancellable =
         self.$settings
@@ -261,16 +290,6 @@ class GlobalSettingsViewModel: ObservableObject {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(displayDidWake),
             name: NSWorkspace.screensDidWakeNotification, object: nil)
-
-        // Screen lock is not a workspace notification; it only arrives on the
-        // distributed centre. A locked screen hides the wallpaper just as
-        // completely as a sleeping one, so it feeds the same user-facing rule.
-        DistributedNotificationCenter.default().addObserver(
-            self, selector: #selector(screenDidLock),
-            name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
-        DistributedNotificationCenter.default().addObserver(
-            self, selector: #selector(screenDidUnlock),
-            name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
 
         // Low Power Mode and thermal pressure are global signals: the user has
         // either asked the machine to conserve, or the machine is already
@@ -295,8 +314,6 @@ class GlobalSettingsViewModel: ObservableObject {
         self.configurePlaybackMonitoring()
     }
 
-    private var displayAsleep = false
-    private var screenLocked = false
     private var playbackEvalTimer: Timer?
     private var settlingEvalWorkItems: [DispatchWorkItem] = []
     private var workspacePlaybackObservers: [NSObjectProtocol] = []
@@ -427,7 +444,8 @@ class GlobalSettingsViewModel: ObservableObject {
         // notification, so periodic geometry checks keep playback correct.
         let pollingRuleEnabled = focusRulesEnabled ||
             settings.otherApplicationPlayingAudio != .keepRunning ||
-            settings.laptopOnBattery != .keepRunning
+            settings.laptopOnBattery != .keepRunning ||
+            settings.displayAsleep != .keepRunning
         if pollingRuleEnabled {
             basePollInterval = focusRulesEnabled ? 1.0 : 2.0
             stableEvaluationCount = 0
@@ -436,10 +454,8 @@ class GlobalSettingsViewModel: ObservableObject {
         evaluatePlaybackState()
     }
 
-    @objc private func displayDidSleep() { displayAsleep = true; evaluatePlaybackState() }
-    @objc private func displayDidWake()  { displayAsleep = false; evaluatePlaybackState() }
-    @objc private func screenDidLock()   { screenLocked = true; evaluatePlaybackState() }
-    @objc private func screenDidUnlock() { screenLocked = false; evaluatePlaybackState() }
+    @objc private func displayDidSleep() { scheduleSettlingEvaluations() }
+    @objc private func displayDidWake()  { scheduleSettlingEvaluations() }
 
     // Thermal and low-power transitions change the frame budget, not the
     // playback decision, so they skip the full evaluation and just re-apply.
@@ -505,20 +521,36 @@ class GlobalSettingsViewModel: ObservableObject {
                 try appService.register()
             case (false, .enabled), (false, .requiresApproval):
                 try appService.unregister()
-            case (true, .notFound):
-                NSLog("[Mirage] Login item is unavailable")
-                settings.autoStart = false
             default:
                 break
             }
         } catch {
             let nsError = error as NSError
             NSLog("[Mirage] Failed to update login item: %@ (%@:%ld)", nsError.localizedDescription, nsError.domain, nsError.code)
-            let isRegistered = appService.status == .enabled || appService.status == .requiresApproval
-            if settings.autoStart != isRegistered {
-                settings.autoStart = isRegistered
-            }
         }
+        refreshLoginItemStatus(persist: true)
+    }
+
+    func refreshLoginItemStatus(persist: Bool = false) {
+        let status = SMAppService.mainApp.status
+        loginItemStatus = status
+        let enabled: Bool
+        switch status {
+        case .enabled, .requiresApproval:
+            enabled = true
+        case .notRegistered, .notFound:
+            enabled = false
+        @unknown default:
+            enabled = false
+        }
+        if settings.autoStart != enabled {
+            settings.autoStart = enabled
+            if persist { save() }
+        }
+    }
+
+    func openLoginItemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
     
     func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {
@@ -600,7 +632,6 @@ class GlobalSettingsViewModel: ObservableObject {
         var onFullscreen = GSPlayback.keepRunning
         var onAudio = GSPlayback.keepRunning
 
-        var displayAsleep = false
         var withinRevealGrace = false
 
         var frontPID: pid_t?
@@ -612,7 +643,6 @@ class GlobalSettingsViewModel: ObservableObject {
         /// PIDs whose `activationPolicy` is `.regular`, resolved up front because
         /// `NSWorkspace.runningApplications` is AppKit state.
         var regularPIDs: Set<pid_t> = []
-        var mainScreenFrame: CGRect?
     }
 
     /// One parsed entry of the on-screen window list. The raw CFDictionary form
@@ -665,10 +695,6 @@ class GlobalSettingsViewModel: ObservableObject {
         inputs.onFullscreen = settings.otherApplicationFullscreen
         inputs.onAudio = settings.otherApplicationPlayingAudio
 
-        // A locked screen shows the wallpaper no more than a sleeping one does,
-        // so both feed the single user-facing "display asleep" rule rather than
-        // introducing a setting the user never asked for.
-        inputs.displayAsleep = displayAsleep || screenLocked
         inputs.withinRevealGrace =
             Date().timeIntervalSince(lastDesktopRevealHintAt) < Self.desktopRevealGrace
         inputs.selfPID = ProcessInfo.processInfo.processIdentifier
@@ -686,7 +712,6 @@ class GlobalSettingsViewModel: ObservableObject {
         inputs.frontPID = front?.processIdentifier
         inputs.frontBundleID = front?.bundleIdentifier
         inputs.frontIsRegular = front?.activationPolicy == .regular
-        inputs.mainScreenFrame = NSScreen.main?.frame
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             inputs.regularPIDs.insert(app.processIdentifier)
         }
@@ -698,7 +723,7 @@ class GlobalSettingsViewModel: ObservableObject {
     private static func computePlaybackAction(_ inputs: PolicyInputs) -> GSPlayback {
         var actions: [GSPlayback] = []
 
-        if inputs.onDisplayAsleep != .keepRunning, inputs.displayAsleep {
+        if inputs.onDisplayAsleep != .keepRunning, allActiveDisplaysAreAsleep() {
             actions.append(inputs.onDisplayAsleep)
         }
 
@@ -725,8 +750,7 @@ class GlobalSettingsViewModel: ObservableObject {
 
             if let frontPID = inputs.frontPID, inputs.frontIsRegular, !isSelf,
                !isDesktopFinder, !desktopViewed {
-                if appIsFullscreen(windows(), pid: frontPID,
-                                   mainScreenFrame: inputs.mainScreenFrame) {
+                if appIsFullscreen(windows(), pid: frontPID) {
                     actions.append(inputs.onFullscreen)
                 } else {
                     actions.append(inputs.onFocused)
@@ -841,12 +865,38 @@ class GlobalSettingsViewModel: ObservableObject {
         return pid
     }
 
-    private static func appIsFullscreen(_ windows: [WindowEntry], pid: pid_t,
-                                        mainScreenFrame: CGRect?) -> Bool {
-        guard let main = mainScreenFrame else { return false }
-        for window in windows where window.pid == pid {
-            if window.bounds.width >= main.width - 1 && window.bounds.height >= main.height - 1 {
-                return true
+    private static func allActiveDisplaysAreAsleep() -> Bool {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return false }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return false }
+        return displays.prefix(Int(count)).allSatisfy { CGDisplayIsAsleep($0) != 0 }
+    }
+
+    private static func appIsFullscreen(_ windows: [WindowEntry], pid: pid_t) -> Bool {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return false }
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displayIDs, &count) == .success else { return false }
+        let displays = displayIDs.prefix(Int(count)).map(CGDisplayBounds)
+
+        for window in windows where window.pid == pid && window.layer == 0 && window.alpha > 0.05 {
+            guard window.bounds.width >= 120, window.bounds.height >= 80 else { continue }
+            for display in displays {
+                let intersection = window.bounds.intersection(display)
+                guard !intersection.isNull else { continue }
+                let displayArea = display.width * display.height
+                let windowArea = window.bounds.width * window.bounds.height
+                let intersectionArea = intersection.width * intersection.height
+                let tolerance = max(4, min(display.width, display.height) * 0.005)
+                let edgesMatch = abs(window.bounds.minX - display.minX) <= tolerance &&
+                    abs(window.bounds.minY - display.minY) <= tolerance &&
+                    abs(window.bounds.maxX - display.maxX) <= tolerance &&
+                    abs(window.bounds.maxY - display.maxY) <= tolerance
+                if edgesMatch || (intersectionArea / max(displayArea, 1) >= 0.985 &&
+                                  intersectionArea / max(windowArea, 1) >= 0.90) {
+                    return true
+                }
             }
         }
         return false

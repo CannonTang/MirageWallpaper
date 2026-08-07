@@ -344,19 +344,22 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
     NSURL *source = manifest.videoURL;
     NSURL *rewritten = [VRTranscoder playableURLForSourceURL:source];
+    NSDictionary *sourceAttributes = [NSFileManager.defaultManager attributesOfItemAtPath:source.path error:nil];
+    NSDictionary *cacheAttributes = [NSFileManager.defaultManager attributesOfItemAtPath:rewritten.path error:nil];
+    NSDate *sourceDate = sourceAttributes[NSFileModificationDate];
+    NSDate *cacheDate = cacheAttributes[NSFileModificationDate];
+    BOOL cacheIsCurrent = cacheDate != nil && sourceDate != nil &&
+        [cacheDate compare:sourceDate] != NSOrderedAscending;
 
-    // A rewrite from an earlier run wins outright: the source that produced it
-    // is either gone or still undecodable, and probing it again costs a second
-    // metadata load for a question already answered.
     if (![rewritten isEqual:source] &&
         [NSFileManager.defaultManager fileExistsAtPath:rewritten.path] &&
+        cacheIsCurrent &&
         [VRTranscoder fileIsDecodable:rewritten]) {
         return [self startPlaybackOfURL:rewritten error:error];
     }
 
     if ([VRTranscoder fileIsDecodable:source]) {
-        // Playable directly, so a stale rewrite beside it is only wasting disk.
-        if (![rewritten isEqual:source]) {
+        if (![rewritten isEqual:source] && !cacheIsCurrent) {
             [NSFileManager.defaultManager removeItemAtURL:rewritten error:nil];
         }
         return [self startPlaybackOfURL:source error:error];
@@ -386,12 +389,6 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
             });
         }
                                              error:&transcodeError];
-        // Freeing the source is only safe once the rewrite is verified and moved
-        // into place, and only when it is a separate file — the substitutable
-        // case already consumed it.
-        if (ok && ![rewritten isEqual:source]) {
-            [NSFileManager.defaultManager removeItemAtURL:source error:nil];
-        }
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong __typeof__(weakSelf) strongSelf = weakSelf;
             if (strongSelf == nil || strongSelf.openGeneration != generation) return;

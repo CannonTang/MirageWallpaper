@@ -100,7 +100,8 @@ final class SteamWebAPI {
         ]
 
         if effectiveSortOrder.usesTrendPeriod {
-            let days = min(7, max(1, trendDays ?? WorkshopTrendPeriod.week.rawValue))
+            let days = min(WorkshopTrendPeriod.year.rawValue,
+                           max(1, trendDays ?? WorkshopTrendPeriod.week.rawValue))
             params["days"] = "\(days)"
         }
 

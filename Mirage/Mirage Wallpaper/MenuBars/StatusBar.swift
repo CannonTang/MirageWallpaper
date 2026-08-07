@@ -93,6 +93,7 @@ extension AppDelegate {
             self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         }
         self.statusItem.menu = menu
+        self.statusItem.isVisible = !globalSettingsViewModel.settings.shouldHideMenuBarIcon
 
         if let button = self.statusItem.button {
             if let icon = NSImage(named: "MenuBarIcon") {

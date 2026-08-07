@@ -278,6 +278,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, assign) BOOL deferredShow;
 @property (nonatomic, assign) BOOL prepared;
 @property (nonatomic, assign) BOOL windowActivated;
+@property (nonatomic, assign) float playbackVolume;
+@property (nonatomic, assign) BOOL playbackMuted;
 @property (nonatomic, assign) BOOL playbackPaused;
 @property (nonatomic, assign) NSUInteger visibilityEpoch;
 - (void)observeScreenParameterChanges;
@@ -288,6 +290,7 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 - (void)beginActivationFailureForEpoch:(NSUInteger)epoch;
 - (void)confirmActivationFailureForEpoch:(NSUInteger)epoch attempts:(NSInteger)attempts;
 - (void)syncInputForwarder;
+- (void)applyPlaybackState;
 @end
 @implementation WebWallpaperAppDelegate
 
@@ -413,7 +416,6 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     if (epoch != self.visibilityEpoch) return;
     [self.engine setMuted:YES];
     [self.engine setPaused:YES];
-    self.playbackPaused = YES;
     self.windowActivated = NO;
     [self syncInputForwarder];
     __weak WebWallpaperAppDelegate *weakSelf = self;
@@ -461,6 +463,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     }
     self.visibilityEpoch += 1;
     NSUInteger epoch = self.visibilityEpoch;
+    [self applyPlaybackState];
     self.window.alphaValue = 0.0;
     [self.window orderFrontRegardless];
     [self prepareActivationForEpoch:epoch attempts:200];
@@ -489,7 +492,6 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     NSUInteger epoch = self.visibilityEpoch;
     [self.engine setMuted:YES];
     [self.engine setPaused:YES];
-    self.playbackPaused = YES;
     self.windowActivated = NO;
     [self syncInputForwarder];
     __weak WebWallpaperAppDelegate *weakSelf = self;
@@ -500,6 +502,12 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
         [strongSelf.window orderOut:nil];
         [strongSelf confirmVisible:NO epoch:epoch attempts:200];
     }];
+}
+
+- (void)applyPlaybackState {
+    [self.engine setPlaybackVolume:self.playbackVolume
+                             muted:self.playbackMuted
+                            paused:self.playbackPaused];
 }
 
 // Resolution changes, display rearrangement and unplug/replug all leave the
@@ -571,7 +579,7 @@ int main(int argc, char *argv[]) {
         cfg.enableInspector = NO;
         cfg.enableAudioSpectrum = args.spectrum && !args.externalSpectrum;
         cfg.initiallySuspendsMediaPlayback = args.deferredShow;
-        cfg.initialVolume = args.deferredShow ? 0.0f : args.volume;
+        cfg.initialVolume = args.volume;
         cfg.frameRate = args.fps;
         cfg.loadFromMemory = args.loadFromMemory;
         cfg.networkPolicy = args.networkPolicy;
@@ -588,6 +596,8 @@ int main(int argc, char *argv[]) {
         delegate.displayID = displayID;
         delegate.deferredShow = args.deferredShow;
         delegate.windowActivated = !args.deferredShow;
+        delegate.playbackVolume = args.volume;
+        delegate.playbackMuted = NO;
         delegate.playbackPaused = NO;
         engine.audioSpectrumDemandHandler = ^(BOOL needed) {
             MirageEmitEvent(@{ @"event": @"audio-demand", @"needed": @(needed) });
@@ -664,12 +674,28 @@ int main(int argc, char *argv[]) {
                             [eng applyUserProperties:values generation:generation];
                         }
                     } else if ([name isEqualToString:@"pause"]) {
-                        [eng setPaused:YES];
                         delegate.playbackPaused = YES;
+                        [delegate applyPlaybackState];
                         [delegate syncInputForwarder];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
-                        [eng setPaused:NO];
                         delegate.playbackPaused = NO;
+                        [delegate applyPlaybackState];
+                        [delegate syncInputForwarder];
+                    } else if ([name isEqualToString:@"playbackState"]) {
+                        NSNumber *volume = [cmd[@"volume"] isKindOfClass:[NSNumber class]] ? cmd[@"volume"] : nil;
+                        NSNumber *muted = [cmd[@"muted"] isKindOfClass:[NSNumber class]] ? cmd[@"muted"] : nil;
+                        NSString *state = [cmd[@"state"] isKindOfClass:[NSString class]] ? cmd[@"state"] : nil;
+                        if (volume == nil || muted == nil || state == nil) return;
+                        BOOL shouldPause = [state isEqualToString:@"pause"];
+                        if (!shouldPause && ![state isEqualToString:@"run"] && ![state isEqualToString:@"throttle"]) return;
+                        delegate.playbackVolume = fmaxf(0.0f, fminf(1.0f, volume.floatValue));
+                        delegate.playbackMuted = muted.boolValue;
+                        delegate.playbackPaused = shouldPause;
+                        if (!shouldPause) {
+                            NSNumber *fps = [cmd[@"fps"] isKindOfClass:[NSNumber class]] ? cmd[@"fps"] : nil;
+                            if (fps != nil) [eng setFrameRate:fps.intValue];
+                        }
+                        [delegate applyPlaybackState];
                         [delegate syncInputForwarder];
                     } else if ([name isEqualToString:@"power"]) {
                         // Authoritative playback state from the app. This window
@@ -690,14 +716,18 @@ int main(int argc, char *argv[]) {
                                 [eng setFrameRate:[fps intValue]];
                             }
                         }
-                        [eng setPaused:shouldPause];
                         delegate.playbackPaused = shouldPause;
+                        [delegate applyPlaybackState];
                         [delegate syncInputForwarder];
                     } else if ([name isEqualToString:@"volume"]) {
-                        if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
+                        if ([value isKindOfClass:[NSNumber class]]) {
+                            delegate.playbackVolume = fmaxf(0.0f, fminf(1.0f, [value floatValue]));
+                            [delegate applyPlaybackState];
+                        }
                     } else if ([name isEqualToString:@"muted"]) {
                         if ([value isKindOfClass:[NSNumber class]]) {
-                            [eng setMuted:[value boolValue]];
+                            delegate.playbackMuted = [value boolValue];
+                            [delegate applyPlaybackState];
                         }
                     } else if ([name isEqualToString:@"fps"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setFrameRate:[value intValue]];

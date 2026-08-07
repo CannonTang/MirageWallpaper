@@ -117,6 +117,23 @@ struct GeneralPage: SettingsPage {
         Form {
             Section {
                 Toggle("开机时自动启动 Mirage", isOn: $viewModel.settings.autoStart)
+                if viewModel.loginItemStatus == .requiresApproval {
+                    HStack {
+                        Label(L("需要在系统设置中批准"), systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button(L("打开登录项设置")) {
+                            viewModel.openLoginItemSettings()
+                        }
+                    }
+                } else if viewModel.loginItemStatus == .notFound {
+                    Label(L("系统无法找到登录项服务"), systemImage: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+                Toggle(L("隐藏菜单栏图标"), isOn: Binding(
+                    get: { viewModel.settings.shouldHideMenuBarIcon },
+                    set: { viewModel.settings.hideMenuBarIcon = $0 }
+                ))
             } header: {
                 Label("启动", systemImage: "star.fill")
             }
@@ -271,7 +288,10 @@ struct GeneralPage: SettingsPage {
             }
 
             Section {
-                Toggle("详细日志（供调试）", isOn: $viewModel.settings.verboseLog)
+                Toggle(L("开发模式"), isOn: Binding(
+                    get: { viewModel.settings.isDeveloperModeEnabled },
+                    set: { viewModel.settings.developerMode = $0 }
+                ))
                 HStack {
                     Text("重置所有设置")
                     Spacer()

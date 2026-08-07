@@ -217,6 +217,7 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
     case lifetimeSessions = 10
     case lastUpdated = 11
     case textRelevance = 12
+    case recentlyReleased = 13
 
     var id: Int { rawValue }
 
@@ -233,6 +234,7 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
         case .lifetimeSessions: return L("总播放次数最多")
         case .lastUpdated: return L("最近更新")
         case .textRelevance: return L("文本相关性")
+        case .recentlyReleased: return L("最近发行")
         }
     }
 
@@ -249,6 +251,7 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
         case .lifetimeSessions: return 18
         case .lastUpdated: return 21
         case .textRelevance: return 12
+        case .recentlyReleased: return 1
         }
     }
 
@@ -275,6 +278,8 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
 enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
     case day = 1
     case week = 7
+    case month = 30
+    case year = 365
 
     var id: Int { rawValue }
 
@@ -282,6 +287,8 @@ enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
         switch self {
         case .day: return L("今日")
         case .week: return L("本周")
+        case .month: return L("本月")
+        case .year: return L("今年")
         }
     }
 

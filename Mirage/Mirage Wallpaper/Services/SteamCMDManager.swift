@@ -123,6 +123,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             domain: domain,
             message: redact(message, secrets: secrets)
         )
+        MirageLogService.shared.append(event.message, source: "steam.\(category.rawValue).\(domain)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.diagnosticEvents.append(event)

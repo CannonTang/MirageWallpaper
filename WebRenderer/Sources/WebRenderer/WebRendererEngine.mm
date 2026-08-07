@@ -150,6 +150,7 @@ static NSString *const kStrictAudioGuardJS = @"\
   window.__mirageAudioGuardTrackMedia=__trackMedia;\
   window.__mirageAudioGuardSetMuted=function(value){if(__isTop)__applyAudioState(!!value,__paused,true);};\
   window.__mirageAudioGuardSetPaused=function(value){if(__isTop)__applyAudioState(__muted,!!value,true);};\
+  window.__mirageAudioGuardSetState=function(muted,paused){if(__isTop)__applyAudioState(!!muted,!!paused,true);};\
   __applyAudioState(__muted,__paused,__isTop);\
   if(!__isTop){try{window.top.postMessage({tag:__messageTag,kind:'query'},'*');}catch(e){}}\
 })();";
@@ -978,25 +979,33 @@ static NSString *WRStringValue(id value) {
 }
 
 - (void)setPaused:(BOOL)paused {
+    [self setPlaybackVolume:_volume muted:_muted paused:paused];
+}
+
+- (void)setVolume:(float)volume {
+    [self setPlaybackVolume:volume muted:_muted paused:_paused];
+}
+
+- (void)setMuted:(BOOL)muted {
+    [self setPlaybackVolume:_volume muted:muted paused:_paused];
+}
+
+- (void)setPlaybackVolume:(float)volume muted:(BOOL)muted paused:(BOOL)paused {
+    _volume = fmaxf(0.0f, fminf(1.0f, volume));
+    _muted = muted;
     _paused = paused;
-    [self eval:[NSString stringWithFormat:@"__wr_setPaused(%@);", paused ? @"true" : @"false"]];
+    [self applyUserProperty:@"audio" value:@{@"value": @(_volume)}];
+    BOOL effectiveMuted = muted || _volume <= 0.0f;
+    NSString *mutedValue = effectiveMuted ? @"true" : @"false";
+    NSString *pausedValue = paused ? @"true" : @"false";
+    [self eval:[NSString stringWithFormat:
+        @"if(window.__mirageAudioGuardSetState)window.__mirageAudioGuardSetState(%@,%@);"
+         "__wr_setPaused(%@);__wr_applyMute(%@);",
+        mutedValue, pausedValue, pausedValue, mutedValue]];
     [self reconcileAudioSpectrum];
     if (self.audioSpectrumDemandHandler != nil) {
         self.audioSpectrumDemandHandler(_audioListenerDemand && !paused);
     }
-}
-
-- (void)setVolume:(float)volume {
-    _volume = volume;
-    [self applyUserProperty:@"audio" value:@{@"value": @(volume)}];
-    BOOL effectiveMuted = _muted || volume <= 0.0f;
-    [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", effectiveMuted ? @"true" : @"false"]];
-}
-
-- (void)setMuted:(BOOL)muted {
-    _muted = muted;
-    BOOL effectiveMuted = muted || _volume <= 0.0f;
-    [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", effectiveMuted ? @"true" : @"false"]];
 }
 
 - (void)setHostMediaPlaybackSuspended:(BOOL)suspended

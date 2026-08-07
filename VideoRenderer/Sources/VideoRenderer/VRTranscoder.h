@@ -17,10 +17,6 @@ typedef void (^VRTranscodeProgressBlock)(double fraction);
 // never producing a single frame. Only the per-track decodable flag catches it.
 + (BOOL)fileIsDecodable:(NSURL *)url;
 
-// Where the H.264 rewrite of `url` belongs. MP4-family containers keep their
-// exact path — the rewrite is byte-for-byte substitutable there, so project.json
-// and every other reference stay valid. Other containers get an .mp4 sibling,
-// since MP4 content behind a .webm name would not be probed correctly.
 + (NSURL *)playableURLForSourceURL:(NSURL *)url;
 
 // Decodes with libav* and re-encodes to H.264 (plus AAC when the source has
