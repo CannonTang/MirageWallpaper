@@ -26,6 +26,7 @@ bool WinSwapchainPresenter::Init(HWND hwnd, HINSTANCE hinstance,
     if (!CreateSwapchain(width, height))    return false;
     if (!CreateSyncObjects())               return false;
     if (!CreateStagingResources(width, height)) return false;
+    if (!CreateLocalImage(width, height))   return false;
 
     return true;
 }
@@ -35,6 +36,12 @@ void WinSwapchainPresenter::Destroy() {
         vkDeviceWaitIdle(m_device);
     }
 
+    if (m_last_cmd != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(m_device, m_command_pool, 1, &m_last_cmd);
+        m_last_cmd = VK_NULL_HANDLE;
+    }
+
+    DestroyLocalImage();
     DestroyStagingResources();
     DestroySwapchain();
 
@@ -48,7 +55,7 @@ void WinSwapchainPresenter::Destroy() {
 }
 
 // -----------------------------------------------------------------------------
-// Present
+// Present — full RGBA upload pipeline (staging → local image → swapchain)
 // -----------------------------------------------------------------------------
 
 void WinSwapchainPresenter::Present(const std::uint8_t* rgba,
@@ -62,21 +69,38 @@ void WinSwapchainPresenter::Present(const std::uint8_t* rgba,
         m_need_recreate = false;
     }
 
+    // Wait for previous frame, then free its command buffer.
+    vkWaitForFences(m_device, 1, &m_frame_fence, VK_TRUE, UINT64_MAX);
+    vkResetFences(m_device, 1, &m_frame_fence);
+
+    if (m_last_cmd != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(m_device, m_command_pool, 1, &m_last_cmd);
+        m_last_cmd = VK_NULL_HANDLE;
+    }
+
+    // Acquire swapchain image.
     std::uint32_t image_index = 0;
     VkResult acquire = vkAcquireNextImageKHR(m_device, m_swapchain,
         UINT64_MAX, m_image_avail, VK_NULL_HANDLE, &image_index);
 
-    if (acquire == VK_ERROR_OUT_OF_DATE_KHR || acquire == VK_SUBOPTIMAL_KHR) return;
+    if (acquire == VK_ERROR_OUT_OF_DATE_KHR) { m_need_recreate = true; return; }
     if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) return;
 
+    // Copy RGBA pixels to staging buffer (host-visible).
     std::uint32_t src_size = src_width * src_height * 4;
     if (src_size > m_staging_size) {
         DestroyStagingResources();
-        std::uint32_t new_pixels = src_width * src_height + (src_width * src_height / 2);
-        if (!CreateStagingResources(new_pixels, 1)) return;
+        if (!CreateStagingResources(src_width, src_height)) return;
     }
     std::memcpy(m_staging_mapped, rgba, src_size);
 
+    // Get swapchain images (cached list — only changes on swapchain recreate).
+    std::uint32_t sc_count = 0;
+    vkGetSwapchainImagesKHR(m_device, m_swapchain, &sc_count, nullptr);
+    std::vector<VkImage> sc_images(sc_count);
+    vkGetSwapchainImagesKHR(m_device, m_swapchain, &sc_count, sc_images.data());
+
+    // Allocate command buffer.
     VkCommandBufferAllocateInfo alloc_info = {
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr,
         m_command_pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1
@@ -90,22 +114,20 @@ void WinSwapchainPresenter::Present(const std::uint8_t* rgba,
     };
     vkBeginCommandBuffer(cmd, &begin_info);
 
-    // Simplified: barrier + copy + present. Full blit-to-local-image pipeline
-    // deferred to M4 when engine VkImage sharing is available.
-    // For M1, the staging buffer upload alone validates the Vulkan path.
-    // Engine RGBA pixels are placed into staging; the full present chain
-    // will be completed when integrated with the engine's VkDevice.
+    RecordUploadCommands(cmd, sc_images[image_index], src_width, src_height);
+
     vkEndCommandBuffer(cmd);
 
+    // Submit.
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo submit_info = {
         VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr,
         1, &m_image_avail, &wait_stage, 1, &cmd,
         1, &m_render_done
     };
-    vkResetFences(m_device, 1, &m_frame_fence);
     vkQueueSubmit(m_queue, 1, &submit_info, m_frame_fence);
 
+    // Present.
     VkPresentInfoKHR present_info = {
         VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, nullptr,
         1, &m_render_done, 1, &m_swapchain, &image_index, nullptr
@@ -115,8 +137,8 @@ void WinSwapchainPresenter::Present(const std::uint8_t* rgba,
         m_need_recreate = true;
     }
 
-    vkWaitForFences(m_device, 1, &m_frame_fence, VK_TRUE, UINT64_MAX);
-    vkFreeCommandBuffers(m_device, m_command_pool, 1, &cmd);
+    // Save command buffer — freed next frame after fence signals.
+    m_last_cmd = cmd;
 }
 
 bool WinSwapchainPresenter::Resize(std::uint32_t width, std::uint32_t height) {
@@ -124,8 +146,10 @@ bool WinSwapchainPresenter::Resize(std::uint32_t width, std::uint32_t height) {
     m_swapchain_width  = width;
     m_swapchain_height = height;
     vkDeviceWaitIdle(m_device);
+    DestroyLocalImage();
     DestroySwapchain();
-    return CreateSwapchain(width, height);
+    if (!CreateSwapchain(width, height)) return false;
+    return CreateLocalImage(width, height);
 }
 
 // -----------------------------------------------------------------------------
@@ -315,6 +339,144 @@ void WinSwapchainPresenter::DestroyStagingResources() {
         m_staging_buffer = VK_NULL_HANDLE;
     }
     m_staging_size = 0;
+}
+
+// -----------------------------------------------------------------------------
+// Local image (host-side texture for staging → swapchain blit)
+// -----------------------------------------------------------------------------
+
+bool WinSwapchainPresenter::CreateLocalImage(std::uint32_t width, std::uint32_t height) {
+    if (width == 0 || height == 0) return false;
+
+    VkImageCreateInfo img_info = {
+        VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, nullptr, 0,
+        VK_IMAGE_TYPE_2D,
+        VK_FORMAT_B8G8R8A8_UNORM,
+        { width, height, 1 },
+        1, 1, VK_SAMPLE_COUNT_1_BIT,
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        VK_SHARING_MODE_EXCLUSIVE, 0, nullptr,
+        VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    if (vkCreateImage(m_device, &img_info, nullptr, &m_local_image) != VK_SUCCESS)
+        return false;
+
+    VkMemoryRequirements mem_req {};
+    vkGetImageMemoryRequirements(m_device, m_local_image, &mem_req);
+
+    VkMemoryAllocateInfo alloc_info = {
+        VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr,
+        mem_req.size,
+        FindMemoryType(mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+    };
+
+    if (vkAllocateMemory(m_device, &alloc_info, nullptr, &m_local_memory) != VK_SUCCESS) {
+        vkDestroyImage(m_device, m_local_image, nullptr);
+        m_local_image = VK_NULL_HANDLE;
+        return false;
+    }
+
+    vkBindImageMemory(m_device, m_local_image, m_local_memory, 0);
+    m_local_width  = width;
+    m_local_height = height;
+    return true;
+}
+
+void WinSwapchainPresenter::DestroyLocalImage() {
+    if (m_local_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_local_memory, nullptr);
+        m_local_memory = VK_NULL_HANDLE;
+    }
+    if (m_local_image != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_local_image, nullptr);
+        m_local_image = VK_NULL_HANDLE;
+    }
+    m_local_width  = 0;
+    m_local_height = 0;
+}
+
+// Helper: pipeline image memory barrier.
+namespace {
+void ImageBarrier(VkCommandBuffer cmd, VkImage image,
+                  VkAccessFlags src_access, VkAccessFlags dst_access,
+                  VkImageLayout old_layout, VkImageLayout new_layout) {
+    VkImageMemoryBarrier barrier = {
+        VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr,
+        src_access, dst_access,
+        old_layout, new_layout,
+        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+        image,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
+    };
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+}
+} // namespace
+
+void WinSwapchainPresenter::RecordUploadCommands(
+    VkCommandBuffer cmd, VkImage swapchain_image,
+    std::uint32_t src_width, std::uint32_t src_height) {
+
+    // 1. Transition local image: TRANSFER_SRC (from previous frame) or
+    //    UNDEFINED (first frame) → TRANSFER_DST.
+    //    Use UNDEFINED as old layout — it's always valid and the driver
+    //    discards content, which is fine since we're about to overwrite.
+    ImageBarrier(cmd, m_local_image,
+                 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    // 2. Copy staging buffer → local image.
+    VkBufferImageCopy buf_copy = {};
+    buf_copy.bufferOffset      = 0;
+    buf_copy.bufferRowLength   = 0; // tightly packed
+    buf_copy.bufferImageHeight = 0;
+    buf_copy.imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    buf_copy.imageOffset       = { 0, 0, 0 };
+    buf_copy.imageExtent       = { src_width, src_height, 1 };
+
+    vkCmdCopyBufferToImage(cmd, m_staging_buffer, m_local_image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &buf_copy);
+
+    // 3. Transition local image: TRANSFER_DST → TRANSFER_SRC
+    ImageBarrier(cmd, m_local_image,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+    // 4. Transition swapchain image: UNDEFINED → TRANSFER_DST
+    //    vkAcquireNextImageKHR returns images in UNDEFINED layout.
+    ImageBarrier(cmd, swapchain_image,
+                 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    // 5. Blit local image → swapchain image (handles size/aspect differences).
+    VkImageBlit blit = {};
+    blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    blit.srcOffsets[0]  = { 0, 0, 0 };
+    blit.srcOffsets[1]  = { static_cast<std::int32_t>(src_width),
+                            static_cast<std::int32_t>(src_height), 1 };
+    blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    blit.dstOffsets[0]  = { 0, 0, 0 };
+    blit.dstOffsets[1]  = { static_cast<std::int32_t>(m_swapchain_width),
+                            static_cast<std::int32_t>(m_swapchain_height), 1 };
+
+    vkCmdBlitImage(cmd, m_local_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   swapchain_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &blit, VK_FILTER_LINEAR);
+
+    // 6. Transition swapchain image: TRANSFER_DST → PRESENT_SRC_KHR
+    ImageBarrier(cmd, swapchain_image,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+    // 7. Transition local image: TRANSFER_SRC → UNDEFINED
+    //    Reset to UNDEFINED so next frame can use UNDEFINED as old layout
+    //    without validation errors (discard contents).
+    ImageBarrier(cmd, m_local_image,
+                 VK_ACCESS_TRANSFER_READ_BIT, 0,
+                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_UNDEFINED);
 }
 
 std::uint32_t WinSwapchainPresenter::FindMemoryType(

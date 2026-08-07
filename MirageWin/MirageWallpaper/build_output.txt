@@ -1,0 +1,9 @@
+C:\Users\pikachuren\.nuget\packages\microsoft.windowsappsdk\1.6.250205002\buildTransitive\Microsoft.UI.Xaml.Markup.Compiler.interop.targets(590,9): error MSB3073: 命令“"C:\Users\pikachuren\.nuget\packages\microsoft.windowsappsdk\1.6.250205002\buildTransitive\..\tools\net6.0\..\net472\XamlCompiler.exe" "obj\Debug\net9.0-windows10.0.19041.0\\input.json" "obj\Debug\net9.0-windows10.0.19041.0\\output.json"”已退出，代码为 1。 [G:\Codes\MirageWallpaper\MirageWin\MirageWallpaper\MirageWallpaper.csproj]
+
+生成失败。
+
+C:\Users\pikachuren\.nuget\packages\microsoft.windowsappsdk\1.6.250205002\buildTransitive\Microsoft.UI.Xaml.Markup.Compiler.interop.targets(590,9): error MSB3073: 命令“"C:\Users\pikachuren\.nuget\packages\microsoft.windowsappsdk\1.6.250205002\buildTransitive\..\tools\net6.0\..\net472\XamlCompiler.exe" "obj\Debug\net9.0-windows10.0.19041.0\\input.json" "obj\Debug\net9.0-windows10.0.19041.0\\output.json"”已退出，代码为 1。 [G:\Codes\MirageWallpaper\MirageWin\MirageWallpaper\MirageWallpaper.csproj]
+    0 个警告
+    1 个错误
+
+已用时间 00:00:06.69

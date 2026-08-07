@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "dgSpecHash": "uYvRleeBkAY=",
+  "success": true,
+  "projectFilePath": "G:\\Codes\\MirageWallpaper\\MirageWin\\MirageWallpaper\\MirageWallpaper.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.extensions.dependencyinjection\\9.0.0\\microsoft.extensions.dependencyinjection.9.0.0.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.extensions.dependencyinjection.abstractions\\9.0.0\\microsoft.extensions.dependencyinjection.abstractions.9.0.0.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.web.webview2\\1.0.2651.64\\microsoft.web.webview2.1.0.2651.64.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.windows.sdk.buildtools\\10.0.22621.756\\microsoft.windows.sdk.buildtools.10.0.22621.756.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.windowsappsdk\\1.6.250205002\\microsoft.windowsappsdk.1.6.250205002.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\9.0.2\\microsoft.netcore.app.runtime.win-x64.9.0.2.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\9.0.2\\microsoft.windowsdesktop.app.runtime.win-x64.9.0.2.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\9.0.2\\microsoft.aspnetcore.app.runtime.win-x64.9.0.2.nupkg.sha512",
+    "C:\\Users\\pikachuren\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.57\\microsoft.windows.sdk.net.ref.10.0.19041.57.nupkg.sha512"
+  ],
+  "logs": []
+}

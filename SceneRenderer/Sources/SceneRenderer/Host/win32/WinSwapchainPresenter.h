@@ -54,9 +54,13 @@ private:
     bool CreateCommandPool();
     bool CreateSyncObjects();
     bool CreateStagingResources(std::uint32_t max_width, std::uint32_t max_height);
+    bool CreateLocalImage(std::uint32_t width, std::uint32_t height);
+    void RecordUploadCommands(VkCommandBuffer cmd, VkImage swapchain_image,
+                               std::uint32_t src_width, std::uint32_t src_height);
 
     void DestroySwapchain();
     void DestroyStagingResources();
+    void DestroyLocalImage();
     std::uint32_t FindMemoryType(std::uint32_t type_filter,
                                   VkMemoryPropertyFlags properties) const;
 
@@ -75,8 +79,15 @@ private:
     void*             m_staging_mapped  = nullptr;
     std::uint32_t     m_staging_size    = 0;
 
+    VkImage           m_local_image     = VK_NULL_HANDLE;
+    VkDeviceMemory    m_local_memory    = VK_NULL_HANDLE;
+    std::uint32_t     m_local_width     = 0;
+    std::uint32_t     m_local_height    = 0;
+
     VkPhysicalDevice  m_physical_device = VK_NULL_HANDLE;
     std::uint32_t     m_queue_family    = 0;
+
+    VkCommandBuffer   m_last_cmd       = VK_NULL_HANDLE;
 
     std::uint32_t     m_swapchain_width  = 0;
     std::uint32_t     m_swapchain_height = 0;
