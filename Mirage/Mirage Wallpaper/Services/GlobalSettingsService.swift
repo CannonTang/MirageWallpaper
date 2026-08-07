@@ -836,11 +836,18 @@ class GlobalSettingsViewModel: ObservableObject {
 
         for process in processes {
             guard audioProcessIsRunningOutput(process),
-                  let pid = audioProcessPID(process),
-                  !excludedPIDs.contains(pid) else { continue }
+                  let pid = audioProcessPID(process) else { continue }
+            if excludedPIDs.contains(pid) || isWebWallpaperAudioProcess(pid) { continue }
             return true
         }
         return false
+    }
+
+    private static func isWebWallpaperAudioProcess(_ pid: pid_t) -> Bool {
+        guard let application = NSRunningApplication(processIdentifier: pid),
+              application.bundleIdentifier == "com.apple.WebKit.GPU",
+              let name = application.localizedName else { return false }
+        return name == "WebWallpaper" || name.hasPrefix("WebWallpaper ")
     }
 
     private static func audioProcessIsRunningOutput(_ process: AudioObjectID) -> Bool {

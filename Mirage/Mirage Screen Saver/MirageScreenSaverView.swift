@@ -383,7 +383,7 @@ final class MirageScreenSaverView: ScreenSaverView {
                 let player = AVPlayer(playerItem: item)
                 player.isMuted = true
                 let playerLayer = AVPlayerLayer(player: player)
-                playerLayer.frame = self.bounds
+                playerLayer.frame = self.videoPresentationBounds
                 playerLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
                 switch configuration.fillMode {
                 case "contain": playerLayer.videoGravity = .resizeAspect
@@ -403,6 +403,20 @@ final class MirageScreenSaverView: ScreenSaverView {
                 if self.isAnimatingWallpaper { player.play() }
             }
         }
+    }
+
+    override func layout() {
+        super.layout()
+        guard let rootLayer = layer else { return }
+        rootLayer.contentsScale = window?.backingScaleFactor ?? rootLayer.contentsScale
+        playerLayer?.frame = videoPresentationBounds
+        playerLayer?.contentsScale = rootLayer.contentsScale
+        webView?.frame = bounds
+    }
+
+    private var videoPresentationBounds: CGRect {
+        guard !isPreview, let screen = window?.screen ?? NSScreen.main else { return bounds }
+        return CGRect(origin: .zero, size: screen.frame.size)
     }
 
     private func loadWeb(_ configuration: MirageSaverConfiguration) {

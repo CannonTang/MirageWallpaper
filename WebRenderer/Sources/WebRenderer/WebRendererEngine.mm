@@ -1,3 +1,9 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 #import "WebRendererEngine.h"
 #import "WallpaperManifest.h"
 #import "WRAudioTap.h"
@@ -21,8 +27,29 @@ static BOOL WRWriteImage(CGImageRef image, NSString *path, CFStringRef type) {
     return ok;
 }
 
+static BOOL WRImageLooksBlank(CGImageRef image) {
+    if (image == NULL || CGImageGetWidth(image) == 0 || CGImageGetHeight(image) == 0) return YES;
+    const size_t side = 16;
+    uint8_t pixels[side * side * 4] = {};
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        pixels, side, side, 8, side * 4, colorSpace, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(colorSpace);
+    if (context == NULL) return NO;
+    CGContextSetRGBFillColor(context, 1.0, 1.0, 1.0, 1.0);
+    CGContextFillRect(context, CGRectMake(0, 0, side, side));
+    CGContextDrawImage(context, CGRectMake(0, 0, side, side), image);
+    CGContextRelease(context);
+    for (size_t i = 0; i < side * side; i++) {
+        if (pixels[i * 4] < 250 || pixels[i * 4 + 1] < 250 || pixels[i * 4 + 2] < 250) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 static BOOL WREncodeSnapshot(CGImageRef image, NSString *path) {
-    if (image == NULL) return NO;
+    if (WRImageLooksBlank(image)) return NO;
     if (WRWriteImage(image, path, (__bridge CFStringRef)UTTypeHEIC.identifier)) return YES;
     return WRWriteImage(image, path, (__bridge CFStringRef)UTTypeJPEG.identifier);
 }
@@ -262,6 +289,19 @@ static NSString *const kShimJS = @"\
   document.addEventListener('DOMContentLoaded',__wr_installLocalAssetObserver,{once:true});\
   window.wallpaperEngine_paused = false;\
   var __streams = [];\
+  try {\
+    var __wrNativeMediaPlay = HTMLMediaElement.prototype.play;\
+    HTMLMediaElement.prototype.play = function(){\
+      this.__wr_playRequested = true;\
+      if(window.__wr_hostMediaPlaybackSuspended)return Promise.resolve();\
+      return __wrNativeMediaPlay.apply(this, arguments);\
+    };\
+    var __wrNativeMediaPause = HTMLMediaElement.prototype.pause;\
+    HTMLMediaElement.prototype.pause = function(){\
+      if (!this.__wr_hostPausing) this.__wr_playRequested = false;\
+      return __wrNativeMediaPause.apply(this, arguments);\
+    };\
+  } catch(e) {}\
   window.wallpaperRegisterAudioStream = function(el){\
     if (el && __streams.indexOf(el) < 0) __streams.push(el);\
     try { if(window.__mirageAudioGuardTrackMedia)window.__mirageAudioGuardTrackMedia(el); } catch(e) {}\
@@ -365,8 +405,8 @@ static NSString *const kShimJS = @"\
   function __allMedia(){\
     var a=__streams.slice(); try { var m=document.querySelectorAll('audio,video'); for(var i=0;i<m.length;i++) if(a.indexOf(m[i])<0)a.push(m[i]); }catch(e){} return a;\
   }\
-  function __pauseMedia(){ var a=__allMedia(); for(var i=0;i<a.length;i++)try{var s=a[i];s.__wr_wasPlaying=!s.paused;if(s.__wr_wasPlaying)s.pause();}catch(e){} }\
-  function __resumeMedia(){ var a=__allMedia(); for(var i=0;i<a.length;i++)try{var s=a[i];if(s.__wr_wasPlaying){s.__wr_wasPlaying=false;var p=s.play();if(p&&p.catch)p.catch(function(){});}}catch(e){} }\
+  function __pauseMedia(){ var a=__allMedia(); for(var i=0;i<a.length;i++)try{var s=a[i];s.__wr_wasPlaying=!s.paused;s.__wr_hostPausing=true;if(s.__wr_wasPlaying)s.pause();s.__wr_hostPausing=false;}catch(e){} }\
+  function __resumeMedia(){ var a=__allMedia(); for(var i=0;i<a.length;i++)try{var s=a[i];if((s.__wr_wasPlaying||s.__wr_playRequested)&&!s.ended){s.__wr_wasPlaying=false;s.__wr_hostPausing=false;var p=s.play();if(p&&p.catch)p.catch(function(){});}}catch(e){} }\
   function __setCssPaused(p){\
     var root=document.documentElement; if(!root)return;\
     if(!document.getElementById('__wr_pause_style')){var style=document.createElement('style');style.id='__wr_pause_style';style.textContent='html.__wr-paused *,html.__wr-paused *::before,html.__wr-paused *::after{-webkit-animation-play-state:paused!important;animation-play-state:paused!important;}';(document.head||root).appendChild(style);}\
@@ -689,7 +729,11 @@ static NSString *WRStringValue(id value) {
         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
         forMainFrameOnly:NO];
     [ucc addUserScript:audioGuard];
-    WKUserScript *shim = [[WKUserScript alloc] initWithSource:kShimJS
+    NSString *hostMediaState = _config.initiallySuspendsMediaPlayback
+        ? @"window.__wr_hostMediaPlaybackSuspended=true;"
+        : @"window.__wr_hostMediaPlaybackSuspended=false;";
+    NSString *shimSource = [hostMediaState stringByAppendingString:kShimJS];
+    WKUserScript *shim = [[WKUserScript alloc] initWithSource:shimSource
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:YES];
     [ucc addUserScript:shim];
@@ -1024,6 +1068,7 @@ static NSString *WRStringValue(id value) {
     void (^completion)(void) = _hostMediaPlaybackCompletions.firstObject;
     [_hostMediaPlaybackStates removeObjectAtIndex:0];
     [_hostMediaPlaybackCompletions removeObjectAtIndex:0];
+    if (suspended) [self eval:@"window.__wr_hostMediaPlaybackSuspended=true;"];
 
     __weak WebRendererEngine *weakSelf = self;
     [_webView setAllMediaPlaybackSuspended:suspended completionHandler:^{
@@ -1031,6 +1076,7 @@ static NSString *WRStringValue(id value) {
         if (strongSelf == nil) return;
         strongSelf.hostMediaPlaybackSuspended = suspended;
         strongSelf.hostMediaPlaybackRequestInFlight = NO;
+        if (!suspended) [strongSelf eval:@"window.__wr_hostMediaPlaybackSuspended=false;if(window.__wr_resumeStreams)window.__wr_resumeStreams();"];
         if (completion) completion();
         [strongSelf startNextHostMediaPlaybackRequest];
     }];

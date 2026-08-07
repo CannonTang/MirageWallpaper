@@ -1,3 +1,9 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 // WebWallpaper — desktop wallpaper host.
 //
 // Counterpart to OWE's waywallen/web_main.cpp and to SceneRenderer's
@@ -390,6 +396,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
                     return;
                 }
                 strongSelf.windowActivated = YES;
+                [strongSelf applyPlaybackState];
                 [strongSelf syncInputForwarder];
                 MirageEmitEvent(@{ @"event": @"activated" });
             }];
@@ -463,7 +470,6 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     }
     self.visibilityEpoch += 1;
     NSUInteger epoch = self.visibilityEpoch;
-    [self applyPlaybackState];
     self.window.alphaValue = 0.0;
     [self.window orderFrontRegardless];
     [self prepareActivationForEpoch:epoch attempts:200];
@@ -505,9 +511,10 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
 }
 
 - (void)applyPlaybackState {
+    BOOL hidden = self.deferredShow && !self.windowActivated;
     [self.engine setPlaybackVolume:self.playbackVolume
-                             muted:self.playbackMuted
-                            paused:self.playbackPaused];
+                             muted:hidden || self.playbackMuted
+                            paused:hidden || self.playbackPaused];
 }
 
 // Resolution changes, display rearrangement and unplug/replug all leave the
@@ -578,8 +585,8 @@ int main(int argc, char *argv[]) {
         WREngineConfig cfg = [WebRendererEngine defaultConfig];
         cfg.enableInspector = NO;
         cfg.enableAudioSpectrum = args.spectrum && !args.externalSpectrum;
-        cfg.initiallySuspendsMediaPlayback = args.deferredShow;
-        cfg.initialVolume = args.volume;
+        cfg.initiallySuspendsMediaPlayback = NO;
+        cfg.initialVolume = args.deferredShow ? 0.0f : args.volume;
         cfg.frameRate = args.fps;
         cfg.loadFromMemory = args.loadFromMemory;
         cfg.networkPolicy = args.networkPolicy;
