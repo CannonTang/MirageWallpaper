@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
+    var navigationModel = MainNavigationModel()
 
     var importOpenPanel: NSOpenPanel!
     private var developerLogWindowController: DeveloperLogWindowController?

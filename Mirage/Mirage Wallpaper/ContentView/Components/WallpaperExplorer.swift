@@ -9,11 +9,14 @@ import SwiftUI
 struct WallpaperExplorer: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let isActive: Bool
 
     init(contentViewModel viewModel: ContentViewModel,
-         wallpaperViewModel: WallpaperViewModel) {
+         wallpaperViewModel: WallpaperViewModel,
+         isActive: Bool = true) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
+        self.isActive = isActive
     }
 
     var body: some View {
@@ -56,7 +59,8 @@ struct WallpaperExplorer: SubviewOfContentView {
                             ForEach(page.items) { wallpaper in
                                 ExplorerItem(
                                     wallpaper: wallpaper,
-                                    isSelected: wallpaper.wallpaperDirectory == selectedDirectory
+                                    isSelected: wallpaper.wallpaperDirectory == selectedDirectory,
+                                    isActive: isActive
                                 )
                                 .contextMenu {
                                     ExplorerItemMenu(

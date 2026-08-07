@@ -11,6 +11,7 @@ struct WorkshopView: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let isActive: Bool
 
     @State private var hoveredId: String?
     @State private var isDownloadPopoverPresented = false
@@ -181,7 +182,8 @@ struct WorkshopView: View {
                                         isSelected: workshopViewModel.selectedItem?.id == item.id,
                                         isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                         presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
+                                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                        isActive: isActive
                                     )
                                     .onHover { hovered in
                                         hoveredId = hovered ? item.id : nil
@@ -247,7 +249,6 @@ struct WorkshopView: View {
         .onAppear {
             presentAPIKeyReminderIfNeeded()
             workshopViewModel.checkSteamSetup()
-            workshopViewModel.refreshInstalledState()
             if workshopViewModel.items.isEmpty {
                 workshopViewModel.search()
             }
@@ -257,11 +258,6 @@ struct WorkshopView: View {
             Button("暂时使用内置 Key", role: .cancel) { }
         } message: {
             Text("内置 Key 由所有 Mirage 用户共享，繁忙时可能导致创意工坊无法加载。设置您自己的免费 API Key 后将不再提醒。此 Key 只影响浏览，不影响登录和下载。")
-        }
-        .onChange(of: viewModel.topTabBarSelection) { _, _ in
-            if viewModel.topTabBarSelection == 2 {
-                workshopViewModel.checkSteamSetup()
-            }
         }
         .alert("Steam 登录", isPresented: Binding(
             get: { workshopViewModel.logoutResultMessage != nil },

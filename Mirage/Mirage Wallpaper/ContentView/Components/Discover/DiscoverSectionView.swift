@@ -14,6 +14,7 @@ struct DiscoverSectionView: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var contentViewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let isActive: Bool
     var onSeeAll: () -> Void
 
     @State private var hoveredId: String?
@@ -54,7 +55,8 @@ struct DiscoverSectionView: View {
                                     isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                     presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                                     downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                    cardWidth: contentViewModel.explorerIconSize
+                                    cardWidth: contentViewModel.explorerIconSize,
+                                    isActive: isActive
                                 )
                                 .id(item.id)
                                 .onHover { hovered in
@@ -149,6 +151,7 @@ struct DiscoverCard: View {
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
     var cardWidth: CGFloat
+    var isActive: Bool
 
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
 
@@ -158,8 +161,8 @@ struct DiscoverCard: View {
                 WorkshopImage(
                     url: item.previewImageURL,
                     contentMode: .fill,
-                    isAnimating: isHovered || isSelected ||
-                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible
+                    isAnimating: isActive && (isHovered || isSelected ||
+                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible)
                 )
                     .frame(width: cardWidth, height: cardWidth)
 

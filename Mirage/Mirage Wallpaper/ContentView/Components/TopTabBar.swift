@@ -6,12 +6,13 @@
 
 import SwiftUI
 
-struct TopTabBar: SubviewOfContentView {
-    @ObservedObject var viewModel: ContentViewModel
+struct TopTabBar: View {
+    @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @State private var hoverSelection: MainSection?
 
-    init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
-        self.viewModel = viewModel
+    init(navigationModel: MainNavigationModel, wallpaperViewModel: WallpaperViewModel) {
+        self.navigationModel = navigationModel
         self.wallpaperViewModel = wallpaperViewModel
     }
 
@@ -22,9 +23,9 @@ struct TopTabBar: SubviewOfContentView {
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 4) {
-                tab(index: 0, title: "已安装", systemImage: "square.and.arrow.down.fill")
-                tab(index: 1, title: "发现", systemImage: "sparkle.magnifyingglass")
-                tab(index: 2, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
+                tab(section: .installed, title: "已安装", systemImage: "square.and.arrow.down.fill")
+                tab(section: .discover, title: "发现", systemImage: "sparkle.magnifyingglass")
+                tab(section: .workshop, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
             }
             .padding(4)
             .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)), interactive: false)
@@ -49,12 +50,12 @@ struct TopTabBar: SubviewOfContentView {
     // A single segmented pill. The selected segment gets an accent-filled
     // capsule; hover gets a soft translucent capsule. No hard rectangles.
     @ViewBuilder
-    private func tab(index: Int, title: LocalizedStringKey, systemImage: String, badge: Int = 0) -> some View {
-        let isSelected = viewModel.topTabBarSelection == index
-        let isHovering = viewModel.topTabBarHoverSelection == index
+    private func tab(section: MainSection, title: LocalizedStringKey, systemImage: String, badge: Int = 0) -> some View {
+        let isSelected = navigationModel.selection == section
+        let isHovering = hoverSelection == section
 
         Button {
-            viewModel.topTabBarSelection = index
+            navigationModel.selection = section
         } label: {
             Label(title, systemImage: systemImage)
                 .font(.headline)
@@ -82,7 +83,7 @@ struct TopTabBar: SubviewOfContentView {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { viewModel.topTabBarHoverSelection = $0 ? index : -1 }
+        .onHover { hoverSelection = $0 ? section : nil }
     }
 
     @ViewBuilder

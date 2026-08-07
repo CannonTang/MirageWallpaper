@@ -10,6 +10,7 @@ struct WallpaperPreview: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    let isActive: Bool
     
     @Environment(\.undoManager) var undoManager
     
@@ -26,10 +27,12 @@ struct WallpaperPreview: SubviewOfContentView {
 
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
-         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
+         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         isActive: Bool = true) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
         self.workshopViewModel = workshopViewModel
+        self.isActive = isActive
     }
 
     private func recomputeSize(for wallpaper: WEWallpaper) {
@@ -65,7 +68,7 @@ struct WallpaperPreview: SubviewOfContentView {
     var body: some View {
         VStack {
             ScrollView {
-                VStack(spacing: 16) {
+                LazyVStack(spacing: 16) {
                     HStack {
                         Image(systemName: "display")
                             .foregroundStyle(.secondary)
@@ -79,7 +82,8 @@ struct WallpaperPreview: SubviewOfContentView {
                     VStack(spacing: 10) {
                         GifImage(contentsOf: wallpaperViewModel.currentWallpaper.project.preview.isEmpty
                             ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                            : wallpaperViewModel.currentWallpaper.previewURL)
+                            : wallpaperViewModel.currentWallpaper.previewURL,
+                            animates: isActive)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .background(Color(nsColor: NSColor.controlBackgroundColor))

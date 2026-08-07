@@ -13,6 +13,7 @@ struct WorkshopItemCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
+    var isActive: Bool = true
 
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
 
@@ -21,16 +22,22 @@ struct WorkshopItemCard: View {
             WorkshopImage(
                 url: item.previewImageURL,
                 contentMode: .fill,
-                isAnimating: isHovered || isSelected ||
-                    globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible
+                isAnimating: isActive && (isHovered || isSelected ||
+                    globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible)
             )
 
             captionStrip
-
-            topBadges
         }
         .aspectRatio(1.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
+        .overlay {
+            GeometryReader { proxy in
+                topBadges
+                    .frame(width: max(0, proxy.size.width - 16), alignment: .leading)
+                    .padding(8)
+            }
+            .allowsHitTesting(false)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -86,26 +93,37 @@ struct WorkshopItemCard: View {
 
     private var topBadges: some View {
         VStack {
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .leading, spacing: 5) {
-                    if item.isPreset {
-                        Label("预设", systemImage: "slider.horizontal.3")
-                            .font(.caption2.bold())
-                            .lineLimit(1)
-                            .fixedSize()
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(.purple, in: Capsule())
-                            .foregroundStyle(.white)
-                    }
-                    ageRatingBadge
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 6) {
+                    leadingBadges
+                    Spacer(minLength: 6)
+                    statusBadge
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                Spacer(minLength: 6)
-                statusBadge
+                VStack(alignment: .leading, spacing: 5) {
+                    leadingBadges
+                    statusBadge
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             Spacer(minLength: 0)
         }
-        .padding(8)
+    }
+
+    private var leadingBadges: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if item.isPreset {
+                Label("预设", systemImage: "slider.horizontal.3")
+                    .font(.caption2.bold())
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(.purple, in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            ageRatingBadge
+        }
     }
 
     /// Only restricted ratings are called out; badging every all-ages wallpaper
@@ -140,8 +158,8 @@ struct WorkshopItemCard: View {
             .padding(.vertical, 3)
             .background(presetNeedsDependency ? .orange : .green, in: Capsule())
             .foregroundStyle(.white)
-            .lineLimit(1)
-            .fixedSize()
+            .lineLimit(2)
+            .minimumScaleFactor(0.75)
         }
     }
 

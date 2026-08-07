@@ -12,6 +12,7 @@ struct ExplorerItem: View {
     // shared view models. Hovering or selecting one cell then cannot force every
     // other cell in the grid to rebuild.
     let isSelected: Bool
+    let isActive: Bool
 
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @State private var hovering = false
@@ -23,8 +24,8 @@ struct ExplorerItem: View {
                      : wallpaper.previewURL,
                      // Only the hovered cell or the active wallpaper animates its
                      // preview; every other cell stays a cheap static thumbnail.
-                     animates: hovering || isSelected ||
-                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible)
+                     animates: isActive && (hovering || isSelected ||
+                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible))
             .resizable()
             .scaleEffect(hovering ? 1.03 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
@@ -41,13 +42,6 @@ struct ExplorerItem: View {
                     .foregroundStyle(Color(white: hovering ? 0.9 : 0.7))
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.accentColor,
-                              lineWidth: isSelected ? 3 : (hovering ? 1 : 0))
-        )
-        .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 8 : 0, y: 2)
         .overlay(alignment: .topLeading) {
             if wallpaper.isPreset {
                 VStack(alignment: .leading, spacing: 3) {
@@ -57,6 +51,8 @@ struct ExplorerItem: View {
                         .background(.purple, in: RoundedRectangle(cornerRadius: 4))
                     if let status = wallpaper.presetStatusDescription {
                         Label(status, systemImage: "exclamationmark.triangle.fill")
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.75)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
                             .background(.orange, in: RoundedRectangle(cornerRadius: 4))
@@ -65,8 +61,17 @@ struct ExplorerItem: View {
                 .font(.caption2.bold())
                 .foregroundStyle(.white)
                 .padding(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .allowsHitTesting(false)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.accentColor,
+                              lineWidth: isSelected ? 3 : (hovering ? 1 : 0))
+        )
+        .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 8 : 0, y: 2)
         .animation(.easeOut(duration: 0.15), value: hovering)
         .onTapGesture {
             AppDelegate.shared.workshopViewModel.openInstalledWallpaper(wallpaper)

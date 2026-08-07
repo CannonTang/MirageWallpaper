@@ -10,6 +10,20 @@ protocol SubviewOfContentView: View {
     var viewModel: ContentViewModel { get set }
 }
 
+enum MainSection: Int, CaseIterable, Hashable {
+    case installed
+    case discover
+    case workshop
+}
+
+final class MainNavigationModel: ObservableObject {
+    @Published var selection: MainSection
+
+    init(selection: MainSection = .installed) {
+        self.selection = selection
+    }
+}
+
 private struct FilterSidebarLayout<Sidebar: View, Content: View>: View {
     private let isPresented: Bool
     private let sidebar: Sidebar
@@ -49,13 +63,22 @@ struct ContentView: View {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
+    @State private var loadedSections: Set<MainSection>
 
-    init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
+    init(
+        viewModel: ContentViewModel,
+        wallpaperViewModel: WallpaperViewModel,
+        workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+        navigationModel: MainNavigationModel = AppDelegate.shared.navigationModel
+    ) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
         self.workshopViewModel = workshopViewModel
+        self.navigationModel = navigationModel
+        _loadedSections = State(initialValue: [navigationModel.selection])
     }
 
     var body: some View {
@@ -63,74 +86,98 @@ struct ContentView: View {
             HSplitView {
                 if viewModel.isStaging {
                     VStack(spacing: 5) {
-                        TopTabBar(contentViewModel: viewModel,
+                        TopTabBar(navigationModel: navigationModel,
                                   wallpaperViewModel: wallpaperViewModel)
                         ProjectFeedbackBanner()
-                        switch viewModel.topTabBarSelection {
-                        case 0:
-                            ExplorerTopBar(contentViewModel: viewModel)
-                                .environmentObject(globalSettingsViewModel)
-                            FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
-                                    FilterResults(viewModel: viewModel)
-                            }, content: {
-                                WallpaperExplorer(contentViewModel: viewModel,
-                                                  wallpaperViewModel: wallpaperViewModel)
-                                    .onDrop(of: [.fileURL], delegate: viewModel)
-                                    .contextMenu {
-                                        ExplorerGlobalMenu(contentViewModel: viewModel,
-                                                           wallpaperViewModel: wallpaperViewModel)
-                                    }
-                            })
-                        case 1:
-                            DiscoverView(
-                                workshopViewModel: workshopViewModel,
-                                viewModel: viewModel,
-                                wallpaperViewModel: wallpaperViewModel
-                            )
-                        case 2:
-                            FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
-                                WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
-                            }, content: {
-                                WorkshopView(
+                        ZStack {
+                            if loadedSections.contains(.installed) {
+                                VStack(spacing: 5) {
+                                    ExplorerTopBar(contentViewModel: viewModel)
+                                        .environmentObject(globalSettingsViewModel)
+                                    FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
+                                        FilterResults(viewModel: viewModel)
+                                    }, content: {
+                                        WallpaperExplorer(
+                                            contentViewModel: viewModel,
+                                            wallpaperViewModel: wallpaperViewModel,
+                                            isActive: navigationModel.selection == .installed
+                                        )
+                                        .onDrop(of: [.fileURL], delegate: viewModel)
+                                        .contextMenu {
+                                            ExplorerGlobalMenu(
+                                                contentViewModel: viewModel,
+                                                wallpaperViewModel: wallpaperViewModel
+                                            )
+                                        }
+                                    })
+                                    ExplorerBottomBar(contentViewModel: viewModel,
+                                                      wallpaperViewModel: wallpaperViewModel)
+                                }
+                                .sectionVisibility(navigationModel.selection == .installed)
+                            }
+
+                            if loadedSections.contains(.discover) {
+                                DiscoverView(
                                     workshopViewModel: workshopViewModel,
                                     viewModel: viewModel,
-                                    wallpaperViewModel: wallpaperViewModel
+                                    wallpaperViewModel: wallpaperViewModel,
+                                    navigationModel: navigationModel,
+                                    isActive: navigationModel.selection == .discover
                                 )
-                            })
-                        default:
-                            EmptyView()
+                                .sectionVisibility(navigationModel.selection == .discover)
+                            }
+
+                            if loadedSections.contains(.workshop) {
+                                FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
+                                    WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
+                                }, content: {
+                                    WorkshopView(
+                                        workshopViewModel: workshopViewModel,
+                                        viewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        isActive: navigationModel.selection == .workshop
+                                    )
+                                })
+                                .sectionVisibility(navigationModel.selection == .workshop)
+                            }
                         }
-                        if viewModel.topTabBarSelection == 0 {
-                            ExplorerBottomBar(contentViewModel: viewModel,
-                                              wallpaperViewModel: wallpaperViewModel)
-                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .padding()
 
-                    if workshopViewModel.showCreatorProfile,
-                       let creator = workshopViewModel.selectedCreator {
-                        CreatorProfileView(
-                            creator: creator,
-                            workshopViewModel: workshopViewModel
-                        )
-                        .frame(maxWidth: 420)
-                    } else if viewModel.topTabBarSelection == 0 {
+                    ZStack {
                         WallpaperPreview(contentViewModel: viewModel,
                                         wallpaperViewModel: wallpaperViewModel,
-                                        workshopViewModel: workshopViewModel)
+                                        workshopViewModel: workshopViewModel,
+                                        isActive: navigationModel.selection == .installed || workshopViewModel.showCustomization)
                             .frame(maxWidth: 320)
-                    } else if workshopViewModel.showCustomization {
-                        WallpaperPreview(contentViewModel: viewModel,
-                                        wallpaperViewModel: wallpaperViewModel,
-                                        workshopViewModel: workshopViewModel)
-                            .frame(maxWidth: 320)
-                    } else {
+                            .sectionVisibility(
+                                workshopViewModel.showCreatorProfile == false &&
+                                    (navigationModel.selection == .installed || workshopViewModel.showCustomization)
+                            )
+
                         WorkshopItemDetail(
                             item: workshopViewModel.selectedItem,
-                            workshopViewModel: workshopViewModel
+                            workshopViewModel: workshopViewModel,
+                            isActive: navigationModel.selection != .installed && workshopViewModel.showCustomization == false
                         )
-                        .frame(maxWidth: 320)
+                            .frame(maxWidth: 320)
+                            .sectionVisibility(
+                                workshopViewModel.showCreatorProfile == false &&
+                                    navigationModel.selection != .installed &&
+                                    workshopViewModel.showCustomization == false
+                            )
+
+                        if workshopViewModel.showCreatorProfile,
+                           let creator = workshopViewModel.selectedCreator {
+                            CreatorProfileView(
+                                creator: creator,
+                                workshopViewModel: workshopViewModel
+                            )
+                            .frame(maxWidth: 420)
+                        }
                     }
+                    .frame(maxWidth: workshopViewModel.showCreatorProfile ? 420 : 320)
                 }
             }
             .opacity(viewModel.isStaging ? 1 : 0)
@@ -231,12 +278,34 @@ struct ContentView: View {
         }
         .environment(\.locale, localization.locale)
         .frame(minWidth: 1000, minHeight: 640)
+        .onChange(of: navigationModel.selection) { _, section in
+            loadedSections.insert(section)
+        }
+        .task {
+            for section in MainSection.allCases where !loadedSections.contains(section) {
+                await Task.yield()
+                loadedSections.insert(section)
+            }
+        }
+    }
+}
+
+private extension View {
+    func sectionVisibility(_ visible: Bool) -> some View {
+        opacity(visible ? 1 : 0)
+            .allowsHitTesting(visible)
+            .accessibilityHidden(!visible)
+            .zIndex(visible ? 1 : 0)
     }
 }
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView(viewModel: .init(isStaging: true), wallpaperViewModel: .init())
+        ContentView(
+            viewModel: .init(isStaging: true),
+            wallpaperViewModel: .init(),
+            navigationModel: MainNavigationModel()
+        )
             .environmentObject(GlobalSettingsViewModel())
     }
 }

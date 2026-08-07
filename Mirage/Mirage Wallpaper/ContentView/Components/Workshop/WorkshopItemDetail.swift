@@ -12,8 +12,7 @@ struct WorkshopItemDetail: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
     var isEmbedded: Bool = false
     var embeddedCreatorSteamId: String?
-
-    @State private var isLoaded = false
+    var isActive: Bool = true
 
     var body: some View {
         VStack {
@@ -31,52 +30,23 @@ struct WorkshopItemDetail: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onChange(of: item?.id) { _ in
-            isLoaded = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isLoaded = true
-                }
-            }
-        }
-        .onAppear {
-            isLoaded = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isLoaded = true
-                }
-            }
-        }
     }
 
     @ViewBuilder
     func detailContent(for item: WorkshopItem) -> some View {
         ScrollView {
-            VStack(spacing: 16) {
-                if !isLoaded {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .scaleEffect(1.2)
-                        Text("正在加载壁纸详情...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            LazyVStack(spacing: 16) {
+                WorkshopImage(
+                    url: item.previewImageURL,
+                    contentMode: .fill,
+                    isAnimating: isActive
+                )
                     .frame(width: 280, height: 280)
-                    .background(Color.secondary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                } else {
-                    WorkshopImage(
-                        url: item.previewImageURL,
-                        contentMode: .fill,
-                        isAnimating: true
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.white.opacity(0.7), lineWidth: 3)
                     )
-                        .frame(width: 280, height: 280)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(Color.white.opacity(0.7), lineWidth: 3)
-                        )
-                }
 
                 Text(item.title)
                     .font(.headline)
@@ -662,5 +632,3 @@ struct CreatorProfileView: View {
         }
     }
 }
-
-

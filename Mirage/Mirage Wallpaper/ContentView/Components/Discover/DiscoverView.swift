@@ -11,6 +11,8 @@ struct DiscoverView: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let navigationModel: MainNavigationModel
+    let isActive: Bool
 
     @State private var showAPIKeyReminder = false
 
@@ -69,7 +71,7 @@ struct DiscoverView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.top, 100)
                 } else {
-                    VStack(spacing: 24) {
+                    LazyVStack(spacing: 24) {
                         ForEach(WorkshopDiscoverCategory.allCases) { category in
                             if let items = workshopViewModel.discoverItems[category], !items.isEmpty {
                                 DiscoverSectionView(
@@ -80,6 +82,7 @@ struct DiscoverView: View {
                                     workshopViewModel: workshopViewModel,
                                     contentViewModel: viewModel,
                                     wallpaperViewModel: wallpaperViewModel,
+                                    isActive: isActive,
                                     onSeeAll: { showAll(category) }
                                 )
                             }
@@ -101,7 +104,6 @@ struct DiscoverView: View {
             if workshopViewModel.discoverItems.isEmpty {
                 workshopViewModel.loadDiscover()
             }
-            workshopViewModel.refreshInstalledState()
         }
         .alert("建议设置专属 Steam API Key", isPresented: $showAPIKeyReminder) {
             Button("立即设置") { AppDelegate.shared.openSteamAPIKeySettings() }
@@ -123,7 +125,7 @@ struct DiscoverView: View {
                 trendPeriod: workshopViewModel.discoverTrendPeriod
             )
         }
-        viewModel.topTabBarSelection = 2
+        navigationModel.selection = .workshop
     }
 }
 

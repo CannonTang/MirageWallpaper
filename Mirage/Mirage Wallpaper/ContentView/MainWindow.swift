@@ -32,7 +32,8 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.isMovableByWindowBackground = false
         let hostingView = NSHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
-                wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
+                wallpaperViewModel: AppDelegate.shared.wallpaperViewModel,
+                navigationModel: AppDelegate.shared.navigationModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
         hostingView.sizingOptions = []

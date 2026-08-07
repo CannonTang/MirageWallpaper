@@ -212,7 +212,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
             workshopViewModel.selectedItem = item
             workshopViewModel.showCustomization = false
             workshopViewModel.showCreatorProfile = false
-            viewModel.topTabBarSelection = 2
+            AppDelegate.shared.navigationModel.selection = .workshop
         }
     }
 
