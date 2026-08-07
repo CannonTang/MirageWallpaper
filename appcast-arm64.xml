@@ -6,6 +6,80 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.0.3</title>
+            <pubDate>Fri, 07 Aug 2026 13:25:58 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>269</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[# Mirage 1.0.3
+
+本版本集中改进壁纸播放控制、创意工坊筛选和 macOS 系统集成，并修复多显示器、屏保和网页壁纸播放的稳定性问题。
+
+## 新增与改进
+
+- 已安装壁纸新增“最近添加”排序，方便快速找到刚下载或导入的壁纸 (#16)。
+- 创意工坊新增“最热门（本月）”和“最热门（今年）”趋势范围，并补充分辨率筛选和文本相关性排序 (#10)。
+- 设置新增隐藏菜单栏图标选项 (#15)。
+- 设置新增 HDR 视频选项，在支持 EDR 的显示器上启用 HDR 视频输出。
+- 设置新增“窗口覆盖屏幕超过阈值时暂停”，并改进焦点、全屏、音频、显示器休眠和电池状态下的播放策略。
+- 新增开发模式实时日志，自动对 API Key、Token、密码等敏感信息脱敏；登录项在临时签名环境下提供 LaunchAgent 回退，并同步系统状态和错误提示。
+
+## 修复
+
+- 修复网页壁纸在暂停、恢复、切换和激活过程中的音频状态不同步问题。
+- 修复视频壁纸及屏保视频的解码和播放流程；转换缓存现在会校验源文件时间，避免使用过期缓存，并保留原始视频文件。
+- 修复场景和网页壁纸快照为空或被重复回放时的异常，减少不必要的渲染器资源重建。
+- 修复桌面覆盖刷新、多显示器休眠状态和全屏窗口检测，提升自动暂停和恢复的准确性。
+- 修复已安装、发现和创意工坊页面之间切换时的视图状态、卡片交互和预览状态稳定性。
+- 改进 SteamCMD 下载结果校验及错误提示，并补充相关本地化文本。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 系统要求：macOS 14.2 或更高版本
+
+当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
+
+---
+
+
+# Mirage 1.0.3
+
+This release improves wallpaper playback controls, Workshop discovery, and macOS integration, while stabilizing multi-display, screen saver, and web wallpaper playback.
+
+## Improvements
+
+- Added a **Recently Added** sort order for installed wallpapers, making newly downloaded or imported wallpapers easier to find (#16).
+- Added **Most Popular (Month)** and **Most Popular (Year)** Workshop trend periods, plus resolution filters and text-relevance sorting (#10).
+- Added a setting to hide the menu bar icon (#15).
+- Added an HDR video setting that enables HDR output on EDR-capable displays.
+- Added **Pause when windows cover more than the threshold**, and improved playback policy handling for focus, fullscreen windows, audio, display sleep, and battery state.
+- Added live Developer Mode logs with automatic redaction of API keys, tokens, passwords, and similar sensitive values. Login items now fall back to a LaunchAgent for ad-hoc builds and keep system status and error messages synchronized.
+
+## Fixes
+
+- Fixed web wallpaper audio state getting out of sync while pausing, resuming, switching, or activating wallpapers.
+- Fixed video wallpaper and screen saver decoding/playback; conversion caches now validate the source modification time, avoid stale cached media, and preserve the original video.
+- Fixed blank or redundantly replayed Scene and Web wallpaper snapshots, reducing unnecessary renderer resource rebuilds.
+- Fixed desktop-override refresh, multi-display sleep state, and fullscreen-window detection for more accurate automatic pause and resume behavior.
+- Fixed view state, card interaction, and preview stability when switching between Installed, Discover, and Workshop pages.
+- Improved SteamCMD download-result validation and error messages, with additional localization coverage.
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- Requires macOS 14.2 or later
+
+Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.3/Mirage-269-8893b25b3fb4-macOS-arm64.zip" length="193993493" type="application/octet-stream" sparkle:edSignature="Id/lYHwI6YAsKetjF9sJ/Sg583dirA2ttpwj3w0ZlhTSU9qfVwLWhWqaF+drIe5lU5bRnDPmROnCH9Rxxm/3AA=="/>
+        </item>
+        <item>
             <title>1.0.2</title>
             <pubDate>Fri, 07 Aug 2026 10:51:17 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -22,31 +96,6 @@ fix(app): restore web audio and stabilize wallpaper snapshots
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-265-17de2a62b0bf-macOS-arm64.zip" length="193871858" type="application/octet-stream" sparkle:edSignature="Gtt5Sp8Hvx+4PEfykxKYsoUhksIi2FQQNQPsZETqmi8e1DEgQ5SnEm21MzLv5E34Y+kW89Qg7AJT586vbE6zDQ=="/>
-        </item>
-        <item>
-            <title>1.0.2</title>
-            <pubDate>Fri, 07 Aug 2026 09:44:05 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>264</sparkle:version>
-            <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: a890093980a3d5ffbb1f66126abc85f07210c8ba
-Channel: beta
-
-fix(app): resolve playback and system integration issues
-
-Add menu bar visibility, developer logging, login item status sync, and localized settings.
-
-Expand Workshop sorting with documented query types and verified trend periods.
-
-Fix screen saver video playback, desktop override refresh, display sleep, and fullscreen detection.
-
-Restore web wallpaper audio with an authoritative playback state handoff.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-264-a890093980a3-macOS-arm64.zip" length="193869181" type="application/octet-stream" sparkle:edSignature="ZsW08mU0Tw+K7uWi1ywnada5sinb1QXB1tGelktWjfG8Ya4ReHwaNnDN558EGNF6oa10CYjSN+whHqhXUiIqCQ=="/>
         </item>
         <item>
             <title>1.0.2</title>
@@ -81,24 +130,6 @@ chore(release): bump version to 1.0.1
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.1/Mirage-260-f49690e035d0-macOS-arm64.zip" length="193815642" type="application/octet-stream" sparkle:edSignature="yi44dfg8hycqEaSVzei1GKVgeHciAkoQ+vijq/YXfoqPwKKU9mk/RiROd9AWqRb585xBuSBHtluvm9SmgWXMCA=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Thu, 06 Aug 2026 14:09:08 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>259</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: ad386615ff6a5acce6824b178898897cb0c7e396
-Channel: beta
-
-fix(app): stabilize wallpaper preview and activation
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-259-ad386615ff6a-macOS-arm64.zip" length="193815649" type="application/octet-stream" sparkle:edSignature="/nAH6Vsz2v6tfVRbF+mUzsxpRgVRM5S+SOWkG6A7ZGA4edMbeboRiU6aQjJXGW0jYj5jfLMEddv/4O492Fe0AA=="/>
         </item>
         <item>
             <title>1.0.0</title>
@@ -137,6 +168,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 4xlVSB7yWFARqk3Jb1xim8U4mDk9DpWoBhg3I+R9NhoNuWe5UMVDknmmiMOU2ddqoJBgc0Fena0fav09NHWsAw==
-length: 7789
+edSignature: LHvIbY1Hx2fweK01jibUpez3s+BDauPV6eAl+4ruzWoI+3b1WMnNZVFUXQcndJEwNjM4fnw0m4jmwuJwS9OvDA==
+length: 10189
 -->
