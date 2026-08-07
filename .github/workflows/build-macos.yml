@@ -264,7 +264,11 @@ jobs:
             archive_name="$(basename "$archive" .zip)"
             release_notes_source=".github/release-notes/${RELEASE_TAG}.md"
             if [[ "$RELEASE_CHANNEL" == stable && -f "$release_notes_source" ]]; then
-              cp "$release_notes_source" "$appcast_dir/${archive_name}.txt"
+              sed \
+                -e '/^<details>$/d' \
+                -e '/^<summary>.*<\/summary>$/d' \
+                -e '/^<\/details>$/d' \
+                "$release_notes_source" > "$appcast_dir/${archive_name}.txt"
             else
               {
                 echo "Commit: ${GITHUB_SHA}"
