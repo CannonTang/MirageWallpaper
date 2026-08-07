@@ -18,10 +18,31 @@ struct PerformancePage: SettingsPage {
     var body: some View {
         Form {
             Section {
-                Picker("其他应用获得焦点时", selection: $viewModel.settings.otherApplicationFocused) {
+                Picker("其他应用获得焦点时", selection: Binding(
+                    get: { viewModel.settings.otherApplicationFocused },
+                    set: { viewModel.setFocusedPlaybackRule($0) }
+                )) {
                     Text("保持运行").tag(GSPlayback.keepRunning)
                     Text("静音").tag(GSPlayback.mute)
                     Text("暂停").tag(GSPlayback.pause)
+                }
+                Toggle("窗口覆盖屏幕超过阈值时暂停", isOn: Binding(
+                    get: { viewModel.settings.shouldPauseWhenWindowCoverageExceeds },
+                    set: { viewModel.setWindowCoveragePauseEnabled($0) }
+                ))
+                if viewModel.settings.shouldPauseWhenWindowCoverageExceeds {
+                    HStack {
+                        Text("覆盖阈值")
+                        Spacer()
+                        MirageSlider(value: Binding(
+                            get: { viewModel.settings.normalizedWindowCoverageThreshold },
+                            set: { viewModel.settings.windowCoverageThreshold = $0 }
+                        ), in: 1...100, step: 1)
+                        .frame(width: 150)
+                        Text("\(Int(viewModel.settings.normalizedWindowCoverageThreshold))%")
+                            .frame(width: 44)
+                            .monospacedDigit()
+                    }
                 }
                 Picker("其他应用全屏时", selection: $viewModel.settings.otherApplicationFullscreen) {
                     Text("保持运行").tag(GSPlayback.keepRunning)
@@ -117,6 +138,18 @@ struct PerformancePage: SettingsPage {
             } footer: {
                 Text("抗锯齿、渲染分辨率和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("启用 HDR 视频", isOn: Binding(
+                    get: { viewModel.settings.shouldEnableHDRVideo },
+                    set: {
+                        viewModel.settings.enableHDRVideo = $0
+                        AppDelegate.shared.wallpaperViewModel.reapplyVideoDynamicRange()
+                    }
+                ))
+            } header: {
+                Label("视频", systemImage: "play.rectangle.fill")
             }
         }
         .formStyle(.grouped)

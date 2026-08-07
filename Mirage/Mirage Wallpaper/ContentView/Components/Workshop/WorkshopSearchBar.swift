@@ -50,16 +50,17 @@ struct WorkshopSearchBar: View {
                     sortOption(.lastUpdated)
                     sortOption(.recentlyReleased)
                     sortOption(.mostSubscribed)
+                    if !workshopViewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Divider()
+                        sortOption(.textRelevance)
+                    }
                 } label: {
-                    Text(workshopViewModel.isTextRelevanceSearch
-                        ? WorkshopSortOrder.textRelevance.label
-                        : workshopViewModel.sortOrder.workshopLabel(
-                            period: workshopViewModel.trendPeriod
-                        ))
+                    Text(workshopViewModel.sortOrder.workshopLabel(
+                        period: workshopViewModel.trendPeriod
+                    ))
                     .lineLimit(1)
                 }
                 .fixedSize()
-                .disabled(workshopViewModel.isTextRelevanceSearch)
             }
         }
     }

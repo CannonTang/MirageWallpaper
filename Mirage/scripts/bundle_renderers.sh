@@ -3,6 +3,20 @@ set -euo pipefail
 
 APP="${1:?用法: bundle_renderers.sh <Mirage.app> [SimpleRenderer根]}"
 ROOT="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SIGN_IDENTITY="${3:--}"
+
+SIGN_ARGS=(--timestamp=none)
+if [ "$SIGN_IDENTITY" != "-" ]; then
+    SIGN_ARGS=(--timestamp --options runtime)
+fi
+
+sign_item() {
+    codesign --force "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$1"
+}
+
+sign_bundle() {
+    codesign --force --deep "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$1"
+}
 
 # 共享的 CMake preset 命名约定。
 source "$ROOT/scripts/preset.sh"
@@ -33,6 +47,13 @@ done
 [ -f "$MOLTENVK" ] || { echo "[bundle] 缺少 MoltenVK: $MOLTENVK" >&2; exit 1; }
 
 mkdir -p "$FRAMEWORKS" "$RENDERERS" "$VK_ICD_DIR"
+
+ROSETTA_APP="$RESOURCES/RosettaTrigger.app"
+mkdir -p "$ROSETTA_APP/Contents/MacOS"
+cp -f "$ROOT/Mirage/RosettaTrigger/Info.plist" "$ROSETTA_APP/Contents/Info.plist"
+xcrun clang -arch x86_64 -mmacosx-version-min=14.2 \
+    "$ROOT/Mirage/RosettaTrigger/main.c" \
+    -o "$ROSETTA_APP/Contents/MacOS/RosettaTrigger"
 
 cp -f "$SCENE_BIN" "$RENDERERS/SceneWallpaper"
 cp -f "$WEB_BIN"   "$RENDERERS/WebWallpaper"
@@ -208,18 +229,19 @@ fi
 echo "[bundle] 重新签名..."
 for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
-    codesign --force --sign - --timestamp=none "$lib" 2>/dev/null || true
+    sign_item "$lib"
 done
 for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
-    codesign --force --sign - --timestamp=none "$bin" 2>/dev/null || true
+    sign_item "$bin"
 done
 if [ -d "${SAVER:-}" ]; then
     for lib in "$SAVER_FRAMEWORKS"/*.dylib; do
         [ -f "$lib" ] || continue
-        codesign --force --sign - --timestamp=none "$lib" 2>/dev/null || true
+        sign_item "$lib"
     done
-    codesign --force --deep --sign - --timestamp=none "$SAVER" 2>/dev/null || true
+    sign_bundle "$SAVER"
 fi
-codesign --force --deep --sign - "$APP" 2>/dev/null || true
+sign_bundle "$ROSETTA_APP"
+sign_bundle "$APP"
 
 echo "[bundle] 完成"

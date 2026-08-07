@@ -680,6 +680,7 @@ class WallpaperViewModel: ObservableObject {
             : (throttledFps < globalFps ? .throttle : .run)
         opts.powerFps = throttledFps
         opts.loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
+        opts.enableHDRVideo = settings.shouldEnableHDRVideo
         switch settings.textureResolution {
         case .highQuality: opts.renderScale = 1.0
         case .automatic: opts.renderScale = 0.75
@@ -1118,6 +1119,13 @@ class WallpaperViewModel: ObservableObject {
 
     func reapplyFrameRate() {
         applyPlaybackPolicy(currentPlaybackPolicy, force: true)
+    }
+
+    func reapplyVideoDynamicRange() {
+        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
+        for state in displayStates.values where state.wallpaper.kind == .video {
+            persistRuntime(state.runtime, for: state.wallpaper)
+        }
     }
 
     private func commitPendingAssignmentsForStoppedPolicy() {

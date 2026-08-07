@@ -14,6 +14,10 @@ GIT_COMMIT="${MIRAGE_GIT_COMMIT:-$(git -C "$ROOT" rev-parse HEAD)}"
 BUILD_NUMBER="${MIRAGE_BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD)}"
 LOCAL_SECRET="$ROOT/.secrets/steam_web_api_key"
 TEMP_XCCONFIG=""
+SIGN_IDENTITY="${MIRAGE_SIGN_IDENTITY:--}"
+DEVELOPMENT_TEAM="${MIRAGE_DEVELOPMENT_TEAM:-}"
+NOTARY_PROFILE="${MIRAGE_NOTARY_PROFILE:-}"
+NOTARY_TEMP_DIR=""
 
 case "$TARGET_ARCH" in
     arm64|x86_64) ;;
@@ -39,6 +43,12 @@ chmod 600 "$TEMP_XCCONFIG"
 printf 'CURRENT_PROJECT_VERSION = %s\n' "$BUILD_NUMBER" >> "$TEMP_XCCONFIG"
 printf 'MIRAGE_GIT_COMMIT = %s\n' "$GIT_COMMIT" >> "$TEMP_XCCONFIG"
 printf 'MIRAGE_UPDATE_ARCH = %s\n' "$TARGET_ARCH" >> "$TEMP_XCCONFIG"
+if [ "$SIGN_IDENTITY" != "-" ]; then
+    [ -n "$DEVELOPMENT_TEAM" ] || { echo "[build] 正式签名需要 MIRAGE_DEVELOPMENT_TEAM" >&2; exit 1; }
+    printf 'DEVELOPMENT_TEAM = %s\n' "$DEVELOPMENT_TEAM" >> "$TEMP_XCCONFIG"
+    printf 'CODE_SIGN_IDENTITY = %s\n' "$SIGN_IDENTITY" >> "$TEMP_XCCONFIG"
+    printf 'ENABLE_HARDENED_RUNTIME = YES\n' >> "$TEMP_XCCONFIG"
+fi
 XCCONFIG_ARGS=(-xcconfig "$TEMP_XCCONFIG")
 if [ -n "$STEAM_API_KEY" ]; then
     [[ "$STEAM_API_KEY" =~ ^[A-Fa-f0-9]{32}$ ]] || {
@@ -52,27 +62,41 @@ fi
 
 cleanup() {
     [ -z "$TEMP_XCCONFIG" ] || rm -f "$TEMP_XCCONFIG"
+    [ -z "$NOTARY_TEMP_DIR" ] || rm -rf "$NOTARY_TEMP_DIR"
 }
 trap cleanup EXIT
+
+CODE_SIGNING_REQUIRED=NO
+if [ "$SIGN_IDENTITY" != "-" ]; then
+    CODE_SIGNING_REQUIRED=YES
+fi
 
 echo "[build] 编译 ($CONFIG)..."
 xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_DIR/DD" \
     ARCHS="$TARGET_ARCH" ONLY_ACTIVE_ARCH=YES \
-    CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+    CODE_SIGN_IDENTITY="$SIGN_IDENTITY" CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" CODE_SIGNING_ALLOWED=YES \
     build | tail -3
 
 APP="$BUILD_DIR/DD/Build/Products/$CONFIG/Mirage Wallpaper.app"
 [ -d "$APP" ] || { echo "[build] 未找到产物: $APP" >&2; exit 1; }
 
 echo "[build] 内嵌渲染器与依赖..."
-bash "$HERE/bundle_renderers.sh" "$APP" "$ROOT"
+bash "$HERE/bundle_renderers.sh" "$APP" "$ROOT" "$SIGN_IDENTITY"
 
 OUT="$PROJ_DIR/dist"
 mkdir -p "$OUT"
 rm -rf "$OUT/Mirage.app"
 cp -R "$APP" "$OUT/Mirage.app"
-codesign --force --deep --sign - "$OUT/Mirage.app" 2>/dev/null || true
+codesign --verify --deep --strict --verbose=2 "$OUT/Mirage.app"
+
+if [ "$SIGN_IDENTITY" != "-" ] && [ -n "$NOTARY_PROFILE" ]; then
+    NOTARY_TEMP_DIR="$(mktemp -d -t mirage-notary)"
+    ditto -c -k --keepParent "$OUT/Mirage.app" "$NOTARY_TEMP_DIR/Mirage.zip"
+    xcrun notarytool submit "$NOTARY_TEMP_DIR/Mirage.zip" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$OUT/Mirage.app"
+    xcrun stapler validate "$OUT/Mirage.app"
+fi
 
 echo "[build] 完成  产物: $OUT/Mirage.app"

@@ -17,12 +17,14 @@ private struct MirageSaverConfiguration {
     let renderDirectory: URL
     let entryURL: URL
     let playbackEntryURL: URL
+    let fallbackEntryURL: URL?
     let entryRelativePath: String
     let overlays: [URL]
     let properties: [String: Any]
     let rawProperties: [String: Any]
     let fps: Int
     let fillMode: String
+    let enableHDRVideo: Bool
     let language: String
 
     static func load() -> Self? {
@@ -44,20 +46,21 @@ private struct MirageSaverConfiguration {
         let entryURL = URL(fileURLWithPath: entryPath)
         guard FileManager.default.fileExists(atPath: entryURL.path) else { return nil }
         let candidate = (object["playableEntryPath"] as? String).map(URL.init(fileURLWithPath:))
-        let playbackEntryURL: URL
+        let fallbackEntryURL: URL?
         if kind == "video", let candidate,
            FileManager.default.fileExists(atPath: candidate.path),
            Self.isCurrentCache(candidate, for: entryURL) {
-            playbackEntryURL = candidate
+            fallbackEntryURL = candidate
         } else {
-            playbackEntryURL = entryURL
+            fallbackEntryURL = nil
         }
         return Self(
             title: object["title"] as? String ?? "Mirage",
             kind: kind,
             renderDirectory: renderDirectory,
             entryURL: entryURL,
-            playbackEntryURL: playbackEntryURL,
+            playbackEntryURL: entryURL,
+            fallbackEntryURL: fallbackEntryURL,
             entryRelativePath: entryURL.path.hasPrefix(renderDirectory.path + "/")
                 ? String(entryURL.path.dropFirst(renderDirectory.path.count + 1))
                 : entryURL.lastPathComponent,
@@ -66,6 +69,7 @@ private struct MirageSaverConfiguration {
             rawProperties: object["rawProperties"] as? [String: Any] ?? [:],
             fps: max(10, min(object["fps"] as? Int ?? 30, 60)),
             fillMode: object["fillMode"] as? String ?? "cover",
+            enableHDRVideo: object["enableHDRVideo"] as? Bool ?? false,
             language: object["language"] as? String ?? Locale.preferredLanguages.first ?? "en"
         )
     }
@@ -356,25 +360,33 @@ final class MirageScreenSaverView: ScreenSaverView {
         videoLoadTask?.cancel()
         let loadID = UUID()
         videoLoadID = loadID
-        let asset = AVURLAsset(url: configuration.playbackEntryURL)
         videoLoadTask = Task { [weak self] in
-            guard let playable = try? await asset.load(.isPlayable), playable,
-                  let tracks = try? await asset.loadTracks(withMediaType: .video),
-                  !tracks.isEmpty else {
+            let candidates = [configuration.playbackEntryURL, configuration.fallbackEntryURL]
+                .compactMap { $0 }
+            var playableAsset: AVURLAsset?
+            for url in candidates {
+                let asset = AVURLAsset(url: url)
+                guard let playable = try? await asset.load(.isPlayable), playable,
+                      let tracks = try? await asset.loadTracks(withMediaType: .video),
+                      !tracks.isEmpty else { continue }
+                var decodable = true
+                for track in tracks {
+                    guard let value = try? await track.load(.isDecodable), value else {
+                        decodable = false
+                        break
+                    }
+                }
+                if decodable {
+                    playableAsset = asset
+                    break
+                }
+            }
+            guard let asset = playableAsset else {
                 await MainActor.run {
                     guard let self, self.videoLoadID == loadID else { return }
                     self.showMessage(self.localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
                 }
                 return
-            }
-            for track in tracks {
-                guard let decodable = try? await track.load(.isDecodable), decodable else {
-                    await MainActor.run {
-                        guard let self, self.videoLoadID == loadID else { return }
-                        self.showMessage(self.localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
-                    }
-                    return
-                }
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -390,6 +402,7 @@ final class MirageScreenSaverView: ScreenSaverView {
                 case "stretch": playerLayer.videoGravity = .resize
                 default: playerLayer.videoGravity = .resizeAspectFill
                 }
+                self.applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
                 self.layer?.addSublayer(playerLayer)
                 self.player = player
                 self.playerLayer = playerLayer
@@ -411,12 +424,28 @@ final class MirageScreenSaverView: ScreenSaverView {
         rootLayer.contentsScale = window?.backingScaleFactor ?? rootLayer.contentsScale
         playerLayer?.frame = videoPresentationBounds
         playerLayer?.contentsScale = rootLayer.contentsScale
+        if let playerLayer, let configuration {
+            applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
+        }
         webView?.frame = bounds
     }
 
     private var videoPresentationBounds: CGRect {
         guard !isPreview, let screen = window?.screen ?? NSScreen.main else { return bounds }
         return CGRect(origin: .zero, size: screen.frame.size)
+    }
+
+    private func applyVideoDynamicRange(to playerLayer: AVPlayerLayer, enabled: Bool) {
+        let screen = window?.screen ?? NSScreen.main
+        let useHDR = enabled && (screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1) > 1
+        if #available(macOS 26.0, *) {
+            let range: CALayer.DynamicRange = useHDR ? .constrainedHigh : .standard
+            layer?.preferredDynamicRange = range
+            playerLayer.preferredDynamicRange = range
+        } else {
+            layer?.wantsExtendedDynamicRangeContent = useHDR
+            playerLayer.wantsExtendedDynamicRangeContent = useHDR
+        }
     }
 
     private func loadWeb(_ configuration: MirageSaverConfiguration) {

@@ -6,6 +6,7 @@
 
 import Foundation
 import Darwin
+import AppKit
 
 /// Process state is guarded by `processLock`; all published state is written on
 /// the main queue. SteamCMD itself must run on background queues.
@@ -91,7 +92,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         if !savedUsername.isEmpty,
            fm.fileExists(atPath: isolatedSteamDataDirectory.appending(path: "config/config.vdf").path) {
             isLoggedIn = true
-            authenticationState = .available("已保存会话，下载时自动验证")
+            authenticationState = .available(L("已保存会话，下载时自动验证"))
             hasRefreshedSession = true
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 self?.refreshSessionIfNeeded()
@@ -218,12 +219,6 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             }
         }
 
-        do {
-            try ensureSteamCMDCanRun()
-        } catch SteamCMDError.rosettaRequired {
-            return markRosettaRequired()
-        } catch {
-        }
         return .notFound
     }
 
@@ -281,7 +276,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         processLock.unlock()
 
         guard canStart else {
-            onProgress(.failed("SteamCMD 正在安装，请等待当前任务结束"))
+            onProgress(.failed(L("SteamCMD 正在安装，请等待当前任务结束")))
             return
         }
 
@@ -299,7 +294,6 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async { onProgress(.downloading(0)) }
 
             do {
-                try self.ensureSteamCMDCanRun()
                 try self.throwIfInstallationCancelled()
                 try self.ensureSufficientDiskSpace(minimumBytes: 150 * 1024 * 1024)
                 let archive = try self.downloadBootstrap { progress in
@@ -316,7 +310,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 let execPath = self.steamCMDDir.appending(path: "steamcmd.sh")
                 _ = try? self.runShellSync("/bin/chmod", arguments: ["+x", execPath.path])
                 guard self.isUsableLauncher(execPath) else {
-                    throw SteamCMDError.installFailed("解压完成后未找到可执行的 steamcmd.sh")
+                    throw SteamCMDError.installFailed(L("解压完成后未找到可执行的 steamcmd.sh"))
                 }
                 try self.ensureSteamCMDCanRun(at: self.steamCMDDir.appending(path: "steamcmd"))
 
@@ -333,7 +327,9 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 try self.throwIfInstallationCancelled()
                 guard health.status == 0, !health.timedOut else {
                     throw SteamCMDError.installFailed(
-                        health.timedOut ? "SteamCMD 首次初始化超时，请检查网络后重试" : "SteamCMD 首次初始化失败 (exit \(health.status))"
+                        health.timedOut
+                            ? L("SteamCMD 首次初始化超时，请检查网络后重试")
+                            : L("SteamCMD 首次初始化失败 (exit %@)", String(health.status))
                     )
                 }
 
@@ -347,7 +343,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 DispatchQueue.main.async { onProgress(.rosettaRequired) }
             } catch is CancellationError {
                 self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "SteamCMD 安装已取消")
-                DispatchQueue.main.async { onProgress(.failed("SteamCMD 安装已取消")) }
+                DispatchQueue.main.async { onProgress(.failed(L("SteamCMD 安装已取消"))) }
             } catch {
                 self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "安装失败：\(error.localizedDescription)")
                 DispatchQueue.main.async { onProgress(.failed(error.localizedDescription)) }
@@ -374,7 +370,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func ensureSufficientDiskSpace(minimumBytes: Int64) throws {
         let values = try steamCMDDir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         if let available = values.volumeAvailableCapacityForImportantUsage, available < minimumBytes {
-            throw SteamCMDError.installFailed("可用磁盘空间不足，请至少预留 150 MB 后重试")
+            throw SteamCMDError.installFailed(L("可用磁盘空间不足，请至少预留 150 MB 后重试"))
         }
     }
 
@@ -401,10 +397,10 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         guard let response = delegate.response as? HTTPURLResponse,
               (200...299).contains(response.statusCode),
               let tempURL = delegate.downloadedURL else {
-            throw SteamCMDError.downloadFailed("服务器未返回有效的 SteamCMD 安装包")
+            throw SteamCMDError.downloadFailed(L("服务器未返回有效的 SteamCMD 安装包"))
         }
         let size = (try? tempURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard size > 0 else { throw SteamCMDError.downloadFailed("SteamCMD 安装包为空") }
+        guard size > 0 else { throw SteamCMDError.downloadFailed(L("SteamCMD 安装包为空")) }
         self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "下载完成（\(size) bytes）")
         return archive
     }
@@ -412,20 +408,20 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func validateArchive(at archive: URL) throws {
         let listing = try runShellSync("/usr/bin/tar", arguments: ["-tzf", archive.path])
         guard listing.status == 0 else {
-            throw SteamCMDError.installFailed("SteamCMD 安装包无法校验：\(listing.output.prefix(200))")
+            throw SteamCMDError.installFailed(L("SteamCMD 安装包无法校验：%@", String(listing.output.prefix(200))))
         }
         let paths = listing.output.split(separator: "\n").map(String.init)
         guard paths.contains(where: { $0 == "steamcmd" || $0.hasSuffix("/steamcmd") }),
               paths.contains(where: { $0 == "steamcmd.sh" || $0.hasSuffix("/steamcmd.sh") }),
               !paths.contains(where: { $0.hasPrefix("/") || $0.split(separator: "/").contains("..") }) else {
-            throw SteamCMDError.installFailed("SteamCMD 安装包内容异常")
+            throw SteamCMDError.installFailed(L("SteamCMD 安装包内容异常"))
         }
     }
 
     private func extractArchive(at archive: URL) throws {
         let result = try runShellSync("/usr/bin/tar", arguments: ["-xzf", archive.path, "-C", steamCMDDir.path])
         guard result.status == 0 else {
-            throw SteamCMDError.installFailed("解压 SteamCMD 失败：\(result.output.prefix(200))")
+            throw SteamCMDError.installFailed(L("解压 SteamCMD 失败：%@", String(result.output.prefix(200))))
         }
     }
 
@@ -442,6 +438,47 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         var arm64: Int32 = 0
         var size = MemoryLayout<Int32>.size
         return sysctlbyname("hw.optional.arm64", &arm64, &size, nil, 0) == 0 && arm64 == 1
+    }
+
+    func installRosetta(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard isAppleSiliconHardware else {
+            DispatchQueue.main.async { completion(.success(())) }
+            return
+        }
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 28 {
+            DispatchQueue.main.async {
+                completion(.failure(SteamCMDError.installFailed(L("此 macOS 版本不再支持 SteamCMD 所需的 Rosetta。"))))
+            }
+            return
+        }
+        guard let trigger = Bundle.main.url(forResource: "RosettaTrigger", withExtension: "app") else {
+            DispatchQueue.main.async {
+                completion(.failure(SteamCMDError.installFailed(L("Mirage 安装包缺少 Rosetta 安装组件。"))))
+            }
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(at: trigger, configuration: configuration) { _, error in
+            if let error {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let deadline = Date().addingTimeInterval(300)
+                while Date() < deadline {
+                    if let result = try? self.runShellSync("/usr/bin/arch", arguments: ["-x86_64", "/usr/bin/true"]),
+                       result.status == 0 {
+                        DispatchQueue.main.async { completion(.success(())) }
+                        return
+                    }
+                    Thread.sleep(forTimeInterval: 1)
+                }
+                DispatchQueue.main.async {
+                    completion(.failure(SteamCMDError.installFailed(L("Rosetta 安装未完成，请重试。"))))
+                }
+            }
+        }
     }
 
     // MARK: - Session
@@ -464,7 +501,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                onLog: @escaping (String) -> Void,
                onResult: @escaping (SteamLoginState) -> Void) {
         guard let cmdPath = steamCMDPath else {
-            onResult(.failed("SteamCMD 未安装"))
+            onResult(.failed(L("SteamCMD 未安装")))
             return
         }
         do {
@@ -476,7 +513,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         } catch {
         }
         guard beginLoginSession() else {
-            onResult(.failed("SteamCMD 正在执行其他任务，请先等待或取消当前任务"))
+            onResult(.failed(L("SteamCMD 正在执行其他任务，请先等待或取消当前任务")))
             return
         }
 
@@ -490,8 +527,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             var slaveFD: Int32 = 0
             guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else {
                 _ = self.finishLoginSession(process: nil)
-                self.setAuthenticationState(.unavailable("无法创建安全登录终端"))
-                DispatchQueue.main.async { onResult(.failed("无法创建伪终端")) }
+                self.setAuthenticationState(.unavailable(L("无法创建安全登录终端")))
+                DispatchQueue.main.async { onResult(.failed(L("无法创建伪终端"))) }
                 return
             }
             self.disableTerminalEcho(slaveFD: slaveFD)
@@ -499,7 +536,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             guard let cmdPath = self.steamCMDPath else {
                 close(masterFD); close(slaveFD)
                 _ = self.finishLoginSession(process: nil)
-                DispatchQueue.main.async { onResult(.failed("SteamCMD 未安装")) }
+                DispatchQueue.main.async { onResult(.failed(L("SteamCMD 未安装"))) }
                 return
             }
 
@@ -586,19 +623,19 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                     DispatchQueue.main.async {
                         if wasCancelled {
                             self.isLoggedIn = false
-                            self.authenticationState = .needsAction("登录已取消")
-                            onResult(.failed("登录已取消"))
+                            self.authenticationState = .needsAction(L("登录已取消"))
+                            onResult(.failed(L("登录已取消")))
                         } else if timedOut.value {
                             self.isLoggedIn = false
-                            self.authenticationState = .needsAction("登录超时")
-                            onResult(.failed("Steam 登录长时间无响应，请检查网络后重试"))
+                            self.authenticationState = .needsAction(L("登录超时"))
+                            onResult(.failed(L("Steam 登录长时间无响应，请检查网络后重试")))
                         } else if self.containsGuardRequest(output) {
                             self.isLoggedIn = false
-                            self.authenticationState = .needsAction("Steam Guard 验证未完成")
-                            onResult(.failed("Steam Guard 验证未完成或已超时，请重试登录"))
+                            self.authenticationState = .needsAction(L("Steam Guard 验证未完成"))
+                            onResult(.failed(L("Steam Guard 验证未完成或已超时，请重试登录")))
                         } else {
                             self.isLoggedIn = false
-                            self.authenticationState = .needsAction("登录失败，需要重新验证")
+                            self.authenticationState = .needsAction(L("登录失败，需要重新验证"))
                             onResult(.failed(self.loginFailureMessage(output, status: process.terminationStatus)))
                         }
                     }
@@ -607,7 +644,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 close(masterFD)
                 _ = Darwin.close(slaveFD)
                 _ = self.finishLoginSession(process: process)
-                self.setAuthenticationState(.unavailable("SteamCMD 登录运行失败"))
+                self.setAuthenticationState(.unavailable(L("SteamCMD 登录运行失败")))
                 self.record(.authentication, domain: "Steam 登录服务", "登录运行失败：\(error.localizedDescription)")
                 DispatchQueue.main.async { onResult(.failed(error.localizedDescription)) }
             }
@@ -655,7 +692,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         if !busy { workshopSession = nil }
         processLock.unlock()
         guard !busy else {
-            completion(.failure(SteamCMDError.operationFailed("请先等待安装或下载结束后再退出登录")))
+            completion(.failure(SteamCMDError.operationFailed(L("请先等待安装或下载结束后再退出登录"))))
             return
         }
         cancelLogin()
@@ -666,7 +703,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 self.savedUsername = ""
                 self.isLoggedIn = false
-                self.authenticationState = .needsAction("未登录")
+                self.authenticationState = .needsAction(L("未登录"))
                 self.record(.authentication, domain: "Steam 登录服务", "已清除 Mirage 专用 SteamCMD 会话")
                 completion(.success(()))
             }
@@ -696,16 +733,16 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
 
     func downloadItem(workshopId: String, expectedFileSize: Int64 = 0, onProgress: @escaping (DownloadState) -> Void) {
         guard steamCMDPath != nil else {
-            onProgress(.failed("SteamCMD 未安装"))
+            onProgress(.failed(L("SteamCMD 未安装")))
             return
         }
         guard isLoggedIn, !savedUsername.isEmpty else {
-            onProgress(.failed("Steam 会话未验证，请重新登录后再下载"))
+            onProgress(.failed(L("Steam 会话未验证，请重新登录后再下载")))
             return
         }
 
         guard reserveDownloadSlot(workshopId: workshopId) else {
-            onProgress(.failed("SteamCMD 正在执行其他任务，请等待当前任务完成"))
+            onProgress(.failed(L("SteamCMD 正在执行其他任务，请等待当前任务完成")))
             return
         }
         let task = SteamCMDWorkshopTask(
@@ -759,7 +796,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         processLock.unlock()
 
         guard let cmdPath = steamCMDPath else {
-            failWorkshopSessionStart(task: task, message: "SteamCMD 未安装")
+            failWorkshopSessionStart(task: task, message: L("SteamCMD 未安装"))
             return
         }
         do {
@@ -774,7 +811,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         var masterFD: Int32 = 0
         var slaveFD: Int32 = 0
         guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else {
-            failWorkshopSessionStart(task: task, message: "无法创建伪终端")
+            failWorkshopSessionStart(task: task, message: L("无法创建伪终端"))
             return
         }
 
@@ -838,7 +875,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         let lower = line.lowercased()
 
         if lower.contains("cached credentials not found") || lower.contains("login failure") {
-            let message = "Steam 缓存会话不可用，请重新登录"
+            let message = L("Steam 缓存会话不可用，请重新登录")
             if let task = session.currentTask() {
                 task.markFailure()
                 failWorkshopDownload(task, in: session, message: message)
@@ -853,7 +890,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             let task = session.markReady()
             DispatchQueue.main.async {
                 self.isLoggedIn = true
-                self.authenticationState = .available("会话有效")
+                self.authenticationState = .available(L("会话有效"))
             }
             if let task {
                 startWorkshopDownload(task, in: session)
@@ -877,8 +914,9 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
         if isFatalDownloadLine(lower) || lower.contains("cached credentials not found") {
             task.markFailure()
-            failWorkshopDownload(task, in: session, message: "Steam 会话不可用，请重新登录")
-            invalidateAuthentication("Steam 会话不可用，请重新登录")
+            let message = L("Steam 会话不可用，请重新登录")
+            failWorkshopDownload(task, in: session, message: message)
+            invalidateAuthentication(message)
         }
     }
 
@@ -901,7 +939,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             let validation = wasCancelled ? (nil, nil) : self.validateDownloadedItem(workshopId: task.workshopId)
             session.clearTask(task)
             if wasCancelled {
-                DispatchQueue.main.async { task.onProgress(.failed("下载已取消")) }
+                DispatchQueue.main.async { task.onProgress(.failed(L("下载已取消"))) }
             } else if result.receivedFailure {
                 let message = self.downloadFailureMessage(result.output, status: 1, hasProject: validation.0 != nil)
                 DispatchQueue.main.async { task.onProgress(.failed(message)) }
@@ -909,7 +947,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 self.record(.workshopDownload, domain: "Steam 内容 CDN", "项目 \(task.workshopId) 已完成并通过本地文件校验：\(directory.path)")
                 DispatchQueue.main.async { task.onProgress(.completed) }
             } else {
-                DispatchQueue.main.async { task.onProgress(.failed(validation.1 ?? "下载文件校验失败")) }
+                DispatchQueue.main.async { task.onProgress(.failed(validation.1 ?? L("下载文件校验失败"))) }
             }
         }
     }
@@ -925,7 +963,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func finishWorkshopSession(_ session: SteamCMDWorkshopSession) {
         if let task = session.currentTask() {
             let cancelled = isDownloadCancelled(workshopId: task.workshopId)
-            failWorkshopDownload(task, in: session, message: cancelled ? "下载已取消" : "SteamCMD 会话已结束")
+            failWorkshopDownload(task, in: session, message: cancelled ? L("下载已取消") : L("SteamCMD 会话已结束"))
         }
         processLock.lock()
         if workshopSession === session { workshopSession = nil }
@@ -1166,7 +1204,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         let required = expectedFileSize + reserve
         if let available = values.volumeAvailableCapacityForImportantUsage, available < required {
             let formatted = ByteCountFormatter.string(fromByteCount: required, countStyle: .file)
-            throw SteamCMDError.operationFailed("磁盘空间不足，建议至少保留 \(formatted) 可用空间")
+            throw SteamCMDError.operationFailed(L("磁盘空间不足，建议至少保留 %@ 可用空间", formatted))
         }
     }
 
@@ -1282,7 +1320,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 return (directory, nil)
             }
         }
-        return (nil, firstError ?? "下载未完成：未找到 project.json")
+        return (nil, firstError ?? L("下载未完成：未找到 project.json"))
     }
 
     private func validateDownloadedItem(at directory: URL) -> String? {

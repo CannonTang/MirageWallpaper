@@ -60,6 +60,27 @@ final class WallpaperLibrary {
     static let shared = WallpaperLibrary()
 
     private let fm = FileManager.default
+    private let additionIndexURL: URL
+    private let additionIndexLock = NSLock()
+    private var additionIndex: LibraryAdditionIndex
+
+    private struct LibraryAdditionIndex: Codable {
+        var version = 1
+        var paths: [String: Date] = [:]
+        var workshopIDs: [String: Date] = [:]
+    }
+
+    private init() {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Mirage")
+        additionIndexURL = directory.appending(path: "library-additions.json")
+        if let data = try? Data(contentsOf: additionIndexURL),
+           let decoded = try? JSONDecoder().decode(LibraryAdditionIndex.self, from: data) {
+            additionIndex = decoded
+        } else {
+            additionIndex = LibraryAdditionIndex()
+        }
+    }
 
     /// What a cached preset's resolution depended on, so a cache hit can be
     /// re-checked cheaply. The plain signature covers a wallpaper's *own*
@@ -246,7 +267,84 @@ final class WallpaperLibrary {
         loadCacheLock.lock()
         loadCache = next
         loadCacheLock.unlock()
+        _ = additionDates(for: wallpapers)
         return wallpapers
+    }
+
+    func additionDates(for wallpapers: [WEWallpaper]) -> [String: Date] {
+        additionIndexLock.lock()
+        var changed = false
+        var result: [String: Date] = [:]
+        result.reserveCapacity(wallpapers.count)
+        for wallpaper in wallpapers {
+            let path = wallpaper.wallpaperDirectory.standardizedFileURL.path
+            let workshopID = workshopID(for: wallpaper)
+            let date: Date
+            if let existing = additionIndex.paths[path] {
+                date = existing
+            } else if let workshopID, let existing = additionIndex.workshopIDs[workshopID] {
+                date = existing
+                additionIndex.paths[path] = existing
+                changed = true
+            } else {
+                date = inferredAdditionDate(at: wallpaper.wallpaperDirectory)
+                additionIndex.paths[path] = date
+                if let workshopID {
+                    additionIndex.workshopIDs[workshopID] = date
+                }
+                changed = true
+            }
+            result[wallpaper.id] = date
+        }
+        if changed {
+            persistAdditionIndexLocked()
+        }
+        additionIndexLock.unlock()
+        return result
+    }
+
+    func recordAdded(at url: URL, workshopID: String? = nil, date: Date = Date()) {
+        let path = url.standardizedFileURL.path
+        additionIndexLock.lock()
+        let pathChanged = additionIndex.paths[path] != date
+        let workshopChanged = workshopID.map { additionIndex.workshopIDs[$0] != date } ?? false
+        if pathChanged || workshopChanged {
+            additionIndex.paths[path] = date
+            if let workshopID {
+                additionIndex.workshopIDs[workshopID] = date
+            }
+            persistAdditionIndexLocked()
+        }
+        additionIndexLock.unlock()
+    }
+
+    private func workshopID(for wallpaper: WEWallpaper) -> String? {
+        guard isWorkshopSource(wallpaper) else { return nil }
+        let value = wallpaper.wallpaperDirectory.lastPathComponent
+        guard !value.isEmpty, value.allSatisfy(\.isNumber) else { return nil }
+        return value
+    }
+
+    private func inferredAdditionDate(at directory: URL) -> Date {
+        let directoryValues = try? directory.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        let projectValues = try? directory.appending(path: "project.json")
+            .resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        return directoryValues?.creationDate
+            ?? projectValues?.creationDate
+            ?? directoryValues?.contentModificationDate
+            ?? projectValues?.contentModificationDate
+            ?? .distantPast
+    }
+
+    private func persistAdditionIndexLocked() {
+        do {
+            try fm.createDirectory(at: additionIndexURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(additionIndex).write(to: additionIndexURL, options: .atomic)
+        } catch {
+            NSLog("[Mirage] Failed to persist library addition index: %@", error.localizedDescription)
+        }
     }
 
     /// Records what a preset's cached resolution rests on. Non-presets get nil
@@ -313,6 +411,7 @@ final class WallpaperLibrary {
         } catch {
             throw WPImportError.copyFailed(error.localizedDescription)
         }
+        recordAdded(at: dest)
         libraryDidChange(at: dest)
         return dest
     }
@@ -346,6 +445,7 @@ final class WallpaperLibrary {
         } catch {
             throw WPImportError.copyFailed(error.localizedDescription)
         }
+        recordAdded(at: dest)
         libraryDidChange(at: dest)
         return dest
     }

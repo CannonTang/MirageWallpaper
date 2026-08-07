@@ -26,6 +26,24 @@ class WorkshopViewModel: ObservableObject {
             UserDefaults.standard.set(ageRatingFilter.rawValue, forKey: Self.ageRatingStorageKey)
         }
     }
+    @Published var widescreenResolution = FRWidescreenResolution.all {
+        didSet { UserDefaults.standard.set(widescreenResolution.rawValue, forKey: "WorkshopWidescreenResolution") }
+    }
+    @Published var ultraWidescreenResolution = FRUltraWidescreenResolution.all {
+        didSet { UserDefaults.standard.set(ultraWidescreenResolution.rawValue, forKey: "WorkshopUltraWidescreenResolution") }
+    }
+    @Published var dualscreenResolution = FRDualscreenResolution.all {
+        didSet { UserDefaults.standard.set(dualscreenResolution.rawValue, forKey: "WorkshopDualscreenResolution") }
+    }
+    @Published var triplescreenResolution = FRTriplescreenResolution.all {
+        didSet { UserDefaults.standard.set(triplescreenResolution.rawValue, forKey: "WorkshopTriplescreenResolution") }
+    }
+    @Published var portraitResolution = FRPortraitScreenResolution.all {
+        didSet { UserDefaults.standard.set(portraitResolution.rawValue, forKey: "WorkshopPortraitResolution") }
+    }
+    @Published var miscResolution = FRMiscResolution.all {
+        didSet { UserDefaults.standard.set(miscResolution.rawValue, forKey: "WorkshopMiscResolution") }
+    }
     @Published var currentPage: Int = 1
     @Published var totalItems: Int = 0
     @Published var isLoading: Bool = false
@@ -80,7 +98,7 @@ class WorkshopViewModel: ObservableObject {
     @Published var isLoggingOut = false
 
     var totalPages: Int {
-        maximumPages
+        min(maximumPages, max(1, Int(ceil(Double(totalItems) / Double(itemsPerPage)))))
     }
 
     var activeDownloadCount: Int {
@@ -115,6 +133,24 @@ class WorkshopViewModel: ObservableObject {
     init() {
         if let stored = UserDefaults.standard.object(forKey: Self.ageRatingStorageKey) as? Int {
             ageRatingFilter = WorkshopAgeRatingFilter(rawValue: stored)
+        }
+        if let raw = UserDefaults.standard.object(forKey: "WorkshopWidescreenResolution") as? Int {
+            widescreenResolution = FRWidescreenResolution(rawValue: raw)
+        }
+        if let raw = UserDefaults.standard.object(forKey: "WorkshopUltraWidescreenResolution") as? Int {
+            ultraWidescreenResolution = FRUltraWidescreenResolution(rawValue: raw)
+        }
+        if let raw = UserDefaults.standard.object(forKey: "WorkshopDualscreenResolution") as? Int {
+            dualscreenResolution = FRDualscreenResolution(rawValue: raw)
+        }
+        if let raw = UserDefaults.standard.object(forKey: "WorkshopTriplescreenResolution") as? Int {
+            triplescreenResolution = FRTriplescreenResolution(rawValue: raw)
+        }
+        if let raw = UserDefaults.standard.object(forKey: "WorkshopPortraitResolution") as? Int {
+            portraitResolution = FRPortraitScreenResolution(rawValue: raw)
+        }
+        if let raw = UserDefaults.standard.object(forKey: "WorkshopMiscResolution") as? Int {
+            miscResolution = FRMiscResolution(rawValue: raw)
         }
 
         searchDebounce = $searchText
@@ -335,6 +371,12 @@ class WorkshopViewModel: ObservableObject {
         let requestSortOrder = sortOrder
         let requestTypeFilter = typeFilter
         let requestAgeRating = ageRatingFilter
+        let requestWidescreenResolution = widescreenResolution
+        let requestUltraWidescreenResolution = ultraWidescreenResolution
+        let requestDualscreenResolution = dualscreenResolution
+        let requestTriplescreenResolution = triplescreenResolution
+        let requestPortraitResolution = portraitResolution
+        let requestMiscResolution = miscResolution
         let requestTrendPeriod = trendPeriod
         let requestPage = currentPage
         isLoading = true
@@ -363,6 +405,12 @@ class WorkshopViewModel: ObservableObject {
                         sortOrder: requestSortOrder,
                         typeFilter: requestTypeFilter,
                         ageRating: requestAgeRating,
+                        widescreenResolution: requestWidescreenResolution,
+                        ultraWidescreenResolution: requestUltraWidescreenResolution,
+                        dualscreenResolution: requestDualscreenResolution,
+                        triplescreenResolution: requestTriplescreenResolution,
+                        portraitResolution: requestPortraitResolution,
+                        miscResolution: requestMiscResolution,
                         page: requestPage,
                         perPage: self.itemsPerPage,
                         trendDays: requestSortOrder.usesTrendPeriod ? requestTrendPeriod.rawValue : nil
@@ -546,6 +594,56 @@ class WorkshopViewModel: ObservableObject {
         search()
     }
 
+    func setResolutionOption<Filter: FilterResultsModel>(
+        _ keyPath: ReferenceWritableKeyPath<WorkshopViewModel, Filter>,
+        option: Filter,
+        isOn: Bool
+    ) {
+        var value = self[keyPath: keyPath]
+        if isOn {
+            value.insert(option)
+        } else {
+            value.remove(option)
+        }
+        self[keyPath: keyPath] = value
+        currentPage = 1
+        search()
+    }
+
+    func selectAllResolutions() {
+        widescreenResolution = .all
+        ultraWidescreenResolution = .all
+        dualscreenResolution = .all
+        triplescreenResolution = .all
+        portraitResolution = .all
+        miscResolution = .all
+        currentPage = 1
+        search()
+    }
+
+    func clearResolutions() {
+        widescreenResolution = .none
+        ultraWidescreenResolution = .none
+        dualscreenResolution = .none
+        triplescreenResolution = .none
+        portraitResolution = .none
+        miscResolution = .none
+        currentPage = 1
+        search()
+    }
+
+    var allResolutionsSelected: Bool {
+        widescreenResolution == .all && ultraWidescreenResolution == .all &&
+            dualscreenResolution == .all && triplescreenResolution == .all &&
+            portraitResolution == .all && miscResolution == .all
+    }
+
+    var allResolutionsCleared: Bool {
+        widescreenResolution.isEmpty && ultraWidescreenResolution.isEmpty &&
+            dualscreenResolution.isEmpty && triplescreenResolution.isEmpty &&
+            portraitResolution.isEmpty && miscResolution.isEmpty
+    }
+
     func clearFilters() {
         selectedTags.removeAll()
         searchText = ""
@@ -553,6 +651,12 @@ class WorkshopViewModel: ObservableObject {
         sortOrder = .trending
         trendPeriod = .week
         ageRatingFilter = .default
+        widescreenResolution = .all
+        ultraWidescreenResolution = .all
+        dualscreenResolution = .all
+        triplescreenResolution = .all
+        portraitResolution = .all
+        miscResolution = .all
         currentPage = 1
         search()
     }
@@ -757,6 +861,9 @@ class WorkshopViewModel: ObservableObject {
             }
 
             if case .completed = state {
+                if let directory = SteamCMDManager.shared.downloadedItemDirectory(workshopId: workshopId) {
+                    WallpaperLibrary.shared.recordAdded(at: directory, workshopID: workshopId)
+                }
                 let purpose = self.downloadQueue[idx].purpose
                 let selectedItemID = self.selectedItem?.publishedFileId
                 let selectionGeneration = self.selectionGeneration

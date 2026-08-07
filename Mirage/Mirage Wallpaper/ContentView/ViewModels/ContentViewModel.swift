@@ -20,6 +20,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
         didSet {
             currentPage = 1
             if sortingBy == .fileSize { prewarmWallpaperSizes() }
+            if sortingBy == .recentlyAdded { sortingSequence = .decrease }
         }
     }
     @AppStorage("SortingSequence") var sortingSequence: WEWallpaperSortingSequence = .increase {
@@ -44,9 +45,6 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @Published var importAlertPresented = false
     @Published var isStaging = false
     
-    @Published var topTabBarSelection: Int = 0
-    @Published var topTabBarHoverSelection: Int = -1
-
     @Published var wallpapers = [WEWallpaper]() {
         didSet { scheduleRecomputePage() }
     }
@@ -114,10 +112,9 @@ class ContentViewModel: ObservableObject, DropDelegate {
     private var refreshAgain = false
     @Published private(set) var isRefreshing = false
 
-    convenience init(isStaging: Bool, topTabBarSelection: Int = 0) {
+    convenience init(isStaging: Bool) {
         self.init()
         self.isStaging = isStaging
-        self.topTabBarSelection = topTabBarSelection
         refresh()
     }
 
@@ -231,6 +228,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
         let currentPage: Int
         let favorites: Set<String>
         let importedPrefix: String
+        let additionDates: [String: Date]
     }
 
     private func currentPipelineInput() -> PipelineInput {
@@ -253,7 +251,8 @@ class ContentViewModel: ObservableObject, DropDelegate {
             wallpapersPerPage: wallpapersPerPage,
             currentPage: currentPage,
             favorites: FavoritesManager.shared.snapshot(),
-            importedPrefix: WallpaperLibrary.shared.importedDirectory.path)
+            importedPrefix: WallpaperLibrary.shared.importedDirectory.path,
+            additionDates: WallpaperLibrary.shared.additionDates(for: wallpapers))
     }
 
     // Coalesce bursts of input changes (typing, rapid filter toggles) into a
@@ -416,6 +415,17 @@ class ContentViewModel: ObservableObject, DropDelegate {
                     comparison = $0.project.title.localizedStandardCompare($1.project.title)
                 } else {
                     comparison = $0.wallpaperSize < $1.wallpaperSize ? .orderedAscending : .orderedDescending
+                }
+            case .recentlyAdded:
+                let left = input.additionDates[$0.id] ?? .distantPast
+                let right = input.additionDates[$1.id] ?? .distantPast
+                if left == right {
+                    let title = $0.project.title.localizedStandardCompare($1.project.title)
+                    comparison = title == .orderedSame
+                        ? $0.wallpaperDirectory.path.localizedStandardCompare($1.wallpaperDirectory.path)
+                        : title
+                } else {
+                    comparison = left < right ? .orderedAscending : .orderedDescending
                 }
             }
             return input.sortingSequence == .increase

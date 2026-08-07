@@ -33,6 +33,7 @@ struct WallpaperArgs {
     BOOL controlStdin = NO;
     BOOL deferredShow = NO;
     BOOL loadFromMemory = NO;
+    BOOL hdrEnabled = NO;
 };
 
 // Orphan guard: if Mirage.app crashes or is force-quit, a renderer left behind
@@ -166,6 +167,7 @@ static void PrintUsage(const char *argv0) {
         "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --deferred-show        keep the window hidden until an activate command\n"
         "  --load-from-memory     keep the video bytes in memory\n"
+        "  --hdr                  enable HDR output on EDR-capable displays\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  -h, --help             show this help\n",
         argv0);
@@ -222,6 +224,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.deferredShow = YES;
         } else if (strcmp(arg, "--load-from-memory") == 0) {
             out.loadFromMemory = YES;
+        } else if (strcmp(arg, "--hdr") == 0) {
+            out.hdrEnabled = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg);
             return NO;
@@ -327,6 +331,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
 - (BOOL)normalizeGeometry {
     NSScreen *screen = MirageScreenForDisplayID(self.displayID);
     if (screen == nil || NSWidth(screen.frame) <= 0 || NSHeight(screen.frame) <= 0) return NO;
+    [self.engine updateDynamicRangeForScreen:screen];
     if (!MirageNSRectMatches(self.window.frame, screen.frame)) {
         [self.window setFrame:screen.frame display:YES];
     }
@@ -464,6 +469,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
         [NSApp terminate:nil];
         return;
     }
+    [self.engine updateDynamicRangeForScreen:screen];
     NSRect frame = screen.frame;
     if (NSWidth(frame) <= 0 || NSHeight(frame) <= 0) return;
     if (NSEqualRects(self.window.frame, frame)) return;
@@ -521,6 +527,7 @@ int main(int argc, char *argv[]) {
         config.muted = args.deferredShow ? YES : args.muted;
         config.autoplay = YES;
         config.loadFromMemory = args.loadFromMemory;
+        config.hdrEnabled = args.hdrEnabled;
 
         NSRect screenFrame = screen.frame;
         NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame), NSHeight(screenFrame));
@@ -568,6 +575,7 @@ int main(int argc, char *argv[]) {
         window.releasedWhenClosed = NO;
         window.canHide = NO;
         window.contentView = engine;
+        [engine updateDynamicRangeForScreen:screen];
         delegate.window = window;
 
         // Install every lifecycle callback and the window target before
@@ -619,6 +627,8 @@ int main(int argc, char *argv[]) {
                             VRVideoFillMode mode;
                             if (ParseFillMode([value UTF8String], mode)) [eng setFillMode:mode];
                         }
+                    } else if ([name isEqualToString:@"hdr"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) [eng setHDREnabled:[value boolValue]];
                     } else if ([name isEqualToString:@"snapshot"]) {
                         // Mirage.app wants a still of the live frame for the
                         // system desktop picture. Always answer, success or

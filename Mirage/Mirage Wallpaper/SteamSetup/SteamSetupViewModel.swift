@@ -64,14 +64,14 @@ class SteamSetupViewModel: ObservableObject {
 
     func useSavedSession() {
         guard let reusableSessionUsername, SteamCMDManager.shared.isLoggedIn else {
-            errorMessage = "保存的 Steam 会话已失效，请使用密码重新登录"
+            errorMessage = L("保存的 Steam 会话已失效，请使用密码重新登录")
             return
         }
         username = reusableSessionUsername
         password = ""
         guardCode = ""
         errorMessage = nil
-        loginLog = ["[Mirage] 已使用验证有效的本机 SteamCMD 会话"]
+        loginLog = [L("[Mirage] 已使用验证有效的本机 SteamCMD 会话")]
         loginState = .success
     }
 
@@ -102,13 +102,32 @@ class SteamSetupViewModel: ObservableObject {
         }
     }
 
+    func installRosetta() {
+        steamCMDInstallState = .installingRosetta
+        SteamCMDManager.shared.installRosetta { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                let detection = SteamCMDManager.shared.detectSteamCMD()
+                if case .found(let path) = detection {
+                    self.steamCMDPath = path
+                    self.steamCMDInstallState = .found(path.path)
+                } else {
+                    self.installSteamCMD()
+                }
+            case .failure(let error):
+                self.steamCMDInstallState = .rosettaInstallFailed(error.localizedDescription)
+            }
+        }
+    }
+
     func cancelSteamCMDInstallation() {
         SteamCMDManager.shared.cancelSteamCMDInstallation()
     }
 
     func login() {
         guard !username.isEmpty, !password.isEmpty else {
-            errorMessage = "请输入用户名和密码"
+            errorMessage = L("请输入用户名和密码")
             return
         }
         stopGuardWaitUpdates()
@@ -145,12 +164,12 @@ class SteamSetupViewModel: ObservableObject {
     func submitGuardCode() {
         let code = guardCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty else {
-            errorMessage = "请输入验证码"
+            errorMessage = L("请输入验证码")
             return
         }
         guard SteamCMDManager.shared.submitGuardCode(code) else {
-            errorMessage = "Steam Guard 会话已结束，请重新登录"
-            loginState = .failed("Steam Guard 会话已结束")
+            errorMessage = L("Steam Guard 会话已结束，请重新登录")
+            loginState = .failed(L("Steam Guard 会话已结束"))
             return
         }
         guardCode = ""
@@ -214,7 +233,7 @@ class SteamSetupViewModel: ObservableObject {
             let heartbeat = elapsed / 5 * 5
             if heartbeat >= 5, heartbeat != self.lastGuardHeartbeat {
                 self.lastGuardHeartbeat = heartbeat
-                self.loginLog.append("[Mirage] Steam 手机确认仍在等待（\(heartbeat) 秒）")
+                self.loginLog.append(L("[Mirage] Steam 手机确认仍在等待（%lld 秒）", heartbeat))
             }
         }
         guardWaitTimer = timer

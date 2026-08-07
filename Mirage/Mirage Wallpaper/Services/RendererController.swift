@@ -52,6 +52,7 @@ final class RendererProcess {
     var desiredFps: Int
     var desiredSpeed: Float
     var desiredFillMode: FillMode
+    var desiredHDRVideo: Bool
     var desiredUserProperties: [String: WEProjectProperty]
     /// Scene renderers receive their initial properties through the launch-time
     /// JSON file. Runtime snapshots must not replay that same set of values:
@@ -123,6 +124,7 @@ final class RendererProcess {
         self.desiredFps = options.fps
         self.desiredSpeed = options.speed
         self.desiredFillMode = options.fillMode
+        self.desiredHDRVideo = options.enableHDRVideo
         self.desiredUserProperties = options.userProperties
         self.spectrumEnabled = spectrumEnabled
         self.spectrumDemanded = false
@@ -493,6 +495,7 @@ struct RenderOptions: Equatable {
     var renderScale: Double = 1.0
     var msaaSamples: Int = 1
     var loadFromMemory: Bool = false
+    var enableHDRVideo: Bool = false
     var userProperties: [String: WEProjectProperty] = [:]
     var powerState: MiragePowerState = .run
     var powerFps: Int?
@@ -1029,6 +1032,7 @@ final class RendererController {
             args += ["--display-id", String(displayID)]
             args += ["--volume", String(format: "%.3f", options.volume)]
             args += ["--fill", options.fillMode.rawValue]
+            if options.enableHDRVideo { args += ["--hdr"] }
             if options.loadFromMemory { args += ["--load-from-memory"] }
             // The candidate must decode its first frame, but it cannot become
             // visible or audible before the parent completes the handoff.
@@ -1184,6 +1188,7 @@ final class RendererController {
         handle.desiredFps = options.fps
         handle.desiredSpeed = options.speed
         handle.desiredFillMode = options.fillMode
+        handle.desiredHDRVideo = options.enableHDRVideo
         handle.desiredUserProperties = options.userProperties
     }
 
@@ -1383,6 +1388,9 @@ final class RendererController {
         candidate.send(["cmd": "fps", "value": candidate.desiredFps])
         candidate.send(["cmd": "fillmode", "value": candidate.desiredFillMode.rawValue])
         candidate.send(["cmd": "speed", "value": candidate.desiredSpeed])
+        if candidate.wallpaper.kind == .video {
+            candidate.send(["cmd": "hdr", "value": candidate.desiredHDRVideo])
+        }
         if candidate.wallpaper.kind == .web {
             candidate.send(Self.webPlaybackStateCommand(for: candidate))
         }
@@ -1585,6 +1593,9 @@ final class RendererController {
         handle.send(["cmd": "fps", "value": handle.desiredFps])
         handle.send(["cmd": "fillmode", "value": handle.desiredFillMode.rawValue])
         handle.send(["cmd": "speed", "value": handle.desiredSpeed])
+        if handle.wallpaper.kind == .video {
+            handle.send(["cmd": "hdr", "value": handle.desiredHDRVideo])
+        }
         if handle.wallpaper.kind == .web {
             handle.send(Self.webPlaybackStateCommand(for: handle))
         } else {
@@ -2338,6 +2349,7 @@ final class RendererController {
         target.userProperties = source.userProperties
         target.powerState = source.powerState
         target.powerFps = source.powerFps
+        target.enableHDRVideo = source.enableHDRVideo
         target.assignmentID = source.assignmentID
     }
 
@@ -2346,6 +2358,9 @@ final class RendererController {
         handle.send(["cmd": "fps", "value": options.fps])
         handle.send(["cmd": "fillmode", "value": options.fillMode.rawValue])
         handle.send(["cmd": "speed", "value": options.speed])
+        if handle.wallpaper.kind == .video {
+            handle.send(["cmd": "hdr", "value": options.enableHDRVideo])
+        }
         if handle.wallpaper.kind == .web {
             handle.send(Self.webPlaybackStateCommand(volume: options.volume,
                                                        muted: options.muted,

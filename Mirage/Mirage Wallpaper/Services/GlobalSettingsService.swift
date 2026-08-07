@@ -10,6 +10,12 @@ import SwiftUI
 import ServiceManagement
 import IOKit.ps
 import CoreAudio
+import Security
+
+enum LoginItemCapability: Equatable {
+    case serviceManagement
+    case launchAgent
+}
 
 enum GSQuality {
     case low, medium, high, ultra
@@ -85,6 +91,16 @@ struct GlobalSettings: Codable, Equatable {
     var otherApplicationPlayingAudio = GSPlayback.keepRunning
     var displayAsleep = GSPlayback.keepRunning
     var laptopOnBattery = GSPlayback.keepRunning
+    var pauseWhenWindowCoverageExceeds: Bool? = false
+    var windowCoverageThreshold: Double? = 90
+
+    var shouldPauseWhenWindowCoverageExceeds: Bool {
+        pauseWhenWindowCoverageExceeds ?? false
+    }
+
+    var normalizedWindowCoverageThreshold: Double {
+        min(100, max(1, windowCoverageThreshold ?? 90))
+    }
     
     // MARK: Quality
     var antiAliasing = GSAntiAliasingQuality.msaa_x2
@@ -143,6 +159,11 @@ struct GlobalSettings: Codable, Equatable {
     
     // MARK: Video
     var videoFramework = GSVideoFramework.avkit
+    var enableHDRVideo: Bool? = false
+
+    var shouldEnableHDRVideo: Bool {
+        enableHDRVideo ?? false
+    }
     
     // MARK: Advanced
     var processPiority = GSProcessPiority.normal
@@ -205,7 +226,11 @@ class GlobalSettingsViewModel: ObservableObject {
     // whether there are unsaved edits with a cheap value comparison instead of
     // decoding GlobalSettings JSON from UserDefaults on every footer render.
     @Published private(set) var savedSettings: GlobalSettings
-    @Published private(set) var loginItemStatus = SMAppService.mainApp.status
+    @Published private(set) var loginItemStatus: SMAppService.Status = .notRegistered
+    @Published private(set) var loginItemCapability: LoginItemCapability
+    @Published private(set) var loginItemError: String?
+    private var isValidatingSettings = false
+    private var isUpdatingLoginItem = false
 
     init() {
         var initial: GlobalSettings
@@ -219,18 +244,31 @@ class GlobalSettingsViewModel: ObservableObject {
             initial.steamAPIEndpoint = .official
         }
         initial.animatedPreviewPlayback = initial.animatedPreviewPlayback ?? .hover
-        let loginStatus = SMAppService.mainApp.status
-        switch loginStatus {
-        case .enabled, .requiresApproval:
-            initial.autoStart = true
-        case .notRegistered, .notFound:
-            initial.autoStart = false
-        @unknown default:
-            initial.autoStart = false
+        initial.windowCoverageThreshold = initial.normalizedWindowCoverageThreshold
+        if initial.shouldPauseWhenWindowCoverageExceeds {
+            initial.otherApplicationFocused = .keepRunning
+        }
+        let loginCapability = Self.detectLoginItemCapability()
+        let loginStatus = loginCapability == .serviceManagement
+            ? SMAppService.mainApp.status
+            : SMAppService.Status.notRegistered
+        if loginCapability == .serviceManagement {
+            switch loginStatus {
+            case .enabled, .requiresApproval:
+                initial.autoStart = true
+            case .notRegistered, .notFound:
+                initial.autoStart = false
+            @unknown default:
+                initial.autoStart = false
+            }
+        } else {
+            initial.autoStart = FileManager.default.fileExists(atPath: Self.launchAgentURL.path)
         }
         self.settings = initial
         self.savedSettings = initial
         self.loginItemStatus = loginStatus
+        self.loginItemCapability = loginCapability
+        self.loginItemError = nil
         MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)
@@ -304,8 +342,15 @@ class GlobalSettingsViewModel: ObservableObject {
         self.validate()
         playbackPolicySettingsCancellable = $settings
             .map {
-                [$0.otherApplicationFocused, $0.otherApplicationFullscreen,
-                 $0.otherApplicationPlayingAudio, $0.displayAsleep, $0.laptopOnBattery]
+                PlaybackPolicySettingsKey(
+                    focused: $0.otherApplicationFocused,
+                    fullscreen: $0.otherApplicationFullscreen,
+                    audio: $0.otherApplicationPlayingAudio,
+                    displayAsleep: $0.displayAsleep,
+                    battery: $0.laptopOnBattery,
+                    coverageEnabled: $0.shouldPauseWhenWindowCoverageExceeds,
+                    coverageThreshold: $0.normalizedWindowCoverageThreshold
+                )
             }
             .removeDuplicates()
             .dropFirst()
@@ -386,9 +431,10 @@ class GlobalSettingsViewModel: ObservableObject {
             self.desktopClickMonitor = nil
         }
 
-        let focusRulesEnabled = settings.otherApplicationFocused != .keepRunning ||
-            settings.otherApplicationFullscreen != .keepRunning
-        let anyRuleEnabled = focusRulesEnabled ||
+        let windowRulesEnabled = settings.otherApplicationFocused != .keepRunning ||
+            settings.otherApplicationFullscreen != .keepRunning ||
+            settings.shouldPauseWhenWindowCoverageExceeds
+        let anyRuleEnabled = windowRulesEnabled ||
             settings.otherApplicationPlayingAudio != .keepRunning ||
             settings.displayAsleep != .keepRunning ||
             settings.laptopOnBattery != .keepRunning
@@ -400,7 +446,7 @@ class GlobalSettingsViewModel: ObservableObject {
             return
         }
 
-        if focusRulesEnabled {
+        if windowRulesEnabled {
             let playbackNotifications: [Notification.Name] = [
                 NSWorkspace.activeSpaceDidChangeNotification,
                 NSWorkspace.didActivateApplicationNotification,
@@ -442,12 +488,12 @@ class GlobalSettingsViewModel: ObservableObject {
         // Focus/fullscreen rules also poll: revealing the desktop (click-wallpaper,
         // F11, hot corners, Mission Control) and re-covering it emit no reliable
         // notification, so periodic geometry checks keep playback correct.
-        let pollingRuleEnabled = focusRulesEnabled ||
+        let pollingRuleEnabled = windowRulesEnabled ||
             settings.otherApplicationPlayingAudio != .keepRunning ||
             settings.laptopOnBattery != .keepRunning ||
             settings.displayAsleep != .keepRunning
         if pollingRuleEnabled {
-            basePollInterval = focusRulesEnabled ? 1.0 : 2.0
+            basePollInterval = windowRulesEnabled ? 1.0 : 2.0
             stableEvaluationCount = 0
             schedulePlaybackTimer(interval: basePollInterval)
         }
@@ -514,10 +560,27 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     func didAddToLoginItem(_ added: Bool) {
+        guard !isUpdatingLoginItem else { return }
+        isUpdatingLoginItem = true
+        defer { isUpdatingLoginItem = false }
+        if loginItemCapability == .launchAgent {
+            loginItemError = nil
+            do {
+                try updateLaunchAgent(enabled: added)
+            } catch {
+                loginItemError = L("无法更新登录项：%@", error.localizedDescription)
+                if added {
+                    try? FileManager.default.removeItem(at: Self.launchAgentURL)
+                }
+            }
+            refreshLoginItemStatus(persist: true)
+            return
+        }
         let appService = SMAppService.mainApp
+        loginItemError = nil
         do {
             switch (added, appService.status) {
-            case (true, .notRegistered):
+            case (true, .notRegistered), (true, .notFound):
                 try appService.register()
             case (false, .enabled), (false, .requiresApproval):
                 try appService.unregister()
@@ -526,12 +589,28 @@ class GlobalSettingsViewModel: ObservableObject {
             }
         } catch {
             let nsError = error as NSError
+            if nsError.code == kSMErrorInvalidSignature {
+                loginItemError = L("当前 Mirage 签名无效，无法注册登录项。")
+            } else if nsError.code == kSMErrorLaunchDeniedByUser {
+                loginItemError = L("登录项已被系统拒绝，请在系统设置中批准。")
+            } else {
+                loginItemError = L("无法更新登录项：%@", nsError.localizedDescription)
+            }
             NSLog("[Mirage] Failed to update login item: %@ (%@:%ld)", nsError.localizedDescription, nsError.domain, nsError.code)
         }
         refreshLoginItemStatus(persist: true)
     }
 
     func refreshLoginItemStatus(persist: Bool = false) {
+        if loginItemCapability == .launchAgent {
+            let enabled = FileManager.default.fileExists(atPath: Self.launchAgentURL.path)
+            loginItemStatus = enabled ? .enabled : .notRegistered
+            if settings.autoStart != enabled {
+                settings.autoStart = enabled
+                if persist { save() }
+            }
+            return
+        }
         let status = SMAppService.mainApp.status
         loginItemStatus = status
         let enabled: Bool
@@ -551,6 +630,77 @@ class GlobalSettingsViewModel: ObservableObject {
 
     func openLoginItemSettings() {
         SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private static func detectLoginItemCapability() -> LoginItemCapability {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code) == errSecSuccess,
+              let code else {
+            return .launchAgent
+        }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let values = information as? [CFString: Any] else {
+            return .launchAgent
+        }
+        let team = values[kSecCodeInfoTeamIdentifier] as? String
+        return team?.isEmpty == false ? .serviceManagement : .launchAgent
+    }
+
+    private static var launchAgentURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/LaunchAgents/cn.laobamac.Mirage.plist")
+    }
+
+    private func updateLaunchAgent(enabled: Bool) throws {
+        let url = Self.launchAgentURL
+        let domain = "gui/\(getuid())"
+        if FileManager.default.fileExists(atPath: url.path) {
+            let result = try runLaunchctl(["bootout", domain, url.path])
+            if result.status != 0 {
+                _ = try? runLaunchctl(["bootout", "\(domain)/cn.laobamac.Mirage"])
+            }
+        }
+        if !enabled {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+            return
+        }
+        let appURL = Bundle.main.bundleURL.standardizedFileURL
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "Label": "cn.laobamac.Mirage",
+            "ProgramArguments": ["/usr/bin/open", "-g", appURL.path],
+            "RunAtLoad": true,
+            "ProcessType": "Interactive",
+            "LimitLoadToSessionType": "Aqua",
+            "AssociatedBundleIdentifiers": [Bundle.main.bundleIdentifier ?? "cn.laobamac.Mirage"]
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: url, options: .atomic)
+        var result = try runLaunchctl(["bootstrap", domain, url.path])
+        if result.status != 0 {
+            _ = try? runLaunchctl(["bootout", "\(domain)/cn.laobamac.Mirage"])
+            result = try runLaunchctl(["bootstrap", domain, url.path])
+        }
+        guard result.status == 0 else {
+            throw NSError(domain: "MirageLoginItem", code: Int(result.status),
+                          userInfo: [NSLocalizedDescriptionKey: result.output.trimmingCharacters(in: .whitespacesAndNewlines)])
+        }
+    }
+
+    private func runLaunchctl(_ arguments: [String]) throws -> (status: Int32, output: String) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
     
     func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {
@@ -605,6 +755,17 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     private func validate() {
+        guard !isValidatingSettings else { return }
+        isValidatingSettings = true
+        defer { isValidatingSettings = false }
+        let threshold = settings.normalizedWindowCoverageThreshold
+        if settings.windowCoverageThreshold != threshold {
+            settings.windowCoverageThreshold = threshold
+        }
+        if settings.shouldPauseWhenWindowCoverageExceeds,
+           settings.otherApplicationFocused != .keepRunning {
+            settings.otherApplicationFocused = .keepRunning
+        }
         switch settings.appearance {
         case .light:
             NSApp.appearance = NSAppearance(named: .aqua)
@@ -613,6 +774,20 @@ class GlobalSettingsViewModel: ObservableObject {
         case .followSystem:
             NSApp.appearance = nil
         }
+    }
+
+    func setFocusedPlaybackRule(_ rule: GSPlayback) {
+        if rule != .keepRunning {
+            settings.pauseWhenWindowCoverageExceeds = false
+        }
+        settings.otherApplicationFocused = rule
+    }
+
+    func setWindowCoveragePauseEnabled(_ enabled: Bool) {
+        if enabled {
+            settings.otherApplicationFocused = .keepRunning
+        }
+        settings.pauseWhenWindowCoverageExceeds = enabled
     }
     
     func activateApplicationDidChange() {
@@ -631,6 +806,8 @@ class GlobalSettingsViewModel: ObservableObject {
         var onFocused = GSPlayback.keepRunning
         var onFullscreen = GSPlayback.keepRunning
         var onAudio = GSPlayback.keepRunning
+        var pauseOnCoverage = false
+        var coverageThreshold: CGFloat = 0.9
 
         var withinRevealGrace = false
 
@@ -643,6 +820,17 @@ class GlobalSettingsViewModel: ObservableObject {
         /// PIDs whose `activationPolicy` is `.regular`, resolved up front because
         /// `NSWorkspace.runningApplications` is AppKit state.
         var regularPIDs: Set<pid_t> = []
+        var wallpaperDisplayBounds: [CGRect] = []
+    }
+
+    private struct PlaybackPolicySettingsKey: Equatable {
+        var focused: GSPlayback
+        var fullscreen: GSPlayback
+        var audio: GSPlayback
+        var displayAsleep: GSPlayback
+        var battery: GSPlayback
+        var coverageEnabled: Bool
+        var coverageThreshold: Double
     }
 
     /// One parsed entry of the on-screen window list. The raw CFDictionary form
@@ -694,19 +882,27 @@ class GlobalSettingsViewModel: ObservableObject {
         inputs.onFocused = settings.otherApplicationFocused
         inputs.onFullscreen = settings.otherApplicationFullscreen
         inputs.onAudio = settings.otherApplicationPlayingAudio
+        inputs.pauseOnCoverage = settings.shouldPauseWhenWindowCoverageExceeds
+        inputs.coverageThreshold = CGFloat(settings.normalizedWindowCoverageThreshold / 100)
 
         inputs.withinRevealGrace =
             Date().timeIntervalSince(lastDesktopRevealHintAt) < Self.desktopRevealGrace
         inputs.selfPID = ProcessInfo.processInfo.processIdentifier
 
         let needsWindowGeometry = settings.otherApplicationFocused != .keepRunning ||
-            settings.otherApplicationFullscreen != .keepRunning
+            settings.otherApplicationFullscreen != .keepRunning ||
+            settings.shouldPauseWhenWindowCoverageExceeds
         let needsRendererPIDs = needsWindowGeometry ||
             settings.otherApplicationPlayingAudio != .keepRunning
         if needsRendererPIDs {
             inputs.rendererPIDs = AppDelegate.shared.wallpaperViewModel.renderer.processIdentifiers
         }
         guard needsWindowGeometry else { return inputs }
+
+        let registry = DisplayRegistry.shared
+        inputs.wallpaperDisplayBounds = AppDelegate.shared.wallpaperViewModel.displayStates.keys.compactMap {
+            registry.displayID(for: $0).map(CGDisplayBounds)
+        }
 
         let front = NSWorkspace.shared.frontmostApplication
         inputs.frontPID = front?.processIdentifier
@@ -731,9 +927,7 @@ class GlobalSettingsViewModel: ObservableObject {
             actions.append(inputs.onBattery)
         }
 
-        if inputs.onFocused != .keepRunning || inputs.onFullscreen != .keepRunning {
-            // A single window-list snapshot serves all three geometry tests
-            // below, and is only captured if one of them is actually reached.
+        if inputs.onFocused != .keepRunning || inputs.onFullscreen != .keepRunning || inputs.pauseOnCoverage {
             var cachedWindows: [WindowEntry]?
             func windows() -> [WindowEntry] {
                 if let cachedWindows { return cachedWindows }
@@ -742,18 +936,25 @@ class GlobalSettingsViewModel: ObservableObject {
                 return captured
             }
 
-            let isSelf = inputs.frontPID == inputs.selfPID
-            let desktopViewed = inputs.withinRevealGrace ||
-                isDesktopExposed(windows(), inputs: inputs)
-            let isDesktopFinder = inputs.frontBundleID == "com.apple.finder"
-                && !appHasVisibleWindows(windows(), pid: inputs.frontPID)
+            if inputs.pauseOnCoverage,
+               windowCoverageExceedsThreshold(windows(), inputs: inputs) {
+                actions.append(.pause)
+            }
 
-            if let frontPID = inputs.frontPID, inputs.frontIsRegular, !isSelf,
-               !isDesktopFinder, !desktopViewed {
-                if appIsFullscreen(windows(), pid: frontPID) {
-                    actions.append(inputs.onFullscreen)
-                } else {
-                    actions.append(inputs.onFocused)
+            if inputs.onFocused != .keepRunning || inputs.onFullscreen != .keepRunning {
+                let isSelf = inputs.frontPID == inputs.selfPID
+                let desktopViewed = inputs.withinRevealGrace ||
+                    isDesktopExposed(windows(), inputs: inputs)
+                let isDesktopFinder = inputs.frontBundleID == "com.apple.finder"
+                    && !appHasVisibleWindows(windows(), pid: inputs.frontPID)
+
+                if let frontPID = inputs.frontPID, inputs.frontIsRegular, !isSelf,
+                   !isDesktopFinder, !desktopViewed {
+                    if appIsFullscreen(windows(), pid: frontPID) {
+                        actions.append(inputs.onFullscreen)
+                    } else {
+                        actions.append(inputs.onFocused)
+                    }
                 }
             }
         }
@@ -917,6 +1118,61 @@ class GlobalSettingsViewModel: ObservableObject {
             }
         }
         return false
+    }
+
+    private static func windowCoverageExceedsThreshold(_ windows: [WindowEntry],
+                                                        inputs: PolicyInputs) -> Bool {
+        guard !inputs.wallpaperDisplayBounds.isEmpty else { return false }
+        let candidates = windows.filter {
+            $0.layer == 0 &&
+            $0.pid != inputs.selfPID &&
+            !inputs.rendererPIDs.contains($0.pid) &&
+            inputs.regularPIDs.contains($0.pid) &&
+            $0.alpha > 0.05 &&
+            $0.bounds.width >= 120 &&
+            $0.bounds.height >= 80
+        }
+        for display in inputs.wallpaperDisplayBounds {
+            let area = display.width * display.height
+            guard area > 0 else { continue }
+            let rectangles = candidates.compactMap { window -> CGRect? in
+                let clipped = window.bounds.intersection(display).standardized
+                guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return nil }
+                return clipped
+            }
+            if rectangleUnionArea(rectangles) / area >= inputs.coverageThreshold {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func rectangleUnionArea(_ rectangles: [CGRect]) -> CGFloat {
+        let xCoordinates = Array(Set(rectangles.flatMap { [$0.minX, $0.maxX] })).sorted()
+        guard xCoordinates.count > 1 else { return 0 }
+        var area: CGFloat = 0
+        for index in 0..<(xCoordinates.count - 1) {
+            let left = xCoordinates[index]
+            let right = xCoordinates[index + 1]
+            guard right > left else { continue }
+            let intervals = rectangles.compactMap { rectangle -> ClosedRange<CGFloat>? in
+                guard rectangle.minX < right, rectangle.maxX > left else { return nil }
+                return rectangle.minY...rectangle.maxY
+            }.sorted { $0.lowerBound < $1.lowerBound }
+            guard var current = intervals.first else { continue }
+            var height: CGFloat = 0
+            for interval in intervals.dropFirst() {
+                if interval.lowerBound <= current.upperBound {
+                    current = current.lowerBound...max(current.upperBound, interval.upperBound)
+                } else {
+                    height += current.upperBound - current.lowerBound
+                    current = interval
+                }
+            }
+            height += current.upperBound - current.lowerBound
+            area += (right - left) * height
+        }
+        return area
     }
 
     /// Hit-test the click point against the on-screen window list to decide

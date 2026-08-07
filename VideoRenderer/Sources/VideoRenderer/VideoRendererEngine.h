@@ -21,6 +21,7 @@ typedef struct {
     BOOL muted;
     BOOL autoplay;
     BOOL loadFromMemory;
+    BOOL hdrEnabled;
 } VRVideoEngineConfig;
 
 @interface VRVideoRendererEngine : NSView
@@ -38,6 +39,8 @@ typedef struct {
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
+- (void)setHDREnabled:(BOOL)enabled;
+- (void)updateDynamicRangeForScreen:(nullable NSScreen *)screen;
 
 // Writes a still of the frame currently on screen to `path` (HEIC, falling back
 // to JPEG where no HEVC encoder exists). Mirage.app installs it as the system
@@ -79,6 +82,7 @@ typedef struct {
 @property (nonatomic, assign, readonly) float volume;
 @property (nonatomic, assign, readonly) BOOL muted;
 @property (nonatomic, assign, readonly) VRVideoFillMode fillMode;
+@property (nonatomic, assign, readonly) BOOL hdrEnabled;
 
 @end
 

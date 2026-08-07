@@ -105,6 +105,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, assign) VRVideoFillMode fillMode;
 @property (nonatomic, assign) BOOL autoplay;
 @property (nonatomic, assign) BOOL loadFromMemory;
+@property (nonatomic, assign) BOOL hdrEnabled;
 @property (nonatomic, strong) VRMemoryAssetLoader *memoryAssetLoader;
 @property (nonatomic, strong) NSMutableArray<id> *itemEndObservers;
 @property (nonatomic, strong) id itemFailedObserver;
@@ -139,6 +140,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     config.muted = NO;
     config.autoplay = YES;
     config.loadFromMemory = NO;
+    config.hdrEnabled = NO;
     return config;
 }
 
@@ -169,12 +171,14 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         _autoplay = config.autoplay;
         _hostPaused = !config.autoplay;
         _loadFromMemory = config.loadFromMemory;
+        _hdrEnabled = config.hdrEnabled;
         _itemEndObservers = [NSMutableArray array];
         _transcodeQueue = dispatch_queue_create("VideoRenderer.transcode",
                                                 DISPATCH_QUEUE_SERIAL);
         dispatch_set_target_queue(_transcodeQueue,
             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         [self setFillMode:config.fillMode];
+        [self updateDynamicRangeForScreen:NSScreen.mainScreen];
 
         // The player outlives every wallpaper this engine opens, so these two
         // registrations are made once here and torn down once in -dealloc.
@@ -351,18 +355,18 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     BOOL cacheIsCurrent = cacheDate != nil && sourceDate != nil &&
         [cacheDate compare:sourceDate] != NSOrderedAscending;
 
-    if (![rewritten isEqual:source] &&
-        [NSFileManager.defaultManager fileExistsAtPath:rewritten.path] &&
-        cacheIsCurrent &&
-        [VRTranscoder fileIsDecodable:rewritten]) {
-        return [self startPlaybackOfURL:rewritten error:error];
-    }
-
     if ([VRTranscoder fileIsDecodable:source]) {
         if (![rewritten isEqual:source] && !cacheIsCurrent) {
             [NSFileManager.defaultManager removeItemAtURL:rewritten error:nil];
         }
         return [self startPlaybackOfURL:source error:error];
+    }
+
+    if (![rewritten isEqual:source] &&
+        [NSFileManager.defaultManager fileExistsAtPath:rewritten.path] &&
+        cacheIsCurrent &&
+        [VRTranscoder fileIsDecodable:rewritten]) {
+        return [self startPlaybackOfURL:rewritten error:error];
     }
 
     // Undecodable: rewrite to H.264 off the main thread. -openWallpaper: runs
@@ -634,6 +638,24 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 - (void)setFillMode:(VRVideoFillMode)fillMode {
     _fillMode = fillMode;
     self.playerLayer.videoGravity = VRLayerGravityForFillMode(fillMode);
+}
+
+- (void)setHDREnabled:(BOOL)enabled {
+    _hdrEnabled = enabled;
+    [self updateDynamicRangeForScreen:self.window.screen ?: NSScreen.mainScreen];
+}
+
+- (void)updateDynamicRangeForScreen:(NSScreen *)screen {
+    BOOL enabled = self.hdrEnabled && screen != nil &&
+        screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0;
+    if (@available(macOS 26.0, *)) {
+        CADynamicRange range = enabled ? CADynamicRangeConstrainedHigh : CADynamicRangeStandard;
+        self.layer.preferredDynamicRange = range;
+        self.playerLayer.preferredDynamicRange = range;
+    } else if (@available(macOS 14.0, *)) {
+        self.layer.wantsExtendedDynamicRangeContent = enabled;
+        self.playerLayer.wantsExtendedDynamicRangeContent = enabled;
+    }
 }
 
 @end

@@ -117,7 +117,8 @@ struct GeneralPage: SettingsPage {
         Form {
             Section {
                 Toggle("开机时自动启动 Mirage", isOn: $viewModel.settings.autoStart)
-                if viewModel.loginItemStatus == .requiresApproval {
+                if viewModel.loginItemCapability == .serviceManagement,
+                   viewModel.loginItemStatus == .requiresApproval {
                     HStack {
                         Label(L("需要在系统设置中批准"), systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
@@ -126,8 +127,8 @@ struct GeneralPage: SettingsPage {
                             viewModel.openLoginItemSettings()
                         }
                     }
-                } else if viewModel.loginItemStatus == .notFound {
-                    Label(L("系统无法找到登录项服务"), systemImage: "xmark.circle.fill")
+                } else if let loginItemError = viewModel.loginItemError {
+                    Label(loginItemError, systemImage: "xmark.circle.fill")
                         .foregroundStyle(.red)
                 }
                 Toggle(L("隐藏菜单栏图标"), isOn: Binding(

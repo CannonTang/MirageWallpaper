@@ -752,6 +752,7 @@ enum WEWallpaperSortingMethod: String, CaseIterable, Identifiable {
     case name = "名称"
     case rating = "评分"
     case fileSize = "文件大小"
+    case recentlyAdded = "最近添加"
 }
 
 enum WEWallpaperSortingSequence: Int, Codable {

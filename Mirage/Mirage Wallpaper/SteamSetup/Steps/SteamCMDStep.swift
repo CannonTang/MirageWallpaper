@@ -34,11 +34,49 @@ struct SteamCMDStep: View {
                             .font(.title2)
                             .bold()
 
-                        Text(L("当前 Apple 芯片 Mac 尚未安装 Rosetta 2。请先通过 macOS 系统方式安装 Rosetta 2，再重新打开此设置页面。"))
+                        Text(L("当前 Apple 芯片 Mac 尚未安装 Rosetta 2。点击下方按钮后，macOS 将显示官方安装窗口。"))
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 30)
+
+                        Button {
+                            viewModel.installRosetta()
+                        } label: {
+                            Label("安装 Rosetta 2", systemImage: "arrow.down.app.fill")
+                                .frame(width: 180)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                case .installingRosetta:
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("正在等待 macOS 安装 Rosetta 2...")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+
+                case .rosettaInstallFailed(let message):
+                    VStack(spacing: 16) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.red)
+                        Text("Rosetta 2 安装未完成")
+                            .font(.title2)
+                            .bold()
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                        Button {
+                            viewModel.installRosetta()
+                        } label: {
+                            Label("重试", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
 
                 case .found(let path):

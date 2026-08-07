@@ -90,7 +90,7 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
 
     static let placeholder = WorkshopItem(
         publishedFileId: "0",
-        title: "加载中...",
+        title: L("加载中..."),
         itemDescription: "",
         previewImageURL: nil,
         tags: [],
@@ -540,6 +540,8 @@ struct SteamServiceStatus: Equatable {
 enum SteamCMDInstallState: Equatable {
     case detecting
     case rosettaRequired
+    case installingRosetta
+    case rosettaInstallFailed(String)
     case found(String)
     case notFound
     case downloading(Double)
@@ -592,6 +594,7 @@ struct SteamAPIResponse: Codable {
 
 struct SteamAPIResponseBody: Codable {
     var total: Int?
+    var next_cursor: String?
     var publishedfiledetails: [SteamPublishedFile]?
 }
 

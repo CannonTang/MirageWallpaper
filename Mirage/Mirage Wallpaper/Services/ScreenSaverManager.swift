@@ -214,6 +214,7 @@ final class ScreenSaverManager {
             "rawProperties": rawPropertyValues,
             "fps": min(max(fps, 10), 60),
             "fillMode": runtime.fillMode.rawValue,
+            "enableHDRVideo": AppDelegate.shared.globalSettingsViewModel.settings.shouldEnableHDRVideo,
             "language": MirageLocalization.shared.locale.identifier
         ]
         guard JSONSerialization.isValidJSONObject(object) else { throw MirageScreenSaverError.invalidConfiguration }

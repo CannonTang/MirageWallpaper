@@ -57,6 +57,54 @@ struct WorkshopFilterSidebar: View {
                         }
                     }
 
+                    FilterSection("分辨率", id: "workshop.resolution", alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Button("全选") { workshopViewModel.selectAllResolutions() }
+                                    .disabled(workshopViewModel.allResolutionsSelected)
+                                Button("清空") { workshopViewModel.clearResolutions() }
+                                    .disabled(workshopViewModel.allResolutionsCleared)
+                            }
+                            .buttonStyle(.link)
+                            WorkshopResolutionFilterGroup(
+                                "其他", selection: $workshopViewModel.miscResolution,
+                                options: FRMiscResolution.allOptions,
+                                onChange: { option, isOn in
+                                    workshopViewModel.setResolutionOption(\.miscResolution, option: option, isOn: isOn)
+                                })
+                            WorkshopResolutionFilterGroup(
+                                "宽屏", selection: $workshopViewModel.widescreenResolution,
+                                options: FRWidescreenResolution.allOptions,
+                                onChange: { option, isOn in
+                                    workshopViewModel.setResolutionOption(\.widescreenResolution, option: option, isOn: isOn)
+                                })
+                            WorkshopResolutionFilterGroup(
+                                "超宽屏", selection: $workshopViewModel.ultraWidescreenResolution,
+                                options: FRUltraWidescreenResolution.allOptions,
+                                onChange: { option, isOn in
+                                    workshopViewModel.setResolutionOption(\.ultraWidescreenResolution, option: option, isOn: isOn)
+                                })
+                            WorkshopResolutionFilterGroup(
+                                "双显示器", selection: $workshopViewModel.dualscreenResolution,
+                                options: FRDualscreenResolution.allOptions,
+                                onChange: { option, isOn in
+                                    workshopViewModel.setResolutionOption(\.dualscreenResolution, option: option, isOn: isOn)
+                                })
+                            WorkshopResolutionFilterGroup(
+                                "三显示器", selection: $workshopViewModel.triplescreenResolution,
+                                options: FRTriplescreenResolution.allOptions,
+                                onChange: { option, isOn in
+                                    workshopViewModel.setResolutionOption(\.triplescreenResolution, option: option, isOn: isOn)
+                                })
+                            WorkshopResolutionFilterGroup(
+                                "纵向监视器/手机", selection: $workshopViewModel.portraitResolution,
+                                options: FRPortraitScreenResolution.allOptions,
+                                onChange: { option, isOn in
+                                    workshopViewModel.setResolutionOption(\.portraitResolution, option: option, isOn: isOn)
+                                })
+                        }
+                    }
+
                     FilterSection("标签", id: "workshop.tags", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -88,6 +136,42 @@ struct WorkshopFilterSidebar: View {
                 .padding(.trailing)
             }
             Divider()
+        }
+    }
+}
+
+
+private struct WorkshopResolutionFilterGroup<Filter>: View where Filter: FilterResultsModel {
+    let title: LocalizedStringKey
+    @Binding var selection: Filter
+    let options: [String]
+    let onChange: (Filter, Bool) -> Void
+
+    init(
+        _ title: LocalizedStringKey,
+        selection: Binding<Filter>,
+        options: [String],
+        onChange: @escaping (Filter, Bool) -> Void
+    ) {
+        self.title = title
+        _selection = selection
+        self.options = options
+        self.onChange = onChange
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            ForEach(options.indices, id: \.self) { index in
+                let option = Filter.option(at: index)
+                Toggle(LocalizedStringKey(options[index]), isOn: Binding(
+                    get: { selection.contains(option) },
+                    set: { onChange(option, $0) }
+                ))
+                .toggleStyle(.checkbox)
+            }
         }
     }
 }

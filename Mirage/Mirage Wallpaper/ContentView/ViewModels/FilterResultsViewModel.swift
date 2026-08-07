@@ -269,6 +269,50 @@ enum FRResolutionFilter {
     private static let cacheLock = NSLock()
     private static var measuredKinds: [String: CachedMeasurement] = [:]
 
+    static func selectedSteamTags(
+        widescreen: FRWidescreenResolution,
+        ultraWidescreen: FRUltraWidescreenResolution,
+        dualscreen: FRDualscreenResolution,
+        triplescreen: FRTriplescreenResolution,
+        portrait: FRPortraitScreenResolution,
+        misc: FRMiscResolution
+    ) -> [String]? {
+        if allResolutionsSelected(
+            widescreen: widescreen,
+            ultraWidescreen: ultraWidescreen,
+            dualscreen: dualscreen,
+            triplescreen: triplescreen,
+            portrait: portrait,
+            misc: misc
+        ) {
+            return nil
+        }
+        let groups: [(Int, [String])] = [
+            (widescreen.rawValue, [
+                "Standard Definition", "1280 x 720", "1366 x 768", "1920 x 1080",
+                "2560 x 1440", "3840 x 2160", "7680 x 4320"
+            ]),
+            (ultraWidescreen.rawValue, [
+                "Ultrawide Standard Definition", "Ultrawide 2560 x 1080", "Ultrawide 3440 x 1440"
+            ]),
+            (dualscreen.rawValue, [
+                "Dual Standard Definition", "Dual 3840 x 1080", "Dual 5120 x 1440", "Dual 7680 x 2160"
+            ]),
+            (triplescreen.rawValue, [
+                "Triple Standard Definition", "Triple 4096 x 768", "Triple 5760 x 1080",
+                "Triple 7680 x 1440", "Triple 11520 x 2160"
+            ]),
+            (portrait.rawValue, [
+                "Portrait Standard Definition", "Portrait 720 x 1280", "Portrait 1080 x 1920",
+                "Portrait 1440 x 2560", "Portrait 2160 x 3840"
+            ]),
+            (misc.rawValue, ["Other resolution", "Dynamic resolution"])
+        ]
+        return groups.flatMap { rawValue, tags in
+            tags.indices.compactMap { rawValue & (1 << $0) != 0 ? tags[$0] : nil }
+        }
+    }
+
     static func matches(
         wallpaper: WEWallpaper,
         widescreen: FRWidescreenResolution,

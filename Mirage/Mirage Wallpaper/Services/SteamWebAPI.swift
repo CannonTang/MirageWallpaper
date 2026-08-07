@@ -74,23 +74,21 @@ final class SteamWebAPI {
         sortOrder: WorkshopSortOrder = .trending,
         typeFilter: WorkshopTypeFilter = .all,
         ageRating: WorkshopAgeRatingFilter = .all,
+        widescreenResolution: FRWidescreenResolution = .all,
+        ultraWidescreenResolution: FRUltraWidescreenResolution = .all,
+        dualscreenResolution: FRDualscreenResolution = .all,
+        triplescreenResolution: FRTriplescreenResolution = .all,
+        portraitResolution: FRPortraitScreenResolution = .all,
+        miscResolution: FRMiscResolution = .all,
         page: Int = 1,
         perPage: Int = 30,
         trendDays: Int? = nil,
         enrichCreatorProfiles: Bool = true
     ) async throws -> (items: [WorkshopItem], total: Int) {
-        try await throttle()
-
         let normalizedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveSortOrder: WorkshopSortOrder = normalizedSearchText.isEmpty
-            ? sortOrder
-            : .textRelevance
-
         var params: [String: String] = [
             "key": apiKey,
-            "query_type": "\(effectiveSortOrder.apiValue)",
-            "page": "\(page)",
-            "numperpage": "\(perPage)",
+            "query_type": "\(sortOrder.apiValue)",
             "appid": appId,
             "filetype": "18",
             "return_tags": "true",
@@ -99,7 +97,7 @@ final class SteamWebAPI {
             "strip_description_bbcode": "true",
         ]
 
-        if effectiveSortOrder.usesTrendPeriod {
+        if sortOrder.usesTrendPeriod {
             let days = min(WorkshopTrendPeriod.year.rawValue,
                            max(1, trendDays ?? WorkshopTrendPeriod.week.rawValue))
             params["days"] = "\(days)"
@@ -117,14 +115,6 @@ final class SteamWebAPI {
         if typeFilter != .all {
             allTags.append(typeFilter.rawValue.capitalized)
         }
-        // Age rating filtering. Rating tags are mutually exclusive (each wallpaper has only one rating), 
-        // so requiredtags AND combination cannot be used when multiple options are selected.
-        // Strategy:
-        //   - Only Questionable / Mature selected: use requiredtags for strict matching to exclude untagged wallpapers
-        //   - Questionable + Mature selected (Everyone not selected) with no other type tags: use requiredtags +
-        //     match_all_tags=false (OR semantics) to precisely return either Q or M
-        //   - Other cases (including Everyone selected): use excludedtags to filter out unselected ratings,
-        //     allowing untagged wallpapers to fall under "Everyone"
         let selectedRatings = ageRating.selectedRatings
         let hasEveryone = selectedRatings.contains(WorkshopAgeRating.everyone)
         var useOrForTags = false
@@ -142,6 +132,31 @@ final class SteamWebAPI {
             }
         }
 
+        let resolutionTags = FRResolutionFilter.selectedSteamTags(
+            widescreen: widescreenResolution,
+            ultraWidescreen: ultraWidescreenResolution,
+            dualscreen: dualscreenResolution,
+            triplescreen: triplescreenResolution,
+            portrait: portraitResolution,
+            misc: miscResolution
+        )
+        if resolutionTags?.isEmpty == true {
+            return ([], 0)
+        }
+        var filterResolutionLocally = false
+        if let resolutionTags {
+            if useOrForTags {
+                filterResolutionLocally = true
+            } else if allTags.isEmpty {
+                allTags.append(contentsOf: resolutionTags)
+                useOrForTags = resolutionTags.count > 1
+            } else if resolutionTags.count == 1 {
+                allTags.append(resolutionTags[0])
+            } else {
+                filterResolutionLocally = true
+            }
+        }
+
         for (index, tag) in allTags.enumerated() {
             params["requiredtags[\(index)]"] = tag
         }
@@ -149,6 +164,70 @@ final class SteamWebAPI {
             params["match_all_tags"] = "false"
         }
 
+        let requestedPage = max(1, page)
+        let requestedPageSize = max(1, perPage)
+        let resultItems: [WorkshopItem]
+        let resultTotal: Int
+        if filterResolutionLocally {
+            var cursor = "*"
+            var seenCursors = Set<String>()
+            var matchingItems: [WorkshopItem] = []
+            var exhausted = false
+            let requestedEnd = requestedPage * requestedPageSize
+            while matchingItems.count < requestedEnd + 1 {
+                try Task.checkCancellation()
+                guard seenCursors.insert(cursor).inserted else {
+                    exhausted = true
+                    break
+                }
+                var cursorParams = params
+                cursorParams["numperpage"] = "100"
+                cursorParams["cursor"] = cursor
+                let batch = try await fetchQueryBatch(params: cursorParams)
+                matchingItems.append(contentsOf: batch.items.filter {
+                    FRResolutionFilter.matches(
+                        tags: $0.tags,
+                        widescreen: widescreenResolution,
+                        ultraWidescreen: ultraWidescreenResolution,
+                        dualscreen: dualscreenResolution,
+                        triplescreen: triplescreenResolution,
+                        portrait: portraitResolution,
+                        misc: miscResolution
+                    )
+                })
+                guard let nextCursor = batch.nextCursor,
+                      !nextCursor.isEmpty,
+                      nextCursor != cursor,
+                      !batch.items.isEmpty else {
+                    exhausted = true
+                    break
+                }
+                cursor = nextCursor
+            }
+            let start = (requestedPage - 1) * requestedPageSize
+            if start < matchingItems.count {
+                let end = min(start + requestedPageSize, matchingItems.count)
+                resultItems = Array(matchingItems[start..<end])
+            } else {
+                resultItems = []
+            }
+            resultTotal = exhausted ? matchingItems.count : max(matchingItems.count, requestedEnd + 1)
+        } else {
+            params["page"] = "\(requestedPage)"
+            params["numperpage"] = "\(requestedPageSize)"
+            let batch = try await fetchQueryBatch(params: params)
+            resultItems = batch.items
+            resultTotal = batch.total
+        }
+
+        let items = enrichCreatorProfiles ? await enrichCreators(in: resultItems) : resultItems
+        return (items, resultTotal)
+    }
+
+    private func fetchQueryBatch(
+        params: [String: String]
+    ) async throws -> (items: [WorkshopItem], total: Int, nextCursor: String?) {
+        try await throttle()
         var components = URLComponents(string: baseURL + "IPublishedFileService/QueryFiles/v1/")!
         components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
 
@@ -168,11 +247,8 @@ final class SteamWebAPI {
 
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
         let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
-        let visibleItems = decodedItems.filter { $0.fileSize > 0 }
-        let items = enrichCreatorProfiles ? await enrichCreators(in: visibleItems) : visibleItems
-        let total = apiResponse.response.total ?? items.count
-
-        return (items, total)
+        let items = decodedItems.filter { $0.fileSize > 0 }
+        return (items, apiResponse.response.total ?? items.count, apiResponse.response.next_cursor)
     }
 
     // MARK: - Get File Details
