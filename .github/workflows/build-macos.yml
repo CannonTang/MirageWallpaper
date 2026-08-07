@@ -187,11 +187,16 @@ jobs:
           fi
 
           notes_file="$RUNNER_TEMP/release-notes.md"
-          {
-            echo "Commit: \`${GITHUB_SHA}\`"
-            echo
-            git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
-          } > "$notes_file"
+          release_notes_source=".github/release-notes/${release_tag}.md"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && -f "$release_notes_source" ]]; then
+            cp "$release_notes_source" "$notes_file"
+          else
+            {
+              echo "Commit: \`${GITHUB_SHA}\`"
+              echo
+              git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
+            } > "$notes_file"
+          fi
 
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             gh release create "$release_tag" release-assets/* \
@@ -257,12 +262,17 @@ jobs:
               cp "update-feeds/appcast-${arch}.xml" "$appcast_dir/appcast-${arch}.xml"
             fi
             archive_name="$(basename "$archive" .zip)"
-            {
-              echo "Commit: ${GITHUB_SHA}"
-              echo "Channel: ${RELEASE_CHANNEL}"
-              echo
-              git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
-            } > "$appcast_dir/${archive_name}.txt"
+            release_notes_source=".github/release-notes/${RELEASE_TAG}.md"
+            if [[ "$RELEASE_CHANNEL" == stable && -f "$release_notes_source" ]]; then
+              cp "$release_notes_source" "$appcast_dir/${archive_name}.txt"
+            else
+              {
+                echo "Commit: ${GITHUB_SHA}"
+                echo "Channel: ${RELEASE_CHANNEL}"
+                echo
+                git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
+              } > "$appcast_dir/${archive_name}.txt"
+            fi
 
             command=("$tool" --ed-key-file - --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" --link "https://github.com/${GITHUB_REPOSITORY}" --embed-release-notes --versions "$BUILD_NUMBER" --maximum-versions 6 --maximum-deltas 0)
             if [[ "$RELEASE_CHANNEL" == beta ]]; then
