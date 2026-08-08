@@ -308,6 +308,5 @@ struct GeneralPage: SettingsPage {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: viewModel.settings) { _, _ in viewModel.save() }
     }
 }

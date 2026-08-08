@@ -202,9 +202,7 @@ class GlobalSettingsViewModel: ObservableObject {
     
     @Published var selection = 0
 
-    // Drives the settings panel that now floats over the main window as a sheet
-    // instead of living in its own top-level NSWindow.
-    @Published var isSettingsPresented = false
+    var isSettingsPresented = false
 
     @Published var isFirstLaunch = UserDefaults.standard.value(forKey: "IsFirstLaunch") as? Bool ?? true
     
@@ -357,9 +355,13 @@ class GlobalSettingsViewModel: ObservableObject {
     // windows are still covering the screen and geometry detection would wrongly
     // report the desktop as hidden. We briefly trust the click as a reveal hint
     // to bridge that animation, then hand back to the geometry truth.
-    private var lastDesktopRevealHintAt: Date = .distantPast
+    private var lastDesktopRevealHintAt: [CGDirectDisplayID: Date] = [:]
     private static let desktopRevealGrace: TimeInterval = 1.2
-    private(set) var effectivePlaybackAction = GSPlayback.keepRunning
+    private(set) var effectivePlaybackActions: [DisplayKey: GSPlayback] = [:]
+
+    func effectivePlaybackAction(for key: DisplayKey) -> GSPlayback {
+        effectivePlaybackActions[key] ?? .keepRunning
+    }
 
     /// Runs the window-geometry / power / audio probes off the main thread.
     private let policyQueue = DispatchQueue(label: "com.mirage.playback-policy", qos: .utility)
@@ -431,7 +433,7 @@ class GlobalSettingsViewModel: ObservableObject {
 
         guard anyRuleEnabled,
               AppDelegate.shared.wallpaperViewModel.hasAnyWallpaper else {
-            effectivePlaybackAction = .keepRunning
+            effectivePlaybackActions.removeAll()
             AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicy(.keepRunning)
             return
         }
@@ -466,11 +468,12 @@ class GlobalSettingsViewModel: ObservableObject {
                 // it activates another app the activation notification already
                 // schedules the re-evaluation. Short-circuiting here drops the
                 // settling burst that every click anywhere on screen used to fire.
-                guard self.clickLandedOnDesktop(at: NSEvent.mouseLocation) else { return }
+                guard let displayID = self.displayClickedOnBareDesktop(
+                    at: NSEvent.mouseLocation) else { return }
                 // Record the hint so the grace window bridges the reveal
                 // animation, then let the settling re-evaluations confirm the
                 // state from real window geometry.
-                self.lastDesktopRevealHintAt = Date()
+                self.lastDesktopRevealHintAt[displayID] = Date()
                 self.scheduleSettlingEvaluations()
             }
         }
@@ -503,7 +506,7 @@ class GlobalSettingsViewModel: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             AppDelegate.shared.wallpaperViewModel
-                .applyPlaybackPolicy(self.effectivePlaybackAction)
+                .applyPlaybackPolicies(self.effectivePlaybackActions)
         }
     }
 
@@ -629,19 +632,26 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     func reset() {
-        settings = (try? JSONDecoder()
+        var restored = (try? JSONDecoder()
             .decode(GlobalSettings.self,
                 from: UserDefaults.standard.data(forKey: "GlobalSettings")
             ?? Data()))
         ?? GlobalSettings()
-        settings.animatedPreviewPlayback = settings.animatedPreviewPlayback ?? .hover
-        savedSettings = settings
+        restored.animatedPreviewPlayback = restored.animatedPreviewPlayback ?? .hover
+        if settings != restored {
+            settings = restored
+        }
+        if savedSettings != restored {
+            savedSettings = restored
+        }
     }
 
     func save() {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         UserDefaults.standard.set(data, forKey: "GlobalSettings")
-        savedSettings = settings
+        if savedSettings != settings {
+            savedSettings = settings
+        }
     }
     
     func setQuality(_ quality: GSQuality) {
@@ -728,7 +738,7 @@ class GlobalSettingsViewModel: ObservableObject {
         var pauseOnCoverage = false
         var coverageThreshold: CGFloat = 0.9
 
-        var withinRevealGrace = false
+        var revealGraceDisplays: Set<CGDirectDisplayID> = []
 
         var frontPID: pid_t?
         var frontBundleID: String?
@@ -739,7 +749,7 @@ class GlobalSettingsViewModel: ObservableObject {
         /// PIDs whose `activationPolicy` is `.regular`, resolved up front because
         /// `NSWorkspace.runningApplications` is AppKit state.
         var regularPIDs: Set<pid_t> = []
-        var wallpaperDisplayBounds: [CGRect] = []
+        var wallpaperDisplays: [CGDirectDisplayID: CGRect] = [:]
     }
 
     private struct PlaybackPolicySettingsKey: Equatable {
@@ -780,11 +790,11 @@ class GlobalSettingsViewModel: ObservableObject {
         let generation = policyGeneration
         evaluationInFlight = true
         policyQueue.async { [weak self] in
-            let action = Self.computePlaybackAction(inputs)
+            let actions = Self.computePlaybackActions(inputs)
             DispatchQueue.main.async {
                 guard let self, self.policyGeneration == generation else { return }
                 self.evaluationInFlight = false
-                self.applyPolicyResult(action)
+                self.applyPolicyResult(actions)
                 if self.evaluationPending {
                     self.evaluationPending = false
                     self.evaluatePlaybackState()
@@ -804,8 +814,6 @@ class GlobalSettingsViewModel: ObservableObject {
         inputs.pauseOnCoverage = settings.shouldPauseWhenWindowCoverageExceeds
         inputs.coverageThreshold = CGFloat(settings.normalizedWindowCoverageThreshold / 100)
 
-        inputs.withinRevealGrace =
-            Date().timeIntervalSince(lastDesktopRevealHintAt) < Self.desktopRevealGrace
         inputs.selfPID = ProcessInfo.processInfo.processIdentifier
 
         let needsWindowGeometry = settings.otherApplicationFocused != .keepRunning ||
@@ -819,9 +827,15 @@ class GlobalSettingsViewModel: ObservableObject {
         guard needsWindowGeometry else { return inputs }
 
         let registry = DisplayRegistry.shared
-        inputs.wallpaperDisplayBounds = AppDelegate.shared.wallpaperViewModel.displayStates.keys.compactMap {
-            registry.displayID(for: $0).map(CGDisplayBounds)
+        for key in AppDelegate.shared.wallpaperViewModel.displayStates.keys {
+            guard let displayID = registry.displayID(for: key) else { continue }
+            inputs.wallpaperDisplays[displayID] = CGDisplayBounds(displayID)
         }
+        let now = Date()
+        lastDesktopRevealHintAt = lastDesktopRevealHintAt.filter {
+            now.timeIntervalSince($0.value) < Self.desktopRevealGrace
+        }
+        inputs.revealGraceDisplays = Set(lastDesktopRevealHintAt.keys)
 
         let front = NSWorkspace.shared.frontmostApplication
         inputs.frontPID = front?.processIdentifier
@@ -835,60 +849,60 @@ class GlobalSettingsViewModel: ObservableObject {
 
     /// Background half: window geometry, power source and audio probes. Static so
     /// it provably touches no main-thread-owned state.
-    private static func computePlaybackAction(_ inputs: PolicyInputs) -> GSPlayback {
-        var actions: [GSPlayback] = []
-
-        if inputs.onDisplayAsleep != .keepRunning, allActiveDisplaysAreAsleep() {
-            actions.append(inputs.onDisplayAsleep)
-        }
-
+    private static func computePlaybackActions(
+        _ inputs: PolicyInputs
+    ) -> [CGDirectDisplayID: GSPlayback] {
+        var globalActions: [GSPlayback] = []
         if inputs.onBattery != .keepRunning, isOnBattery() {
-            actions.append(inputs.onBattery)
+            globalActions.append(inputs.onBattery)
         }
-
-        if inputs.onFocused != .keepRunning || inputs.onFullscreen != .keepRunning || inputs.pauseOnCoverage {
-            var cachedWindows: [WindowEntry]?
-            func windows() -> [WindowEntry] {
-                if let cachedWindows { return cachedWindows }
-                let captured = captureWindowList()
-                cachedWindows = captured
-                return captured
-            }
-
-            if inputs.pauseOnCoverage,
-               windowCoverageExceedsThreshold(windows(), inputs: inputs) {
-                actions.append(.pause)
-            }
-
-            if inputs.onFocused != .keepRunning || inputs.onFullscreen != .keepRunning {
-                let isSelf = inputs.frontPID == inputs.selfPID
-                let desktopViewed = inputs.withinRevealGrace ||
-                    isDesktopExposed(windows(), inputs: inputs)
-                let isDesktopFinder = inputs.frontBundleID == "com.apple.finder"
-                    && !appHasVisibleWindows(windows(), pid: inputs.frontPID)
-
-                if let frontPID = inputs.frontPID, inputs.frontIsRegular, !isSelf,
-                   !isDesktopFinder, !desktopViewed {
-                    if appIsFullscreen(windows(), pid: frontPID) {
-                        actions.append(inputs.onFullscreen)
-                    } else {
-                        actions.append(inputs.onFocused)
-                    }
-                }
-            }
-        }
-
         if inputs.onAudio != .keepRunning,
            isOtherAppPlayingAudio(selfPID: inputs.selfPID, rendererPIDs: inputs.rendererPIDs) {
-            actions.append(inputs.onAudio)
+            globalActions.append(inputs.onAudio)
         }
-
-        return strongestAction(actions)
+        let needsWindows = inputs.onFocused != .keepRunning ||
+            inputs.onFullscreen != .keepRunning || inputs.pauseOnCoverage
+        let windows = needsWindows ? captureWindowList() : []
+        let isSelf = inputs.frontPID == inputs.selfPID
+        let isDesktopFinder = inputs.frontBundleID == "com.apple.finder" &&
+            !appHasVisibleWindows(windows, pid: inputs.frontPID)
+        var result: [CGDirectDisplayID: GSPlayback] = [:]
+        for (displayID, bounds) in inputs.wallpaperDisplays {
+            var actions = globalActions
+            if inputs.onDisplayAsleep != .keepRunning,
+               CGDisplayIsAsleep(displayID) != 0 {
+                actions.append(inputs.onDisplayAsleep)
+            }
+            if inputs.pauseOnCoverage,
+               windowCoverageExceedsThreshold(windows, display: bounds, inputs: inputs) {
+                actions.append(.pause)
+            }
+            if let frontPID = inputs.frontPID,
+               inputs.frontIsRegular,
+               !isSelf,
+               !isDesktopFinder,
+               !inputs.revealGraceDisplays.contains(displayID),
+               !isDesktopExposed(windows, display: bounds, inputs: inputs),
+               appHasVisibleWindow(windows, pid: frontPID, display: bounds) {
+                if inputs.onFullscreen != .keepRunning,
+                   appIsFullscreen(windows, pid: frontPID, display: bounds) {
+                    actions.append(inputs.onFullscreen)
+                } else if inputs.onFocused != .keepRunning {
+                    actions.append(inputs.onFocused)
+                }
+            }
+            result[displayID] = strongestAction(actions)
+        }
+        return result
     }
 
     /// Main-thread tail: publish the decision and retune the polling cadence.
-    private func applyPolicyResult(_ action: GSPlayback) {
-        if action == effectivePlaybackAction {
+    private func applyPolicyResult(_ actionsByDisplay: [CGDirectDisplayID: GSPlayback]) {
+        let registry = DisplayRegistry.shared
+        let actions = Dictionary(uniqueKeysWithValues: actionsByDisplay.compactMap { displayID, action in
+            registry.key(forDisplay: displayID).map { ($0, action) }
+        })
+        if actions == effectivePlaybackActions {
             stableEvaluationCount += 1
             if stableEvaluationCount >= Self.stableEvaluationsBeforeBackoff {
                 stableEvaluationCount = 0
@@ -898,8 +912,8 @@ class GlobalSettingsViewModel: ObservableObject {
             stableEvaluationCount = 0
             restorePollingInterval()
         }
-        effectivePlaybackAction = action
-        AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicy(action)
+        effectivePlaybackActions = actions
+        AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicies(actions)
     }
 
     /// Bridge the on-screen window list once. Front-to-back order is preserved,
@@ -992,38 +1006,23 @@ class GlobalSettingsViewModel: ObservableObject {
         return pid
     }
 
-    private static func allActiveDisplaysAreAsleep() -> Bool {
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return false }
-        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return false }
-        return displays.prefix(Int(count)).allSatisfy { CGDisplayIsAsleep($0) != 0 }
-    }
-
-    private static func appIsFullscreen(_ windows: [WindowEntry], pid: pid_t) -> Bool {
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return false }
-        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &displayIDs, &count) == .success else { return false }
-        let displays = displayIDs.prefix(Int(count)).map(CGDisplayBounds)
-
+    private static func appIsFullscreen(_ windows: [WindowEntry], pid: pid_t,
+                                        display: CGRect) -> Bool {
         for window in windows where window.pid == pid && window.layer == 0 && window.alpha > 0.05 {
             guard window.bounds.width >= 120, window.bounds.height >= 80 else { continue }
-            for display in displays {
-                let intersection = window.bounds.intersection(display)
-                guard !intersection.isNull else { continue }
-                let displayArea = display.width * display.height
-                let windowArea = window.bounds.width * window.bounds.height
-                let intersectionArea = intersection.width * intersection.height
-                let tolerance = max(4, min(display.width, display.height) * 0.005)
-                let edgesMatch = abs(window.bounds.minX - display.minX) <= tolerance &&
-                    abs(window.bounds.minY - display.minY) <= tolerance &&
-                    abs(window.bounds.maxX - display.maxX) <= tolerance &&
-                    abs(window.bounds.maxY - display.maxY) <= tolerance
-                if edgesMatch || (intersectionArea / max(displayArea, 1) >= 0.985 &&
-                                  intersectionArea / max(windowArea, 1) >= 0.90) {
-                    return true
-                }
+            let intersection = window.bounds.intersection(display)
+            guard !intersection.isNull else { continue }
+            let displayArea = display.width * display.height
+            let windowArea = window.bounds.width * window.bounds.height
+            let intersectionArea = intersection.width * intersection.height
+            let tolerance = max(4, min(display.width, display.height) * 0.005)
+            let edgesMatch = abs(window.bounds.minX - display.minX) <= tolerance &&
+                abs(window.bounds.minY - display.minY) <= tolerance &&
+                abs(window.bounds.maxX - display.maxX) <= tolerance &&
+                abs(window.bounds.maxY - display.maxY) <= tolerance
+            if edgesMatch || (intersectionArea / max(displayArea, 1) >= 0.985 &&
+                              intersectionArea / max(windowArea, 1) >= 0.90) {
+                return true
             }
         }
         return false
@@ -1039,9 +1038,17 @@ class GlobalSettingsViewModel: ObservableObject {
         return false
     }
 
+    private static func appHasVisibleWindow(_ windows: [WindowEntry], pid: pid_t,
+                                            display: CGRect) -> Bool {
+        windows.contains {
+            $0.pid == pid && $0.layer == 0 && $0.alpha > 0.05 &&
+                !$0.bounds.intersection(display).isNull
+        }
+    }
+
     private static func windowCoverageExceedsThreshold(_ windows: [WindowEntry],
+                                                        display: CGRect,
                                                         inputs: PolicyInputs) -> Bool {
-        guard !inputs.wallpaperDisplayBounds.isEmpty else { return false }
         let candidates = windows.filter {
             $0.layer == 0 &&
             $0.pid != inputs.selfPID &&
@@ -1051,19 +1058,14 @@ class GlobalSettingsViewModel: ObservableObject {
             $0.bounds.width >= 120 &&
             $0.bounds.height >= 80
         }
-        for display in inputs.wallpaperDisplayBounds {
-            let area = display.width * display.height
-            guard area > 0 else { continue }
-            let rectangles = candidates.compactMap { window -> CGRect? in
-                let clipped = window.bounds.intersection(display).standardized
-                guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return nil }
-                return clipped
-            }
-            if rectangleUnionArea(rectangles) / area >= inputs.coverageThreshold {
-                return true
-            }
+        let area = display.width * display.height
+        guard area > 0 else { return false }
+        let rectangles = candidates.compactMap { window -> CGRect? in
+            let clipped = window.bounds.intersection(display).standardized
+            guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return nil }
+            return clipped
         }
-        return false
+        return rectangleUnionArea(rectangles) / area >= inputs.coverageThreshold
     }
 
     private static func rectangleUnionArea(_ rectangles: [CGRect]) -> CGFloat {
@@ -1098,14 +1100,17 @@ class GlobalSettingsViewModel: ObservableObject {
     /// whether the user clicked bare desktop (a reveal-desktop gesture) rather
     /// than any on-screen UI. Evaluated at mouse-down, before a reveal animation
     /// moves windows, so it does not depend on transient window geometry.
-    private func clickLandedOnDesktop(at screenPoint: NSPoint) -> Bool {
+    private func displayClickedOnBareDesktop(at screenPoint: NSPoint) -> CGDirectDisplayID? {
         // NSEvent.mouseLocation is in AppKit coordinates (origin bottom-left of
         // the main screen). CGWindowList bounds are in CoreGraphics coordinates
         // (origin top-left). Flip Y using the primary display height.
         guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main else {
-            return false
+            return nil
         }
         let cgPoint = CGPoint(x: screenPoint.x, y: primary.frame.height - screenPoint.y)
+        guard let displayID = DisplayRegistry.shared.connected.first(where: {
+            CGDisplayBounds($0.displayID).contains(cgPoint)
+        })?.displayID else { return nil }
 
         let windows = Self.captureWindowList()
         let rendererPIDs = AppDelegate.shared.wallpaperViewModel.renderer.processIdentifiers
@@ -1121,20 +1126,14 @@ class GlobalSettingsViewModel: ObservableObject {
                   window.pid != selfPID, !rendererPIDs.contains(window.pid),
                   window.alpha > 0.05 else { continue }
             if window.bounds.contains(cgPoint) {
-                return false
+                return nil
             }
         }
-        return true
+        return displayID
     }
 
-    private static func isDesktopExposed(_ windows: [WindowEntry],
+    private static func isDesktopExposed(_ windows: [WindowEntry], display: CGRect,
                                          inputs: PolicyInputs) -> Bool {
-        var displayCount: UInt32 = 0
-        CGGetActiveDisplayList(0, nil, &displayCount)
-        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
-        CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount)
-        let displays = displayIDs.prefix(Int(displayCount)).map(CGDisplayBounds)
-
         for window in windows {
             guard window.layer == 0,
                   window.pid != inputs.selfPID,
@@ -1145,15 +1144,14 @@ class GlobalSettingsViewModel: ObservableObject {
 
             let bounds = window.bounds
             let windowArea = bounds.width * bounds.height
-            for display in displays {
-                let visibleArea = bounds.intersection(display).standardized
-                guard !visibleArea.isNull else { continue }
-                let intersectionArea = visibleArea.width * visibleArea.height
-                let screenArea = display.width * display.height
-                if intersectionArea >= 30_000,
-                   (intersectionArea / max(windowArea, 1) >= 0.25 || intersectionArea / max(screenArea, 1) >= 0.02) {
-                    return false
-                }
+            let visibleArea = bounds.intersection(display).standardized
+            guard !visibleArea.isNull else { continue }
+            let intersectionArea = visibleArea.width * visibleArea.height
+            let screenArea = display.width * display.height
+            if intersectionArea >= 30_000,
+               (intersectionArea / max(windowArea, 1) >= 0.25 ||
+                intersectionArea / max(screenArea, 1) >= 0.02) {
+                return false
             }
         }
         return true

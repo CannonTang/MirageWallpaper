@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
 
     var mainWindowController: MainWindowController!
+    var settingsWindowController: SettingsWindowController!
 
     var contentViewModel = ContentViewModel()
     var wallpaperViewModel = WallpaperViewModel()
@@ -39,6 +40,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
+        self.settingsWindowController = SettingsWindowController(
+            viewModel: globalSettingsViewModel)
         applyDeveloperMode(enabled: globalSettingsViewModel.settings.isDeveloperModeEnabled)
         localizationObserver = NotificationCenter.default.addObserver(
             forName: MirageLocalization.didChangeNotification,
@@ -156,11 +159,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettingsWindow() {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        // The settings panel is a sheet that floats over the main window, so the
-        // host window must exist and be on screen before we present it.
         openMainWindow()
+        guard let parent = mainWindowController.window,
+              let settingsWindow = settingsWindowController.window else { return }
+        if parent.attachedSheet === settingsWindow { return }
+        guard parent.attachedSheet == nil else { return }
         globalSettingsViewModel.isSettingsPresented = true
+        parent.beginSheet(settingsWindow)
+    }
+
+    func closeSettingsWindow(commit: Bool) {
+        if commit {
+            globalSettingsViewModel.save()
+        } else {
+            globalSettingsViewModel.reset()
+        }
+        globalSettingsViewModel.isSettingsPresented = false
+        guard let settingsWindow = settingsWindowController?.window else { return }
+        if let parent = settingsWindow.sheetParent {
+            parent.endSheet(settingsWindow)
+        } else {
+            settingsWindow.orderOut(nil)
+        }
     }
 
     @objc func openSteamAPIKeySettings() {
@@ -182,6 +202,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let window = mainWindowController?.window, window.isVisible else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func hideDockIconIfNoWindowsAreVisible() {
+        DispatchQueue.main.async {
+            guard !NSApp.windows.contains(where: { $0.isVisible }) else { return }
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     func applyStatusItemVisibility(hidden: Bool) {
@@ -213,6 +240,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setMainMenu()
         setStatusMenu()
         mainWindowController?.refreshLocalizedTitle()
+        settingsWindowController?.window?.title = L("设置")
         developerLogWindowController?.refreshLocalization()
     }
 }

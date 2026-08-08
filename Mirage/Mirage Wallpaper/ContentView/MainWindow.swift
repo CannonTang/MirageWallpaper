@@ -83,11 +83,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared.contentViewModel.isStaging = false
-        // The settings panel is now a sheet hosted by this window, so it can no
-        // longer be visible on its own once the main window closes.
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.accessory)
-        }
+        AppDelegate.shared.hideDockIconIfNoWindowsAreVisible()
     }
     
     func windowDidResignKey(_ notification: Notification) { }

@@ -145,6 +145,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .padding()
+                    .frame(minWidth: 640)
 
                     ZStack {
                         WallpaperPreview(contentViewModel: viewModel,
@@ -179,7 +180,12 @@ struct ContentView: View {
                             .frame(maxWidth: 420)
                         }
                     }
-                    .frame(maxWidth: workshopViewModel.showCreatorProfile ? 420 : 320)
+                    .frame(
+                        minWidth: workshopViewModel.showCreatorProfile ? 360 : 320,
+                        idealWidth: workshopViewModel.showCreatorProfile ? 420 : 320,
+                        maxWidth: workshopViewModel.showCreatorProfile ? 420 : 360
+                    )
+                    .layoutPriority(1)
                 }
             }
             .opacity(viewModel.isStaging ? 1 : 0)
@@ -263,14 +269,6 @@ struct ContentView: View {
         }) {
             SteamSetupView(viewModel: steamSetupViewModel)
                 .frame(width: 560, height: 640)
-        }
-        .sheet(isPresented: $globalSettingsViewModel.isSettingsPresented, onDismiss: {
-            // Match the previous window-close behavior: discard any in-flight
-            // edits that were not committed via "好".
-            globalSettingsViewModel.reset()
-        }) {
-            SettingsView()
-                .environmentObject(globalSettingsViewModel)
         }
         // Applied outside the sheets so the card also floats over an open sheet,
         // and after them so it is the topmost layer in the window.

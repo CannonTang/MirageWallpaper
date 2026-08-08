@@ -196,7 +196,9 @@ final class PlaylistRotator {
     }
 
     private func shouldAdvance(vm: WallpaperViewModel) -> Bool {
-        let policy = AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction
+        let policy = DisplayRegistry.shared.key(forScreenIndex: screen).map {
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: $0)
+        } ?? .keepRunning
         if policy == .stop { return false }
         let manager = manager
         let settings = manager?.current(on: screen).settings ?? PlaylistSettings.default()

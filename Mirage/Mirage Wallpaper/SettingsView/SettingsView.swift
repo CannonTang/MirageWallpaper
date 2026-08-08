@@ -101,14 +101,13 @@ struct SettingsView: View {
             }
             Spacer()
             Button {
-                viewModel.isSettingsPresented = false
+                AppDelegate.shared.closeSettingsWindow(commit: false)
             } label: {
                 Text("取消").frame(width: 50)
             }
             .keyboardShortcut(.cancelAction)
             Button {
-                viewModel.save()
-                viewModel.isSettingsPresented = false
+                AppDelegate.shared.closeSettingsWindow(commit: true)
             } label: {
                 Text("好").frame(width: 50)
             }
