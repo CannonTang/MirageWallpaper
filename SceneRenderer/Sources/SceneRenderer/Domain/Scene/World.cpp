@@ -860,7 +860,7 @@ void SceneCameraPath::CaptureViewport() {
     default_fov    = camera->Fov();
 }
 
-bool SceneCameraPath::ApplyDefault() {
+bool SceneCameraPath::ApplyDefault(double viewport_ratio) {
     if (! camera) return false;
     if (default_lookat) {
         camera->SetLookAt(
@@ -870,16 +870,16 @@ bool SceneCameraPath::ApplyDefault() {
         node->SetTranslate(default_translate);
         node->SetRotation(default_rotation);
     }
-    camera->SetWidth(default_width);
-    camera->SetHeight(default_height);
+    camera->SetWidth(default_width * viewport_ratio);
+    camera->SetHeight(default_height * viewport_ratio);
     if (default_fov > 0.0) camera->SetFov(default_fov);
     camera->Update();
     return true;
 }
 
-bool SceneCameraPath::Tick(double runtime) {
+bool SceneCameraPath::Tick(double runtime, double viewport_ratio) {
     if (! camera) return false;
-    if (! enabled) return ApplyDefault();
+    if (! enabled) return ApplyDefault(viewport_ratio);
 
     if (! lookat_tracks.empty()) {
         auto key = eval_lookat_tracks(lookat_tracks, runtime, lookat_fps);
@@ -903,8 +903,8 @@ bool SceneCameraPath::Tick(double runtime) {
     } else {
         float zoom = zoom_curve.EvaluateScalar(zoom_base, runtime);
         zoom       = std::max(zoom, 0.001f);
-        camera->SetWidth(default_width / static_cast<double>(zoom));
-        camera->SetHeight(default_height / static_cast<double>(zoom));
+        camera->SetWidth(default_width * viewport_ratio / static_cast<double>(zoom));
+        camera->SetHeight(default_height * viewport_ratio / static_cast<double>(zoom));
     }
     camera->Update();
     return true;
@@ -1333,10 +1333,6 @@ std::vector<SceneMaterialDirtyEvent> Scene::ConsumePreparedMaterialDirtyEvents()
 }
 
 void Scene::TickCameraPaths() {
-    if (camera_paths.empty()) return;
-
-    // Recycle the scratch containers' capacity across frames; clear() keeps the
-    // allocated buckets so a steady-state scene does no per-frame heap churn.
     auto& has_enabled = m_camera_path_has_enabled;
     auto& touched     = m_camera_path_touched;
     auto& reset       = m_camera_path_reset;
@@ -1344,17 +1340,41 @@ void Scene::TickCameraPaths() {
     touched.clear();
     reset.clear();
 
+    double viewport_ratio = 1.0;
+    if (! m_viewport_scale_curve.Empty()) {
+        auto camera_it = cameras.find("global");
+        if (camera_it != cameras.end() && camera_it->second &&
+            ! camera_it->second->IsPerspective()) {
+            auto& camera = *camera_it->second;
+            if (! m_root_camera_viewport_captured) {
+                m_root_camera_default_width     = camera.Width();
+                m_root_camera_default_height    = camera.Height();
+                m_root_camera_viewport_captured = true;
+            }
+            float zoom = m_viewport_scale_curve.EvaluateScalar(viewport_scale, elapsingTime);
+            if (! std::isfinite(zoom)) zoom = 0.001f;
+            zoom           = std::max(zoom, 0.001f);
+            viewport_ratio = static_cast<double>(viewport_scale) / static_cast<double>(zoom);
+            camera.SetWidth(m_root_camera_default_width * viewport_ratio);
+            camera.SetHeight(m_root_camera_default_height * viewport_ratio);
+            camera.Update();
+            touched.insert("global");
+        }
+    }
+
     for (const auto& path : camera_paths) {
         if (path && path->enabled) has_enabled[path->camera_name] = true;
     }
 
     for (const auto& path : camera_paths) {
         if (! path || ! path->enabled) continue;
-        if (path->Tick(elapsingTime)) touched.insert(path->camera_name);
+        if (path->Tick(elapsingTime, path->perspective ? 1.0 : viewport_ratio))
+            touched.insert(path->camera_name);
     }
     for (const auto& path : camera_paths) {
         if (! path || has_enabled[path->camera_name] || reset.contains(path->camera_name)) continue;
-        if (path->ApplyDefault()) touched.insert(path->camera_name);
+        if (path->ApplyDefault(path->perspective ? 1.0 : viewport_ratio))
+            touched.insert(path->camera_name);
         reset.insert(path->camera_name);
     }
 
@@ -1388,6 +1408,12 @@ void Scene::TickTransformUpdaters() {
 }
 
 void Scene::CaptureCameraPathViewports() {
+    auto camera_it = cameras.find("global");
+    if (camera_it != cameras.end() && camera_it->second && ! camera_it->second->IsPerspective()) {
+        m_root_camera_default_width     = camera_it->second->Width();
+        m_root_camera_default_height    = camera_it->second->Height();
+        m_root_camera_viewport_captured = true;
+    }
     for (auto& path : camera_paths) {
         if (path) path->CaptureViewport();
     }

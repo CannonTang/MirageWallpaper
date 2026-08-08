@@ -87,6 +87,99 @@ void TestAuthoredSceneZoom() {
           "invalid authored zoom falls back to unity");
 }
 
+sr::SceneAnimationCurve RootZoomCurve(float final_zoom) {
+    sr::SceneAnimationCurve curve;
+    curve.fps    = 30.0f;
+    curve.length = 450;
+    curve.mode   = "single";
+    curve.c0.push_back({ .frame = 0, .value = 3.0f });
+    curve.c0.push_back({ .frame = 300, .value = 3.0f });
+    curve.c0.push_back({ .frame = 450, .value = final_zoom });
+    return curve;
+}
+
+void TestAnimatedSceneZoom() {
+    sr::Scene scene;
+    scene.SetViewportScale(3.0f);
+    scene.SetViewportScaleAnimation(RootZoomCurve(1.0f));
+    auto global = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(100.0, 50.0, -1.0, 1.0));
+    auto linked = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(1.0, 1.0, -1.0, 1.0));
+    scene.cameras["global"] = global;
+    scene.cameras["linked"] = linked;
+    scene.linkedCameras["global"].push_back("linked");
+    scene.CaptureCameraPathViewports();
+
+    scene.elapsingTime = 0.0;
+    scene.TickCameraPaths();
+    Check(Near(global->Width(), 100.0f) && Near(global->Height(), 50.0f),
+          "root zoom animation preserves the authored initial close-up");
+
+    scene.elapsingTime = 10.0;
+    scene.TickCameraPaths();
+    Check(Near(global->Width(), 100.0f) && Near(global->Height(), 50.0f),
+          "root zoom animation holds the initial value through frame 300");
+
+    scene.elapsingTime = 15.0;
+    scene.TickCameraPaths();
+    Check(Near(global->Width(), 300.0f) && Near(global->Height(), 150.0f),
+          "root zoom animation expands the viewport when zoom reaches one");
+    Check(Near(linked->Width(), 300.0f) && Near(linked->Height(), 150.0f),
+          "root zoom animation propagates to linked cameras");
+
+    global->SetWidth(200.0);
+    global->SetHeight(100.0);
+    scene.CaptureCameraPathViewports();
+    scene.TickCameraPaths();
+    Check(Near(global->Width(), 600.0f) && Near(global->Height(), 300.0f),
+          "root zoom baseline recapture does not apply the animated ratio twice");
+}
+
+void TestAnimatedSceneZoomWithCameraPath() {
+    sr::Scene scene;
+    scene.SetViewportScale(3.0f);
+    scene.SetViewportScaleAnimation(RootZoomCurve(1.0f));
+    auto global = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(120.0, 60.0, -1.0, 1.0));
+    scene.cameras["global"] = global;
+
+    sr::SceneNode node;
+    auto path          = std::make_shared<sr::SceneCameraPath>();
+    path->camera_name  = "global";
+    path->camera       = global;
+    path->node         = &node;
+    path->zoom_base    = 2.0f;
+    path->zoom_curve   = RootZoomCurve(4.0f);
+    scene.camera_paths = { path };
+    scene.CaptureCameraPathViewports();
+
+    scene.elapsingTime = 15.0;
+    scene.TickCameraPaths();
+    Check(Near(global->Width(), 90.0f) && Near(global->Height(), 45.0f),
+          "root zoom composes multiplicatively with camera object zoom");
+
+    path->enabled = false;
+    scene.TickCameraPaths();
+    Check(Near(global->Width(), 360.0f) && Near(global->Height(), 180.0f),
+          "disabled camera paths keep the root zoom animation active");
+}
+
+void TestInvalidAnimatedSceneZoom() {
+    sr::Scene scene;
+    scene.SetViewportScale(3.0f);
+    scene.SetViewportScaleAnimation(RootZoomCurve(-1.0f));
+    auto global = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(100.0, 50.0, -1.0, 1.0));
+    scene.cameras["global"] = global;
+    scene.CaptureCameraPathViewports();
+    scene.elapsingTime = 15.0;
+    scene.TickCameraPaths();
+    Check(std::isfinite(global->Width()) && std::isfinite(global->Height()) &&
+              global->Width() > 0.0 && global->Height() > 0.0,
+          "invalid animated root zoom remains finite and positive");
+}
+
 void TestPointerUniformsIgnoreParallaxDelay() {
     sr::Scene scene;
     scene.frameTime = 1.0 / 30.0;
@@ -548,6 +641,9 @@ void TestParticleRuntimeState() {
 int main() {
     TestExplicitCameraFactories();
     TestAuthoredSceneZoom();
+    TestAnimatedSceneZoom();
+    TestAnimatedSceneZoomWithCameraPath();
+    TestInvalidAnimatedSceneZoom();
     TestPointerUniformsIgnoreParallaxDelay();
     TestPlanarReflectionSemantics();
     TestWrappedAnimationCurves();

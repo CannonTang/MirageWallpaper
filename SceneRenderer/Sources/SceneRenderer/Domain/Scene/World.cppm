@@ -1143,8 +1143,8 @@ public:
 
     void CaptureViewport();
     void SetEnabled(bool value) { enabled = value; }
-    bool Tick(double runtime);
-    bool ApplyDefault();
+    bool Tick(double runtime, double viewport_ratio = 1.0);
+    bool ApplyDefault(double viewport_ratio = 1.0);
 };
 
 class SceneSoundControl {
@@ -2907,6 +2907,9 @@ public:
     void SetViewportScale(float scale) {
         viewport_scale = std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
     }
+    void SetViewportScaleAnimation(SceneAnimationCurve curve) {
+        m_viewport_scale_curve = std::move(curve);
+    }
     std::array<double, 2> OrthographicProjectionExtent() const {
         return { static_cast<double>(ortho[0]) / viewport_scale,
                  static_cast<double>(ortho[1]) / viewport_scale };
@@ -2987,6 +2990,10 @@ private:
     bool                                     m_render_graph_dirty { false };
     bool                                     m_dynamic_topology_dirty { false };
     bool                                     m_planar_reflection_enabled { false };
+    SceneAnimationCurve                      m_viewport_scale_curve;
+    double                                   m_root_camera_default_width { 1.0 };
+    double                                   m_root_camera_default_height { 1.0 };
+    bool                                     m_root_camera_viewport_captured { false };
     Map<i32, SceneNode*>                     m_pending_node_visibility_changes;
     Map<i32, std::string>                    m_render_group_cameras;
     Map<std::string, std::shared_ptr<VideoPlaybackState>> m_video_controls;

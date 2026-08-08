@@ -2659,6 +2659,11 @@ void InitContext(ParseContext& context, fs::VFS& vfs, const wpscene::SceneMetada
     scene.ortho[0]  = ortho_extent[0];
     scene.ortho[1]  = ortho_extent[1];
     scene.SetViewportScale(sc.general.zoom);
+    if (sc.general.isOrtho) {
+        SceneAnimationCurve viewport_scale_curve;
+        AssignCurve(viewport_scale_curve, sc.general.field_bindings, "zoom");
+        scene.SetViewportScaleAnimation(std::move(viewport_scale_curve));
+    }
     context.ortho_w = scene.ortho[0];
     context.ortho_h = scene.ortho[1];
     context.orthographic_scene = sc.general.isOrtho;
