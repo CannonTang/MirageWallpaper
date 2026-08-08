@@ -1116,12 +1116,12 @@ void SceneRenderController::on(RenderDraw&&) {
     }
     frame_timer.FrameBegin();
     if (m_rg) {
-        m_scene->shaderValueUpdater->FrameBegin();
         {
             auto pos                 = m_mouse_pos.load();
             m_scene->pointerPosition = pos;
             m_scene->shaderValueUpdater->MouseInput(pos[0], pos[1]);
         }
+        m_scene->shaderValueUpdater->FrameBegin();
         // Drive any per-Scene scenescripts before particle emission.
         // Scripts mutate SceneNode transforms (scale/origin/angles) so
         // they need to run before the matrix-derivation in the

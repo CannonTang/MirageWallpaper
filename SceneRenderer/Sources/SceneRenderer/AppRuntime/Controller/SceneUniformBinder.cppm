@@ -142,11 +142,12 @@ private:
     double               m_dayTime { 0.0f };
     std::array<float, 2> m_texelSize { 1.0f / 1920.0f, 1.0f / 1080.0f };
 
-    std::array<float, 2> m_mousePos { 0.5f, 0.5f };
-    std::array<float, 2> m_mousePosLast { 0.5f, 0.5f };
-    std::array<float, 2> m_mousePosInput { 0.5f, 0.5f };
+    std::array<float, 2> m_pointerPos { 0.5f, 0.5f };
+    std::array<float, 2> m_pointerPosLast { 0.5f, 0.5f };
+    std::array<float, 2> m_parallaxMousePos { 0.5f, 0.5f };
+    std::array<float, 2> m_parallaxMouseInput { 0.5f, 0.5f };
     double               m_mouseDelayedTime { 0.0f };
-    unsigned             m_mouseInputCount { 0 };
+    bool                 m_hasMouseInput { false };
 
     std::chrono::time_point<std::chrono::steady_clock> m_last_mouse_input_time;
 

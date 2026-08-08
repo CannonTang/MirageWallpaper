@@ -12,6 +12,7 @@ import sr.scene;
 import sr.fs;
 import sr.json;
 import sr.pkg.parse;
+import sr.scene_uniform_updater;
 import sr.types;
 import sr.vulkan;
 import sr.vulkan_render;
@@ -84,6 +85,51 @@ void TestAuthoredSceneZoom() {
     extent = scene.OrthographicProjectionExtent();
     Check(extent[0] == 1920.0 && extent[1] == 1080.0,
           "invalid authored zoom falls back to unity");
+}
+
+void TestPointerUniformsIgnoreParallaxDelay() {
+    sr::Scene scene;
+    scene.frameTime = 1.0 / 30.0;
+    auto camera = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(1920.0, 1080.0, -1.0, 1.0));
+    scene.activeCamera = camera.get();
+
+    sr::SceneUniformUpdater updater(&scene);
+    updater.SetCameraParallax({ .enable = false, .amount = 0.01f, .delay = 0.9f,
+                                .mouseinfluence = 0.5f });
+
+    sr::SceneNode node;
+    auto mesh = std::make_shared<sr::SceneMesh>();
+    mesh->AddMaterial(sr::SceneMaterial {});
+    node.AddMesh(mesh);
+    updater.InitUniforms(&node, [](std::string_view name) {
+        return name == "g_PointerPosition" || name == "g_PointerPositionLast";
+    });
+
+    sr::sprite_map_t sprites;
+    std::array<float, 2> current {};
+    std::array<float, 2> previous {};
+    auto capture = [&](std::string_view name, sr::ShaderValue value) {
+        if (name == "g_PointerPosition") current = { value[0], value[1] };
+        if (name == "g_PointerPositionLast") previous = { value[0], value[1] };
+    };
+
+    updater.MouseInput(0.2, 0.8);
+    updater.FrameBegin();
+    updater.UpdateUniforms(&node, sprites, capture, sr::SceneRenderViewKind::Primary,
+                           sr::SceneRenderAlphaMode::Composite);
+    Check(Near(current[0], 0.2f) && Near(current[1], 0.8f) &&
+              Near(previous[0], 0.2f) && Near(previous[1], 0.8f),
+          "first pointer sample initializes current and previous uniforms");
+
+    updater.MouseInput(0.85, 0.15);
+    updater.FrameBegin();
+    updater.UpdateUniforms(&node, sprites, capture, sr::SceneRenderViewKind::Primary,
+                           sr::SceneRenderAlphaMode::Composite);
+    Check(Near(current[0], 0.85f) && Near(current[1], 0.15f),
+          "pointer uniform uses the current raw frame sample");
+    Check(Near(previous[0], 0.2f) && Near(previous[1], 0.8f),
+          "previous pointer uniform uses the preceding raw frame sample");
 }
 
 void TestPlanarReflectionSemantics() {
@@ -502,6 +548,7 @@ void TestParticleRuntimeState() {
 int main() {
     TestExplicitCameraFactories();
     TestAuthoredSceneZoom();
+    TestPointerUniformsIgnoreParallaxDelay();
     TestPlanarReflectionSemantics();
     TestWrappedAnimationCurves();
     TestFieldAnimationPlayback();

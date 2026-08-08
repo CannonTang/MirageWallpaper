@@ -93,9 +93,11 @@ void SceneUniformUpdater::FrameBegin() {
     // would otherwise produce 0/0 = NaN here, propagating through the MVP
     // and disappearing the wallpaper entirely (issue: gray-screen render).
     double t       = m_parallax.delay > 0.0 ? new_time / m_parallax.delay : 1.0;
-    m_mousePosLast = m_mousePos;
-    m_mousePos     = std::array { (float)algorism::lerp(t, m_mousePos[0], m_mousePosInput[0]),
-                                  (float)algorism::lerp(t, m_mousePos[1], m_mousePosInput[1]) };
+    m_parallaxMousePos =
+        std::array { (float)algorism::lerp(
+                         t, m_parallaxMousePos[0], m_parallaxMouseInput[0]),
+                     (float)algorism::lerp(
+                         t, m_parallaxMousePos[1], m_parallaxMouseInput[1]) };
 }
 
 void SceneUniformUpdater::FrameEnd() {}
@@ -103,15 +105,21 @@ void SceneUniformUpdater::FrameEnd() {}
 void SceneUniformUpdater::MouseInput(double x, double y) {
     using namespace std::chrono;
 
-    auto   now_time = steady_clock::now();
-    double new_time = m_mouseDelayedTime -
-                      duration_cast<duration<double>>(now_time - m_last_mouse_input_time).count();
-    m_mouseDelayedTime = new_time < 0.0f ? 0.0f : new_time;
+    auto now_time = steady_clock::now();
+    if (m_hasMouseInput) {
+        double new_time =
+            m_mouseDelayedTime -
+            duration_cast<duration<double>>(now_time - m_last_mouse_input_time).count();
+        m_mouseDelayedTime = new_time < 0.0f ? 0.0f : new_time;
+        m_pointerPosLast   = m_pointerPos;
+    }
 
-    m_mousePosInput[0] = (float)x;
-    m_mousePosInput[1] = (float)y;
+    m_pointerPos        = { (float)x, (float)y };
+    m_parallaxMouseInput = m_pointerPos;
+    if (! m_hasMouseInput) m_pointerPosLast = m_pointerPos;
 
     m_last_mouse_input_time = now_time;
+    m_hasMouseInput          = true;
 }
 
 void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& existsOp) {
@@ -321,7 +329,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 Vector2f ortho { (float)m_scene->ortho[0], (float)m_scene->ortho[1] };
                 // flip mouse y axis
                 Vector2f mouseVec =
-                    Scaling(1.0f, -1.0f) * (Vector2f { 0.5f, 0.5f } - Vector2f(&m_mousePos[0]));
+                    Scaling(1.0f, -1.0f) *
+                    (Vector2f { 0.5f, 0.5f } - Vector2f(&m_parallaxMousePos[0]));
                 mouseVec        = mouseVec.cwiseProduct(ortho) * m_parallax.mouseinfluence;
                 Vector3f camPos = camera->GetPosition(render_view).cast<float>();
                 Vector2f paraVec =
@@ -408,8 +417,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     if (info.has_DAYTIME) updateOp(G_DAYTIME, (float)m_dayTime);
     if (info.has_DAYTIME_LEGACY) updateOp(G_DAYTIME_LEGACY, (float)m_dayTime);
 
-    if (info.has_POINTERPOSITION) updateOp(G_POINTERPOSITION, m_mousePos);
-    if (info.has_POINTERPOSITIONLAST) updateOp(G_POINTERPOSITIONLAST, m_mousePosLast);
+    if (info.has_POINTERPOSITION) updateOp(G_POINTERPOSITION, m_pointerPos);
+    if (info.has_POINTERPOSITIONLAST) updateOp(G_POINTERPOSITIONLAST, m_pointerPosLast);
 
     if (info.has_TEXELSIZE) updateOp(G_TEXELSIZE, m_texelSize);
 
@@ -424,7 +433,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     if (info.has_PARALLAXPOSITION) {
         Vector2f para { 0.5f, 0.5f };
         if (m_parallax.enable) {
-            const Vector2f mouseCentered = Vector2f(&m_mousePos[0]) - Vector2f { 0.5f, 0.5f };
+            const Vector2f mouseCentered =
+                Vector2f(&m_parallaxMousePos[0]) - Vector2f { 0.5f, 0.5f };
             para = Vector2f { 0.5f, 0.5f } +
                    (Scaling(1.0f, -1.0f) * mouseCentered) * m_parallax.mouseinfluence;
         }
