@@ -13,8 +13,8 @@ struct ExplorerItem: View {
     // other cell in the grid to rebuild.
     let isSelected: Bool
     let isActive: Bool
+    let animatedPreviewMode: GSAnimatedPreviewPlayback
 
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @State private var hovering = false
 
     var body: some View {
@@ -25,7 +25,7 @@ struct ExplorerItem: View {
                      // Only the hovered cell or the active wallpaper animates its
                      // preview; every other cell stays a cheap static thumbnail.
                      animates: isActive && (hovering || isSelected ||
-                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible))
+                        animatedPreviewMode == .visible))
             .resizable()
             .scaleEffect(hovering ? 1.03 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)

@@ -185,7 +185,7 @@ struct GifImage: NSViewRepresentable {
         let count = CGImageSourceGetCount(source)
         guard count > 1 else { return 0 }
 
-        let sampleCount = min(count, 32)
+        let sampleCount = min(count, 6)
         let indexes = Set((0..<sampleCount).map { sample in
             sampleCount == 1 ? 0 : sample * (count - 1) / (sampleCount - 1)
         }).sorted()

@@ -21,13 +21,20 @@ final class WorkshopImageLoader {
 
     private let dataMemory: NSCache<NSString, NSData> = {
         let cache = NSCache<NSString, NSData>()
-        cache.countLimit = 120
-        cache.totalCostLimit = 80 * 1024 * 1024
+        cache.countLimit = 400
+        cache.totalCostLimit = 160 * 1024 * 1024
+        return cache
+    }()
+
+    private let animatedFlags: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 4000
         return cache
     }()
 
     private let ioQueue = DispatchQueue(
         label: "cn.laobamac.Mirage.workshopImage", qos: .userInitiated, attributes: .concurrent)
+    private let ioLimiter = DispatchSemaphore(value: 4)
 
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -69,29 +76,48 @@ final class WorkshopImageLoader {
         memory.object(forKey: memoryKey(url, maxPixel(for: targetSize, scale: scale)))
     }
 
+    private func cachedAnimatedFlag(_ url: URL) -> Bool? {
+        animatedFlags.object(forKey: url.absoluteString as NSString)?.boolValue
+    }
+
+    private func setAnimatedFlag(_ value: Bool, for url: URL) {
+        animatedFlags.setObject(NSNumber(value: value), forKey: url.absoluteString as NSString)
+    }
+
     func load(url: URL, targetSize: CGSize, scale: CGFloat,
               completion: @escaping (NSImage?, Data?) -> Void) {
         let px = maxPixel(for: targetSize, scale: scale)
         let key = memoryKey(url, px)
         let dataKey = url.absoluteString as NSString
-        if let image = memory.object(forKey: key),
-           let cachedData = dataMemory.object(forKey: dataKey) {
-            let data = cachedData as Data
-            completion(image, Self.isAnimated(data) ? data : nil)
-            return
+        if let image = memory.object(forKey: key), let animated = cachedAnimatedFlag(url) {
+            guard animated else {
+                completion(image, nil)
+                return
+            }
+            if let cachedData = dataMemory.object(forKey: dataKey) {
+                completion(image, cachedData as Data)
+                return
+            }
         }
         ioQueue.async { [weak self] in
             guard let self else { return }
+            self.ioLimiter.wait()
+            defer { self.ioLimiter.signal() }
             let disk = self.diskURL(for: url)
             if let data = try? Data(contentsOf: disk), !data.isEmpty,
                let image = Self.downsample(data, maxPixel: px) {
-                self.store(data: data, image: image, dataKey: dataKey, imageKey: key)
+                let animated = Self.isAnimated(data)
+                self.setAnimatedFlag(animated, for: url)
+                self.store(data: data, image: image, dataKey: dataKey,
+                           imageKey: key, animated: animated)
                 DispatchQueue.main.async {
-                    completion(image, Self.isAnimated(data) ? data : nil)
+                    completion(image, animated ? data : nil)
                 }
                 return
             }
+            let semaphore = DispatchSemaphore(value: 0)
             self.session.dataTask(with: URLRequest(url: url)) { [weak self] data, response, _ in
+                defer { semaphore.signal() }
                 guard let self else { return }
                 let ok = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? true
                 guard ok, let data, !data.isEmpty else {
@@ -100,18 +126,25 @@ final class WorkshopImageLoader {
                 }
                 try? data.write(to: disk, options: .atomic)
                 let image = Self.downsample(data, maxPixel: px)
+                let animated = Self.isAnimated(data)
+                self.setAnimatedFlag(animated, for: url)
                 if let image {
-                    self.store(data: data, image: image, dataKey: dataKey, imageKey: key)
+                    self.store(data: data, image: image, dataKey: dataKey,
+                               imageKey: key, animated: animated)
                 }
                 DispatchQueue.main.async {
-                    completion(image, Self.isAnimated(data) ? data : nil)
+                    completion(image, animated ? data : nil)
                 }
             }.resume()
+            semaphore.wait()
         }
     }
 
-    private func store(data: Data, image: NSImage, dataKey: NSString, imageKey: NSString) {
-        dataMemory.setObject(data as NSData, forKey: dataKey, cost: data.count)
+    private func store(data: Data, image: NSImage, dataKey: NSString,
+                       imageKey: NSString, animated: Bool) {
+        if animated {
+            dataMemory.setObject(data as NSData, forKey: dataKey, cost: data.count)
+        }
         memory.setObject(image, forKey: imageKey, cost: cost(image))
     }
 
@@ -142,7 +175,7 @@ final class WorkshopImageLoader {
         let count = CGImageSourceGetCount(source)
         guard count > 1 else { return 0 }
 
-        let sampleCount = min(count, 32)
+        let sampleCount = min(count, 6)
         let indexes = Set((0..<sampleCount).map { sample in
             sampleCount == 1 ? 0 : sample * (count - 1) / (sampleCount - 1)
         }).sorted()
@@ -207,6 +240,7 @@ struct WorkshopImage: View {
     let url: URL?
     var contentMode: ContentMode = .fill
     var isAnimating = false
+    var isLoadingEnabled = true
 
     @Environment(\.displayScale) private var displayScale
     @State private var image: NSImage?
@@ -214,6 +248,7 @@ struct WorkshopImage: View {
     @State private var failed = false
     @State private var boxSize: CGSize = .zero
     @State private var loadToken: UInt64 = 0
+    @State private var pendingLoad = false
 
     var body: some View {
         Rectangle()
@@ -262,6 +297,11 @@ struct WorkshopImage: View {
                 failed = false
                 load()
             }
+            .onChange(of: isLoadingEnabled) { _, enabled in
+                if enabled && pendingLoad {
+                    load()
+                }
+            }
             .onDisappear {
                 loadToken &+= 1
                 animationData = nil
@@ -274,7 +314,14 @@ struct WorkshopImage: View {
         if let cached = WorkshopImageLoader.shared.cachedImage(url: url, targetSize: boxSize, scale: scale) {
             image = cached
             failed = false
+            pendingLoad = false
+            if !isAnimating { return }
         }
+        guard isLoadingEnabled else {
+            pendingLoad = true
+            return
+        }
+        pendingLoad = false
         loadToken &+= 1
         let token = loadToken
         let requestedURL = url

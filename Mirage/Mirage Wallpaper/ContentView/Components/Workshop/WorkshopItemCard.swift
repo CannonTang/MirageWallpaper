@@ -14,8 +14,7 @@ struct WorkshopItemCard: View {
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
     var isActive: Bool = true
-
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
+    var animatedPreviewMode: GSAnimatedPreviewPlayback = .hover
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -23,7 +22,8 @@ struct WorkshopItemCard: View {
                 url: item.previewImageURL,
                 contentMode: .fill,
                 isAnimating: isActive && (isHovered || isSelected ||
-                    globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible)
+                    animatedPreviewMode == .visible),
+                isLoadingEnabled: isActive
             )
 
             captionStrip

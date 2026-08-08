@@ -580,7 +580,9 @@ class GlobalSettingsViewModel: ObservableObject {
 
     func refreshLoginItemStatus(persist: Bool = false) {
         let status = SMAppService.mainApp.status
-        loginItemStatus = status
+        if loginItemStatus != status {
+            loginItemStatus = status
+        }
         let enabled: Bool
         switch status {
         case .enabled, .requiresApproval:

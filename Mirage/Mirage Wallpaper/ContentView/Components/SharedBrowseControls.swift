@@ -167,82 +167,64 @@ struct HorizontalScrollWheelBridge: NSViewRepresentable {
     func updateNSView(_ nsView: HorizontalScrollWheelView, context: Context) {
         nsView.onOffsetChange = onOffsetChange
     }
+
+    static func dismantleNSView(_ nsView: HorizontalScrollWheelView, coordinator: Coordinator) {
+        nsView.stopObserving()
+    }
 }
 
 final class HorizontalScrollWheelView: NSView {
     var onOffsetChange: ((CGFloat) -> Void)?
-    private var monitor: Any?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self
-        ))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        installMonitor()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        removeMonitor()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil {
-            removeMonitor()
-        }
-    }
+    private var boundsObserver: NSObjectProtocol?
+    private weak var observedClipView: NSClipView?
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
 
-    deinit {
-        removeMonitor()
-    }
-
-    private func installMonitor() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard let self,
-                  event.window === self.window,
-                  let scrollView = self.enclosingScrollView else { return event }
-            let point = self.convert(event.locationInWindow, from: nil)
-            guard self.bounds.contains(point) else { return event }
-            if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
-                var ancestor = scrollView.superview
-                while let view = ancestor {
-                    if let outerScrollView = view as? NSScrollView {
-                        outerScrollView.scrollWheel(with: event)
-                        return nil
-                    }
-                    ancestor = view.superview
-                }
-                return event
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            stopObserving()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.startObserving()
             }
-            let delta = event.scrollingDeltaX
-            guard delta != 0 else { return event }
-            let clipView = scrollView.contentView
-            let maximumX = max(0, (scrollView.documentView?.bounds.width ?? 0) - clipView.bounds.width)
-            var origin = clipView.bounds.origin
-            origin.x = min(max(origin.x - delta, 0), maximumX)
-            guard abs(origin.x - clipView.bounds.origin.x) > 0.5 else { return event }
-            clipView.setBoundsOrigin(origin)
-            scrollView.reflectScrolledClipView(clipView)
-            self.onOffsetChange?(origin.x)
-            return nil
         }
     }
 
-    private func removeMonitor() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        startObserving()
+    }
+
+    deinit {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
+    }
+
+    func stopObserving() {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+            self.boundsObserver = nil
+        }
+        observedClipView = nil
+    }
+
+    private func startObserving() {
+        guard let clipView = enclosingScrollView?.contentView else { return }
+        guard observedClipView !== clipView else { return }
+        stopObserving()
+        clipView.postsBoundsChangedNotifications = true
+        observedClipView = clipView
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clipView,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, let clipView = self.observedClipView else { return }
+            self.onOffsetChange?(clipView.bounds.origin.x)
         }
     }
 }

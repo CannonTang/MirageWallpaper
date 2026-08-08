@@ -83,6 +83,7 @@ struct DiscoverView: View {
                                     contentViewModel: viewModel,
                                     wallpaperViewModel: wallpaperViewModel,
                                     isActive: isActive,
+                                    animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode,
                                     onSeeAll: { showAll(category) }
                                 )
                             }

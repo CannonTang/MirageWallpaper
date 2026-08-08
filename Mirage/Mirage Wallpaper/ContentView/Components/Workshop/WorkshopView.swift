@@ -183,7 +183,8 @@ struct WorkshopView: View {
                                         isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                         presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                                         downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                        isActive: isActive
+                                        isActive: isActive,
+                                        animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                                     )
                                     .onHover { hovered in
                                         hoveredId = hovered ? item.id : nil

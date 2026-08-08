@@ -10,13 +10,16 @@ struct WallpaperExplorer: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     let isActive: Bool
+    let animatedPreviewMode: GSAnimatedPreviewPlayback
 
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
-         isActive: Bool = true) {
+         isActive: Bool = true,
+         animatedPreviewMode: GSAnimatedPreviewPlayback = .hover) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
         self.isActive = isActive
+        self.animatedPreviewMode = animatedPreviewMode
     }
 
     var body: some View {
@@ -60,7 +63,8 @@ struct WallpaperExplorer: SubviewOfContentView {
                                 ExplorerItem(
                                     wallpaper: wallpaper,
                                     isSelected: wallpaper.wallpaperDirectory == selectedDirectory,
-                                    isActive: isActive
+                                    isActive: isActive,
+                                    animatedPreviewMode: animatedPreviewMode
                                 )
                                 .contextMenu {
                                     ExplorerItemMenu(

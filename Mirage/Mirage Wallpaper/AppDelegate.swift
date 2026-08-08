@@ -119,7 +119,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        globalSettingsViewModel.refreshLoginItemStatus(persist: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.globalSettingsViewModel.refreshLoginItemStatus(persist: true)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

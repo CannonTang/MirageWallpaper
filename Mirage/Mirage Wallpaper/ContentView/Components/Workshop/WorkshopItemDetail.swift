@@ -393,12 +393,48 @@ struct StatView: View {
     }
 }
 
+struct CreatorGridViewMenu: View {
+    @Binding var iconSize: Double
+    @Binding var pageSize: Int
+
+    var body: some View {
+        Menu("视图") {
+            Picker(LocalizedStringKey("图标大小"), selection: $iconSize) {
+                Text(LocalizedStringKey("小图标")).tag(CreatorGridMetrics.small)
+                Text(LocalizedStringKey("中图标")).tag(CreatorGridMetrics.medium)
+                Text(LocalizedStringKey("大图标")).tag(CreatorGridMetrics.large)
+            }
+            .pickerStyle(.inline)
+
+            Divider()
+
+            Picker(LocalizedStringKey("每页数量"), selection: $pageSize) {
+                Text("10").tag(10)
+                Text("25").tag(25)
+                Text("50").tag(50)
+            }
+            .pickerStyle(.inline)
+        }
+    }
+}
+
+enum CreatorGridMetrics {
+    static let small: Double = 115
+    static let medium: Double = 170
+    static let large: Double = 260
+
+    static func normalized(_ value: Double) -> Double {
+        [small, medium, large].contains(value) ? value : medium
+    }
+}
+
 struct CreatorProfileView: View {
     let creator: WorkshopCreator
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    let animatedPreviewMode: GSAnimatedPreviewPlayback
     @State private var selectedDetailItem: WorkshopItem?
     @State private var hoveredItemID: String?
-    @AppStorage("ExplorerIconSize") private var iconSize: Double = 170
+    @AppStorage("CreatorIconSize") private var iconSize: Double = CreatorGridMetrics.medium
     @AppStorage("CreatorPerPage") private var creatorPageSize: Int = 10
 
     var body: some View {
@@ -409,10 +445,17 @@ struct CreatorProfileView: View {
                 creatorGrid
             }
         }
+        .onAppear {
+            iconSize = CreatorGridMetrics.normalized(iconSize)
+        }
         .onChange(of: creatorPageSize) {
             workshopViewModel.creatorItemsPage = 1
             workshopViewModel.loadCreatorItems(for: creator)
         }
+    }
+
+    private var gridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: iconSize, maximum: iconSize * 1.6), spacing: 10)]
     }
 
     private var creatorGrid: some View {
@@ -464,128 +507,127 @@ struct CreatorProfileView: View {
 
             Divider()
 
-            if workshopViewModel.isLoadingCreatorItems && workshopViewModel.creatorItems.isEmpty {
-                Spacer()
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text(LocalizedStringKey("加载中..."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            creatorContent
+                .contextMenu {
+                    CreatorGridViewMenu(iconSize: $iconSize, pageSize: $creatorPageSize)
                 }
-                Spacer()
-            } else if let error = workshopViewModel.creatorItemsError, workshopViewModel.creatorItems.isEmpty {
-                Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.secondary)
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Button(LocalizedStringKey("重试")) {
-                        workshopViewModel.loadCreatorItems(for: creator)
+        }
+    }
+
+    @ViewBuilder
+    private var creatorContent: some View {
+        if workshopViewModel.isLoadingCreatorItems && workshopViewModel.creatorItems.isEmpty {
+            centeredContent {
+                ProgressView()
+                Text(LocalizedStringKey("加载中..."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if let error = workshopViewModel.creatorItemsError, workshopViewModel.creatorItems.isEmpty {
+            centeredContent {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                Button(LocalizedStringKey("重试")) {
+                    workshopViewModel.loadCreatorItems(for: creator)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        } else if workshopViewModel.creatorItems.isEmpty && !workshopViewModel.isLoadingCreatorItems {
+            centeredContent {
+                Image(systemName: "rectangle.on.rectangle.slash")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                Text(L("该创作者暂未发布 Wallpaper Engine 作品"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+        } else {
+            creatorScrollView
+        }
+    }
+
+    private func centeredContent<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 12) {
+            content()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+    }
+
+    private var creatorScrollView: some View {
+        ScrollView {
+            LazyVGrid(columns: gridColumns, spacing: 10) {
+                ForEach(workshopViewModel.creatorItems) { item in
+                    WorkshopItemCard(
+                        item: item,
+                        isHovered: hoveredItemID == item.id,
+                        isSelected: false,
+                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                        isActive: selectedDetailItem == nil,
+                        animatedPreviewMode: animatedPreviewMode
+                    )
+                    .onHover { hovering in
+                        hoveredItemID = hovering ? item.id : nil
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
-                Spacer()
-            } else if workshopViewModel.creatorItems.isEmpty && !workshopViewModel.isLoadingCreatorItems {
-                Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: "rectangle.on.rectangle.slash")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.secondary)
-                    Text(L("该创作者暂未发布 Wallpaper Engine 作品"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-                Spacer()
-            } else {
-                ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: iconSize), spacing: 10)],
-                        spacing: 10
-                    ) {
-                        ForEach(workshopViewModel.creatorItems) { item in
-                            WorkshopItemCard(
-                                item: item,
-                                isHovered: hoveredItemID == item.id,
-                                isSelected: false,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
-                            )
-                            .onHover { hovering in
-                                hoveredItemID = hovering ? item.id : nil
+                    .onTapGesture {
+                        selectedDetailItem = item
+                    }
+                    .contextMenu {
+                        Section {
+                            Button {
+                                workshopViewModel.downloadItem(item)
+                            } label: {
+                                Label(
+                                    LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
+                                    systemImage: "arrow.down.circle.fill"
+                                )
                             }
-                            .onTapGesture {
+                            .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
+
+                            Button {
                                 selectedDetailItem = item
-                            }
-                            .contextMenu {
-                                Section {
-                                    Button {
-                                        workshopViewModel.downloadItem(item)
-                                    } label: {
-                                        Label(
-                                            LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
-                                            systemImage: "arrow.down.circle.fill"
-                                        )
-                                    }
-                                    .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
-
-                                    Button {
-                                        selectedDetailItem = item
-                                    } label: {
-                                        Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
-                                    }
-                                }
-
-                                Section {
-                                    Button {
-                                        guard let url = URL(
-                                            string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
-                                        ) else { return }
-                                        NSWorkspace.shared.open(url)
-                                    } label: {
-                                        Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
-                                    }
-                                }
-
-                                Section {
-                                    Picker(LocalizedStringKey("图标大小"), selection: $iconSize) {
-                                        Text(LocalizedStringKey("小图标")).tag(Double(140))
-                                        Text(LocalizedStringKey("中图标")).tag(Double(170))
-                                        Text(LocalizedStringKey("大图标")).tag(Double(200))
-                                    }
-                                    .pickerStyle(.inline)
-
-                                    Divider()
-
-                                    Picker(LocalizedStringKey("每页数量"), selection: $creatorPageSize) {
-                                        Text("10").tag(10)
-                                        Text("25").tag(25)
-                                        Text("50").tag(50)
-                                    }
-                                    .pickerStyle(.inline)
-                                }
+                            } label: {
+                                Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
                             }
                         }
-                    }
-                    .padding(12)
 
-                    if workshopViewModel.creatorTotalPages > 1 {
-                        PageNavigator(
-                            currentPage: workshopViewModel.creatorItemsPage,
-                            pageCount: workshopViewModel.creatorTotalPages,
-                            onSelect: workshopViewModel.goToCreatorPage
-                        )
-                        .padding(.bottom, 12)
+                        Section {
+                            Button {
+                                guard let url = URL(
+                                    string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+                                ) else { return }
+                                NSWorkspace.shared.open(url)
+                            } label: {
+                                Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
+                            }
+                        }
+
+                        CreatorGridViewMenu(iconSize: $iconSize, pageSize: $creatorPageSize)
                     }
                 }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+
+            if workshopViewModel.creatorTotalPages > 1 {
+                PageNavigator(
+                    currentPage: workshopViewModel.creatorItemsPage,
+                    pageCount: workshopViewModel.creatorTotalPages,
+                    onSelect: workshopViewModel.goToCreatorPage
+                )
+                .padding(.bottom, 12)
             }
         }
     }

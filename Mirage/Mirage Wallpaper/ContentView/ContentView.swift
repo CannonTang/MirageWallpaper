@@ -100,7 +100,8 @@ struct ContentView: View {
                                         WallpaperExplorer(
                                             contentViewModel: viewModel,
                                             wallpaperViewModel: wallpaperViewModel,
-                                            isActive: navigationModel.selection == .installed
+                                            isActive: navigationModel.selection == .installed,
+                                            animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                                         )
                                         .onDrop(of: [.fileURL], delegate: viewModel)
                                         .contextMenu {
@@ -172,7 +173,8 @@ struct ContentView: View {
                            let creator = workshopViewModel.selectedCreator {
                             CreatorProfileView(
                                 creator: creator,
-                                workshopViewModel: workshopViewModel
+                                workshopViewModel: workshopViewModel,
+                                animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                             )
                             .frame(maxWidth: 420)
                         }
