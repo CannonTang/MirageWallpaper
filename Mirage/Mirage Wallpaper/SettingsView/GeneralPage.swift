@@ -117,8 +117,7 @@ struct GeneralPage: SettingsPage {
         Form {
             Section {
                 Toggle("开机时自动启动 Mirage", isOn: $viewModel.settings.autoStart)
-                if viewModel.loginItemCapability == .serviceManagement,
-                   viewModel.loginItemStatus == .requiresApproval {
+                if viewModel.loginItemStatus == .requiresApproval {
                     HStack {
                         Label(L("需要在系统设置中批准"), systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)

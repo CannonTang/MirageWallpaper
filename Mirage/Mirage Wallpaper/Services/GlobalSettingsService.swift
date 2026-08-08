@@ -10,12 +10,6 @@ import SwiftUI
 import ServiceManagement
 import IOKit.ps
 import CoreAudio
-import Security
-
-enum LoginItemCapability: Equatable {
-    case serviceManagement
-    case launchAgent
-}
 
 enum GSQuality {
     case low, medium, high, ultra
@@ -227,7 +221,6 @@ class GlobalSettingsViewModel: ObservableObject {
     // decoding GlobalSettings JSON from UserDefaults on every footer render.
     @Published private(set) var savedSettings: GlobalSettings
     @Published private(set) var loginItemStatus: SMAppService.Status = .notRegistered
-    @Published private(set) var loginItemCapability: LoginItemCapability
     @Published private(set) var loginItemError: String?
     private var isValidatingSettings = false
     private var isUpdatingLoginItem = false
@@ -248,26 +241,23 @@ class GlobalSettingsViewModel: ObservableObject {
         if initial.shouldPauseWhenWindowCoverageExceeds {
             initial.otherApplicationFocused = .keepRunning
         }
-        let loginCapability = Self.detectLoginItemCapability()
-        let loginStatus = loginCapability == .serviceManagement
-            ? SMAppService.mainApp.status
-            : SMAppService.Status.notRegistered
-        if loginCapability == .serviceManagement {
-            switch loginStatus {
-            case .enabled, .requiresApproval:
-                initial.autoStart = true
-            case .notRegistered, .notFound:
-                initial.autoStart = false
-            @unknown default:
-                initial.autoStart = false
-            }
-        } else {
-            initial.autoStart = FileManager.default.fileExists(atPath: Self.launchAgentURL.path)
+        let hadLegacyLaunchAgent = Self.removeLegacyLaunchAgent()
+        var loginStatus = SMAppService.mainApp.status
+        if hadLegacyLaunchAgent, loginStatus == .notRegistered || loginStatus == .notFound {
+            try? SMAppService.mainApp.register()
+            loginStatus = SMAppService.mainApp.status
+        }
+        switch loginStatus {
+        case .enabled, .requiresApproval:
+            initial.autoStart = true
+        case .notRegistered, .notFound:
+            initial.autoStart = false
+        @unknown default:
+            initial.autoStart = false
         }
         self.settings = initial
         self.savedSettings = initial
         self.loginItemStatus = loginStatus
-        self.loginItemCapability = loginCapability
         self.loginItemError = nil
         MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
@@ -563,19 +553,6 @@ class GlobalSettingsViewModel: ObservableObject {
         guard !isUpdatingLoginItem else { return }
         isUpdatingLoginItem = true
         defer { isUpdatingLoginItem = false }
-        if loginItemCapability == .launchAgent {
-            loginItemError = nil
-            do {
-                try updateLaunchAgent(enabled: added)
-            } catch {
-                loginItemError = L("无法更新登录项：%@", error.localizedDescription)
-                if added {
-                    try? FileManager.default.removeItem(at: Self.launchAgentURL)
-                }
-            }
-            refreshLoginItemStatus(persist: true)
-            return
-        }
         let appService = SMAppService.mainApp
         loginItemError = nil
         do {
@@ -602,15 +579,6 @@ class GlobalSettingsViewModel: ObservableObject {
     }
 
     func refreshLoginItemStatus(persist: Bool = false) {
-        if loginItemCapability == .launchAgent {
-            let enabled = FileManager.default.fileExists(atPath: Self.launchAgentURL.path)
-            loginItemStatus = enabled ? .enabled : .notRegistered
-            if settings.autoStart != enabled {
-                settings.autoStart = enabled
-                if persist { save() }
-            }
-            return
-        }
         let status = SMAppService.mainApp.status
         loginItemStatus = status
         let enabled: Bool
@@ -623,7 +591,10 @@ class GlobalSettingsViewModel: ObservableObject {
             enabled = false
         }
         if settings.autoStart != enabled {
+            let wasUpdating = isUpdatingLoginItem
+            isUpdatingLoginItem = true
             settings.autoStart = enabled
+            isUpdatingLoginItem = wasUpdating
             if persist { save() }
         }
     }
@@ -632,77 +603,23 @@ class GlobalSettingsViewModel: ObservableObject {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    private static func detectLoginItemCapability() -> LoginItemCapability {
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code) == errSecSuccess,
-              let code else {
-            return .launchAgent
-        }
-        var information: CFDictionary?
-        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
-              let values = information as? [CFString: Any] else {
-            return .launchAgent
-        }
-        let team = values[kSecCodeInfoTeamIdentifier] as? String
-        return team?.isEmpty == false ? .serviceManagement : .launchAgent
-    }
-
-    private static var launchAgentURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+    @discardableResult
+    private static func removeLegacyLaunchAgent() -> Bool {
+        let url = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/LaunchAgents/cn.laobamac.Mirage.plist")
-    }
-
-    private func updateLaunchAgent(enabled: Bool) throws {
-        let url = Self.launchAgentURL
-        let domain = "gui/\(getuid())"
-        if FileManager.default.fileExists(atPath: url.path) {
-            let result = try runLaunchctl(["bootout", domain, url.path])
-            if result.status != 0 {
-                _ = try? runLaunchctl(["bootout", "\(domain)/cn.laobamac.Mirage"])
-            }
-        }
-        if !enabled {
-            if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
-            }
-            return
-        }
-        let appURL = Bundle.main.bundleURL.standardizedFileURL
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let plist: [String: Any] = [
-            "Label": "cn.laobamac.Mirage",
-            "ProgramArguments": ["/usr/bin/open", "-g", appURL.path],
-            "RunAtLoad": true,
-            "ProcessType": "Interactive",
-            "LimitLoadToSessionType": "Aqua",
-            "AssociatedBundleIdentifiers": [Bundle.main.bundleIdentifier ?? "cn.laobamac.Mirage"]
-        ]
-        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try data.write(to: url, options: .atomic)
-        var result = try runLaunchctl(["bootstrap", domain, url.path])
-        if result.status != 0 {
-            _ = try? runLaunchctl(["bootout", "\(domain)/cn.laobamac.Mirage"])
-            result = try runLaunchctl(["bootstrap", domain, url.path])
-        }
-        guard result.status == 0 else {
-            throw NSError(domain: "MirageLoginItem", code: Int(result.status),
-                          userInfo: [NSLocalizedDescriptionKey: result.output.trimmingCharacters(in: .whitespacesAndNewlines)])
-        }
-    }
-
-    private func runLaunchctl(_ arguments: [String]) throws -> (status: Int32, output: String) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
         let process = Process()
-        let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
+        process.arguments = ["bootout", "gui/\(getuid())/cn.laobamac.Mirage"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
         process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        try? FileManager.default.removeItem(at: url)
+        NSLog("[Mirage] Removed legacy LaunchAgent login item")
+        return true
     }
-    
+
     func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {
         if playbackPolicySettingsCancellable != nil {
             DispatchQueue.main.async { [weak self] in self?.configurePlaybackMonitoring() }
