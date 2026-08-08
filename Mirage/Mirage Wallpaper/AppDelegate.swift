@@ -26,6 +26,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     static var shared = AppDelegate()
 
+    private static var isUserInitiatedLaunch: Bool = {
+        guard let service = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"],
+              service != "0", !service.isEmpty else { return true }
+        let parts = service.split(separator: ".")
+        guard parts.count >= 3, parts[0] == "application" else { return false }
+        return parts.suffix(2).allSatisfy { $0.allSatisfy(\.isNumber) }
+    }()
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         setMainMenu()
         setStatusMenu()
@@ -87,14 +95,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             wallpaperViewModel.restoreAllDisplays()
         }
 
-        let isDefaultLaunch = (notification.userInfo?["NSApplicationLaunchIsDefaultLaunchKey"] as? Bool) ?? true
-        let launchedAtLogin = !isDefaultLaunch
-
-        if launchedAtLogin {
-            NSApp.setActivationPolicy(.accessory)
-        } else if globalSettingsViewModel.isFirstLaunch {
-            self.mainWindowController.window.center()
-            self.mainWindowController.window.makeKeyAndOrderFront(nil)
+        if globalSettingsViewModel.isFirstLaunch || Self.isUserInitiatedLaunch {
+            openMainWindow()
         }
 
         UpdateManager.shared.start()
@@ -108,7 +110,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         globalSettingsViewModel.refreshLoginItemStatus(persist: true)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -155,6 +156,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openMainWindow() {
         NSApp.setActivationPolicy(.regular)
+        if !self.mainWindowController.window.isVisible,
+           UserDefaults.standard.string(forKey: "NSWindow Frame MainWindow") == nil {
+            self.mainWindowController.window.center()
+        }
         self.mainWindowController.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
