@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var developerLogWindowController: DeveloperLogWindowController?
     private var developerLogWindowWasOpened = false
     private var localizationObserver: NSObjectProtocol?
+    private var openWindowObserver: NSObjectProtocol?
 
     static var shared = AppDelegate()
 
@@ -45,6 +46,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.refreshLocalizedChrome()
+        }
+
+        openWindowObserver = DistributedNotificationCenter.default().addObserver(
+            forName: mirageOpenWindowNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.openMainWindow()
         }
 
         wallpaperViewModel.renderer.onProcessExit = { [weak self] screen, abnormal in
