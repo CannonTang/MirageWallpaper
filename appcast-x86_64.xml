@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.3</title>
+            <pubDate>Sat, 08 Aug 2026 10:06:37 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>275</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: c64998ec7083ff1ca52241f1fa0966ddb823650e
+Channel: beta
+
+fix(app): stabilize settings, desktop overrides, and display policies
+
+Reuse the settings sheet and defer persistence until confirmation so opening and closing settings no longer rebuilds the main interface or writes on every edit. Keep the detail pane within usable bounds.\n\nRetry desktop captures and desktop image installation without falling back to preview artwork, verify new override paths before pruning old files, and persist per-display recovery records across disconnected monitors.\n\nEvaluate fullscreen, coverage, sleep, reveal, stop, resume, and playlist behavior independently for each display.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-275-c64998ec7083-macOS-x86_64.zip" length="199094905" type="application/octet-stream" sparkle:edSignature="BmHuPWscxx2Mx6ZHmkYk3n1a921qTW5Ew5Bwt3LD4GiZYtaBq0CrTek8gUs2jv2BwvrkYc6/kKmhIGyHZSu+Dg=="/>
+        </item>
+        <item>
+            <title>1.0.3</title>
             <pubDate>Sat, 08 Aug 2026 04:29:06 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -231,6 +249,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 1EdR1qKmQyxTLCvO8UHswz944TSJFZ4FST/zzpi4ixkhgwuzZP22Z0X136qwlx9tEBMU1jxBdYsR9tiDdp+yDA==
-length: 13751
+edSignature: uLNZKRY7zPd0mbmZwr2WkzhaX3CQxTwFmP5AWwrlE9o3mNgkCtRy7krCN2A9FZPeWiF+lUS9iLDrXe5LW8ElCw==
+length: 15268
 -->
