@@ -38,6 +38,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private var hasRefreshedSession = false
     private var workshopSession: SteamCMDWorkshopSession?
     private var workshopSessionStarting = false
+    private var isShuttingDown = false
 
     private let steamCMDDir: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -485,7 +486,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
 
     func refreshSessionIfNeeded() {
         processLock.lock()
-        let shouldRefresh = steamCMDPath != nil && !savedUsername.isEmpty &&
+        let shouldRefresh = !isShuttingDown && steamCMDPath != nil && !savedUsername.isEmpty &&
             activeLoginProcess == nil && !installationInProgress && downloadProcesses.isEmpty &&
             workshopSession == nil && !workshopSessionStarting
         if shouldRefresh { hasRefreshedSession = true }
@@ -843,6 +844,13 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             task: task
         )
         processLock.lock()
+        if isShuttingDown {
+            workshopSessionStarting = false
+            processLock.unlock()
+            close(masterFD)
+            terminateTree(of: process)
+            return
+        }
         workshopSession = session
         workshopSessionStarting = false
         if let task { downloadProcesses[task.workshopId] = process }
@@ -1281,6 +1289,90 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.2)
         }
         return nil
+    }
+
+    func shutdown() {
+        processLock.lock()
+        isShuttingDown = true
+        let session = workshopSession
+        let login = activeLoginProcess
+        let downloads = Array(downloadProcesses.values)
+        workshopSession = nil
+        activeLoginProcess = nil
+        downloadProcesses.removeAll()
+        processLock.unlock()
+
+        var roots: [Process] = downloads
+        if let login { roots.append(login) }
+        if let session { roots.append(session.process) }
+        killTree(of: roots)
+        killManagedSteamCMDProcesses()
+    }
+
+    func reapOrphanedProcesses() {
+        killManagedSteamCMDProcesses()
+    }
+
+    private func killManagedSteamCMDProcesses() {
+        for pass in 0..<3 {
+            let pids = managedSteamCMDPIDs()
+            guard !pids.isEmpty else { return }
+            let signal = pass == 0 ? SIGTERM : SIGKILL
+            for pid in pids { _ = Darwin.kill(pid, signal) }
+            let deadline = Date().addingTimeInterval(pass == 0 ? 1.5 : 0.5)
+            while Date() < deadline {
+                if !pids.contains(where: { Darwin.kill($0, 0) == 0 }) { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        }
+    }
+
+    private func managedSteamCMDPIDs() -> [pid_t] {
+        let prefix = steamCMDDir.standardizedFileURL.path
+        guard !prefix.isEmpty, prefix != "/" else { return [] }
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var buffer = [pid_t](repeating: 0, count: Int(count) * 2)
+        let bytes = proc_listallpids(&buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
+        guard bytes > 0 else { return [] }
+        let total = Int(bytes) / MemoryLayout<pid_t>.size
+        let own = getpid()
+
+        var result: [pid_t] = []
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        for index in 0..<total {
+            let pid = buffer[index]
+            guard pid > 0, pid != own else { continue }
+            let length = proc_pidpath(pid, &path, UInt32(path.count))
+            guard length > 0 else { continue }
+            let executable = String(cString: path)
+            guard executable.hasPrefix(prefix + "/") else { continue }
+            result.append(pid)
+        }
+        return result
+    }
+
+    private func terminateTree(of process: Process) {
+        killTree(of: [process])
+    }
+
+    private func killTree(of processes: [Process]) {
+        var pids: [pid_t] = []
+        for process in processes where process.isRunning {
+            let pid = process.processIdentifier
+            guard pid > 0 else { continue }
+            pids.append(pid)
+            pids.append(contentsOf: descendantPIDs(of: pid))
+        }
+        guard !pids.isEmpty else { return }
+
+        for pid in pids { _ = Darwin.kill(pid, SIGTERM) }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if !pids.contains(where: { Darwin.kill($0, 0) == 0 }) { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        for pid in pids where Darwin.kill(pid, 0) == 0 { _ = Darwin.kill(pid, SIGKILL) }
     }
 
     private func descendantPIDs(of parentPID: pid_t) -> [pid_t] {

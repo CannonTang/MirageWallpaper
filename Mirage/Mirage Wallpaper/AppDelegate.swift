@@ -87,6 +87,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DispatchQueue.global(qos: .utility).async {
+            SteamCMDManager.shared.reapOrphanedProcesses()
             SteamCMDManager.shared.refreshSessionIfNeeded()
         }
 
@@ -129,6 +130,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // renderer would outlive the app as an orphan still drawing on the
         // desktop. Bounded to roughly two seconds in total.
         wallpaperViewModel.renderer.stopAllAndWait()
+
+        SteamCMDManager.shared.shutdown()
 
         // Same constraint: a transient override is one Mirage only took for
         // tint consistency, so the user's own picture goes back synchronously
