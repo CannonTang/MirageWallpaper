@@ -104,7 +104,7 @@ class WorkshopViewModel: ObservableObject {
     var activeDownloadCount: Int {
         downloadQueue.filter {
             if case .downloading = $0.state { return true }
-            if case .starting = $0.state { return true }
+            if case .resolving = $0.state { return true }
             if case .validating = $0.state { return true }
             return false
         }.count
@@ -161,7 +161,7 @@ class WorkshopViewModel: ObservableObject {
                 self?.search()
             }
 
-        SteamCMDManager.shared.$isLoggedIn
+        SteamServiceManager.shared.$isLoggedIn
             .receive(on: RunLoop.main)
             .sink { [weak self] isLoggedIn in
                 self?.refreshSetupState()
@@ -169,10 +169,17 @@ class WorkshopViewModel: ObservableObject {
             }
             .store(in: &serviceStateCancellables)
 
-        SteamCMDManager.shared.$authenticationState
+        SteamServiceManager.shared.$authenticationState
             .receive(on: RunLoop.main)
             .sink { [weak self] state in
                 self?.steamServiceStatus.authentication = state
+                self?.refreshSetupState()
+            }
+            .store(in: &serviceStateCancellables)
+
+        SteamServiceManager.shared.$isAvailable
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
                 self?.refreshSetupState()
             }
             .store(in: &serviceStateCancellables)
@@ -319,39 +326,30 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Setup Check
 
     func checkSteamSetup() {
-        let cmdManager = SteamCMDManager.shared
-        steamServiceStatus.steamCMD = .checking
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let path = cmdManager.detectSteamCMD()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch path {
-                case .found(let path):
-                    self.steamServiceStatus.steamCMD = .available(path.path)
-                    cmdManager.refreshSessionIfNeeded()
-                case .rosettaRequired:
-                    self.steamServiceStatus.steamCMD = .needsAction(L("需要安装 Rosetta 2"))
-                case .notFound:
-                    self.steamServiceStatus.steamCMD = .unavailable(L("未安装 SteamCMD"))
-                }
-                self.steamServiceStatus.authentication = cmdManager.authenticationState
-                self.refreshSetupState()
-            }
-        }
+        let manager = SteamServiceManager.shared
+        steamServiceStatus.client = manager.isAvailable
+            ? .available(L("内置 Steam 服务可用"))
+            : .checking
+        steamServiceStatus.authentication = manager.authenticationState
+        manager.start()
+        refreshSetupState()
     }
 
     private func refreshSetupState() {
-        let cmdManager = SteamCMDManager.shared
-        if cmdManager.steamCMDPath == nil {
-            steamSetupState = .steamCMDMissing
-            steamServiceStatus.workshopDownload = .needsAction(L("需要先安装 SteamCMD"))
-        } else if !cmdManager.isLoggedIn {
+        let manager = SteamServiceManager.shared
+        if !manager.isAvailable {
+            steamSetupState = .serviceUnavailable
+            steamServiceStatus.client = .unavailable(L("Steam 服务组件不可用"))
+            steamServiceStatus.workshopDownload = .needsAction(L("Steam 服务尚未就绪"))
+        } else if !manager.isLoggedIn {
+            steamServiceStatus.client = .available(L("内置 Steam 服务可用"))
             steamSetupState = .needsLogin
-            if cmdManager.savedUsername.isEmpty {
+            if manager.savedUsername.isEmpty {
                 steamServiceStatus.authentication = .needsAction(L("需要登录 Steam"))
             }
             steamServiceStatus.workshopDownload = .needsAction(L("需要有效的 Steam 会话"))
         } else {
+            steamServiceStatus.client = .available(L("内置 Steam 服务可用"))
             steamSetupState = .ready
             steamServiceStatus.authentication = .available(L("会话已验证"))
             if case .unknown = steamServiceStatus.workshopDownload {
@@ -756,7 +754,7 @@ class WorkshopViewModel: ObservableObject {
             switch downloadQueue[existingIndex].state {
             case .failed, .completed:
                 downloadQueue.removeAll { $0.id == item.publishedFileId }
-            case .queued, .starting, .downloading, .validating:
+            case .queued, .resolving, .downloading, .validating:
                 if purpose == .presetDependency {
                     downloadQueue[existingIndex].purpose = purpose
                 }
@@ -784,7 +782,7 @@ class WorkshopViewModel: ObservableObject {
             return
         }
         cancelledDownloadIDs.insert(item.publishedFileId)
-        SteamCMDManager.shared.cancelDownload(workshopId: item.publishedFileId)
+        SteamServiceManager.shared.cancelDownload(workshopId: item.publishedFileId)
     }
 
     func retryDownload(_ task: DownloadTask) {
@@ -825,65 +823,62 @@ class WorkshopViewModel: ObservableObject {
 
     private func processDownloadQueue() {
         guard steamSetupState == .ready else { return }
-        let maxConcurrent = 1
-        let currentActive = downloadQueue.filter {
+        let maxConcurrent = 3
+        var currentActive = downloadQueue.filter {
             if case .downloading = $0.state { return true }
-            if case .starting = $0.state { return true }
+            if case .resolving = $0.state { return true }
             if case .validating = $0.state { return true }
             return false
         }.count
 
-        guard currentActive < maxConcurrent else { return }
+        while currentActive < maxConcurrent,
+              let nextIndex = downloadQueue.firstIndex(where: {
+                  if case .queued = $0.state { return true }
+                  return false
+              }) {
+            let workshopId = downloadQueue[nextIndex].workshopItem.publishedFileId
+            downloadQueue[nextIndex].state = .resolving
+            downloadQueue[nextIndex].startedAt = Date()
+            currentActive += 1
 
-        guard let nextIndex = downloadQueue.firstIndex(where: {
-            if case .queued = $0.state { return true }
-            return false
-        }) else { return }
+            SteamServiceManager.shared.downloadItem(workshopId: workshopId) { [weak self] state in
+                guard let self else { return }
+                guard let idx = self.downloadQueue.firstIndex(where: { $0.id == workshopId }) else { return }
 
-        let workshopId = downloadQueue[nextIndex].workshopItem.publishedFileId
-        downloadQueue[nextIndex].state = .starting
-        downloadQueue[nextIndex].startedAt = Date()
+                self.downloadQueue[idx].state = state
 
-        SteamCMDManager.shared.downloadItem(
-            workshopId: workshopId,
-            expectedFileSize: self.downloadQueue[nextIndex].workshopItem.fileSize
-        ) { [weak self] state in
-            guard let self else { return }
-            guard let idx = self.downloadQueue.firstIndex(where: { $0.id == workshopId }) else { return }
-
-            self.downloadQueue[idx].state = state
-
-            if self.cancelledDownloadIDs.contains(workshopId), case .failed = state {
-                self.cancelledDownloadIDs.remove(workshopId)
-                self.downloadQueue.removeAll { $0.id == workshopId }
-                self.processDownloadQueue()
-                return
-            }
-
-            if case .completed = state {
-                if let directory = SteamCMDManager.shared.downloadedItemDirectory(workshopId: workshopId) {
-                    WallpaperLibrary.shared.recordAdded(at: directory, workshopID: workshopId)
-                }
-                let purpose = self.downloadQueue[idx].purpose
-                let selectedItemID = self.selectedItem?.publishedFileId
-                let selectionGeneration = self.selectionGeneration
-                self.steamServiceStatus.workshopDownload = .available(L("最近一次下载已验证"))
-                self.downloadQueue[idx].completedAt = Date()
-                self.processDownloadQueue()
-                NotificationCenter.default.post(name: .workshopItemDownloaded, object: workshopId)
-                self.handleCompletedDownload(
-                    workshopId: workshopId,
-                    purpose: purpose,
-                    selectedItemID: selectedItemID,
-                    selectionGeneration: selectionGeneration
-                )
-            } else if case .failed = state {
-                self.steamServiceStatus.workshopDownload = .unavailable(L("最近一次下载失败"))
-                if SteamCMDManager.shared.isLoggedIn {
+                if self.cancelledDownloadIDs.contains(workshopId), case .failed = state {
+                    self.cancelledDownloadIDs.remove(workshopId)
+                    self.downloadQueue.removeAll { $0.id == workshopId }
                     self.processDownloadQueue()
+                    return
                 }
-            } else if case .starting = state {
-                self.steamServiceStatus.workshopDownload = .checking
+
+                if case .completed = state {
+                    if let directory = SteamServiceManager.shared.downloadedItemDirectory(workshopId: workshopId) {
+                        WallpaperLibrary.shared.recordAdded(at: directory, workshopID: workshopId)
+                    }
+                    let purpose = self.downloadQueue[idx].purpose
+                    let selectedItemID = self.selectedItem?.publishedFileId
+                    let selectionGeneration = self.selectionGeneration
+                    self.steamServiceStatus.workshopDownload = .available(L("最近一次下载已验证"))
+                    self.downloadQueue[idx].completedAt = Date()
+                    self.processDownloadQueue()
+                    NotificationCenter.default.post(name: .workshopItemDownloaded, object: workshopId)
+                    self.handleCompletedDownload(
+                        workshopId: workshopId,
+                        purpose: purpose,
+                        selectedItemID: selectedItemID,
+                        selectionGeneration: selectionGeneration
+                    )
+                } else if case .failed = state {
+                    self.steamServiceStatus.workshopDownload = .unavailable(L("最近一次下载失败"))
+                    if SteamServiceManager.shared.isLoggedIn {
+                        self.processDownloadQueue()
+                    }
+                } else if case .resolving = state {
+                    self.steamServiceStatus.workshopDownload = .checking
+                }
             }
         }
     }
@@ -922,13 +917,13 @@ class WorkshopViewModel: ObservableObject {
         guard !isLoggingOut else { return }
         isLoggingOut = true
         steamServiceStatus.authentication = .checking
-        SteamCMDManager.shared.logout { [weak self] result in
+        SteamServiceManager.shared.logout { [weak self] result in
             guard let self else { return }
             self.isLoggingOut = false
             switch result {
             case .success:
                 self.steamServiceStatus.authentication = .needsAction(L("已退出登录"))
-                self.logoutResultMessage = L("已退出 Mirage 专用 SteamCMD 会话。")
+                self.logoutResultMessage = L("已退出 Mirage 的 Steam 会话。")
             case .failure(let error):
                 self.steamServiceStatus.authentication = .needsAction(error.localizedDescription)
                 self.logoutResultMessage = error.localizedDescription

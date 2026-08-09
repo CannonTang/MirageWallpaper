@@ -175,27 +175,20 @@ struct WorkshopItemCard: View {
     @ViewBuilder
     private func downloadBadge(_ state: DownloadState) -> some View {
         switch state {
-        case .downloading(let percent):
+        case .downloading(let progress):
             HStack(spacing: 4) {
-                if let percent {
-                    ZStack {
-                        Circle()
-                            .stroke(Color.white.opacity(0.3), lineWidth: 2)
-                            .frame(width: 14, height: 14)
-                        Circle()
-                            .trim(from: 0, to: percent)
-                            .stroke(Color.white, lineWidth: 2)
-                            .frame(width: 14, height: 14)
-                            .rotationEffect(.degrees(-90))
-                    }
-                    Text("\(Int(percent * 100))%")
-                        .font(.caption2)
-                } else {
-                    Image(systemName: "arrow.down")
-                        .font(.caption2)
-                    Text("连接中")
-                        .font(.caption2)
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.3), lineWidth: 2)
+                        .frame(width: 14, height: 14)
+                    Circle()
+                        .trim(from: 0, to: progress.fraction)
+                        .stroke(Color.white, lineWidth: 2)
+                        .frame(width: 14, height: 14)
+                        .rotationEffect(.degrees(-90))
                 }
+                Text("\(Int(progress.fraction * 100))%")
+                    .font(.caption2)
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -203,7 +196,7 @@ struct WorkshopItemCard: View {
             .foregroundStyle(.white)
         case .queued:
             badge("排队中", systemImage: "clock", color: .orange)
-        case .starting, .validating:
+        case .resolving, .validating:
             HStack(spacing: 3) {
                 ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
                 Text("处理中").font(.caption2)

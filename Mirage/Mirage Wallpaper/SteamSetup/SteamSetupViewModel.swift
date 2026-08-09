@@ -8,121 +8,74 @@ import SwiftUI
 import Combine
 
 class SteamSetupViewModel: ObservableObject {
-    @Published var currentStep: Int = 0
-    @Published var steamCMDPath: URL?
-    @Published var steamCMDInstallState: SteamCMDInstallState = .detecting
+    @Published var currentStep = 0
     @Published var loginState: SteamLoginState = .idle
-
-    @Published var username: String = ""
-    @Published var password: String = ""
-    @Published var guardCode: String = ""
+    @Published var username = ""
+    @Published var password = ""
+    @Published var guardCode = ""
     @Published var errorMessage: String?
-
-    @Published var loginLog: [String] = []
-    @Published private(set) var guardWaitElapsed: Int = 0
+    @Published private(set) var guardWaitElapsed = 0
     @Published private(set) var reusableSessionUsername: String?
 
     private var guardWaitStartedAt: Date?
     private var guardWaitTimer: Timer?
-    private var lastGuardHeartbeat = 0
-    private var sessionCancellable: AnyCancellable?
+    private var qrChallenge = ""
+    private var qrChallengeUpdatedAt: Date?
+    private var qrRefreshTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
 
-    let totalSteps = 4
+    let totalSteps = 3
 
     var canProceed: Bool {
         switch currentStep {
-        case 0:
-            return true
-        case 1:
-            switch steamCMDInstallState {
-            case .found, .installed: return true
-            default: return false
-            }
-        case 2:
-            return loginState == .success
-        case 3:
-            return true
-        default:
-            return false
+        case 0, 2: return true
+        case 1: return loginState == .success
+        default: return false
         }
     }
 
     init() {
-        let manager = SteamCMDManager.shared
+        let manager = SteamServiceManager.shared
         username = manager.savedUsername
-        reusableSessionUsername = manager.isLoggedIn && !manager.savedUsername.isEmpty
-            ? manager.savedUsername
-            : nil
-        sessionCancellable = manager.$isLoggedIn
+        reusableSessionUsername = manager.isLoggedIn ? manager.accountName : nil
+        loginState = manager.isLoggedIn ? .success : .idle
+        manager.$loginState
+            .receive(on: RunLoop.main)
+            .sink { [weak self] state in
+                self?.applyLoginState(state)
+            }
+            .store(in: &cancellables)
+        manager.$isLoggedIn
             .receive(on: RunLoop.main)
             .sink { [weak self] isLoggedIn in
                 guard let self else { return }
-                let savedUsername = SteamCMDManager.shared.savedUsername
-                self.reusableSessionUsername = isLoggedIn && !savedUsername.isEmpty ? savedUsername : nil
+                self.reusableSessionUsername = isLoggedIn ? manager.accountName : nil
+                if isLoggedIn && !manager.accountName.isEmpty { self.username = manager.accountName }
             }
+            .store(in: &cancellables)
     }
 
     func useSavedSession() {
-        guard let reusableSessionUsername, SteamCMDManager.shared.isLoggedIn else {
-            errorMessage = L("保存的 Steam 会话已失效，请使用密码重新登录")
+        guard SteamServiceManager.shared.isLoggedIn else {
+            errorMessage = L("保存的 Steam 会话已失效，请重新登录")
             return
         }
-        username = reusableSessionUsername
-        password = ""
-        guardCode = ""
-        errorMessage = nil
-        loginLog = [L("[Mirage] 已使用验证有效的本机 SteamCMD 会话")]
+        username = SteamServiceManager.shared.accountName
         loginState = .success
+        errorMessage = nil
     }
 
-    func detectSteamCMD() {
-        steamCMDInstallState = .detecting
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let found = SteamCMDManager.shared.detectSteamCMD()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                switch found {
-                case .found(let path):
-                    self?.steamCMDPath = path
-                    self?.steamCMDInstallState = .found(path.path)
-                case .rosettaRequired:
-                    self?.steamCMDInstallState = .rosettaRequired
-                case .notFound:
-                    self?.steamCMDInstallState = .notFound
-                }
-            }
-        }
+    func startQRLogin() {
+        stopQRRefreshWatchdog()
+        errorMessage = nil
+        password = ""
+        SteamServiceManager.shared.loginWithQR()
     }
 
-    func installSteamCMD() {
-        SteamCMDManager.shared.installSteamCMD { [weak self] state in
-            self?.steamCMDInstallState = state
-            if case .installed(let path) = state {
-                self?.steamCMDPath = URL(fileURLWithPath: path)
-            }
-        }
-    }
-
-    func installRosetta() {
-        steamCMDInstallState = .installingRosetta
-        SteamCMDManager.shared.installRosetta { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success:
-                let detection = SteamCMDManager.shared.detectSteamCMD()
-                if case .found(let path) = detection {
-                    self.steamCMDPath = path
-                    self.steamCMDInstallState = .found(path.path)
-                } else {
-                    self.installSteamCMD()
-                }
-            case .failure(let error):
-                self.steamCMDInstallState = .rosettaInstallFailed(error.localizedDescription)
-            }
-        }
-    }
-
-    func cancelSteamCMDInstallation() {
-        SteamCMDManager.shared.cancelSteamCMDInstallation()
+    func refreshQRCode() {
+        stopQRRefreshWatchdog()
+        errorMessage = nil
+        SteamServiceManager.shared.loginWithQR()
     }
 
     func login() {
@@ -130,35 +83,8 @@ class SteamSetupViewModel: ObservableObject {
             errorMessage = L("请输入用户名和密码")
             return
         }
-        stopGuardWaitUpdates()
         errorMessage = nil
-        loginLog.removeAll()
-        SteamCMDManager.shared.login(
-            username: username,
-            password: password,
-            onLog: { [weak self] line in
-                self?.loginLog.append(line)
-            }
-        ) { [weak self] state in
-            guard let self else { return }
-            if self.loginState == .success, state != .success { return }
-            self.loginState = state
-            if case .waitingForGuard(.mobileConfirm) = state {
-                self.startGuardWaitUpdates()
-            } else if state != .loggingIn {
-                self.stopGuardWaitUpdates()
-            }
-            if case .failed(let msg) = state {
-                self.errorMessage = msg
-            }
-            if case .success = state {
-                self.password = ""
-                self.guardCode = ""
-            }
-            if case .waitingForGuard = state {
-                self.errorMessage = nil
-            }
-        }
+        SteamServiceManager.shared.login(username: username, password: password)
     }
 
     func submitGuardCode() {
@@ -167,9 +93,8 @@ class SteamSetupViewModel: ObservableObject {
             errorMessage = L("请输入验证码")
             return
         }
-        guard SteamCMDManager.shared.submitGuardCode(code) else {
+        guard SteamServiceManager.shared.submitGuardCode(code) else {
             errorMessage = L("Steam Guard 会话已结束，请重新登录")
-            loginState = .failed(L("Steam Guard 会话已结束"))
             return
         }
         guardCode = ""
@@ -178,18 +103,19 @@ class SteamSetupViewModel: ObservableObject {
     }
 
     func cancelLogin() {
-        SteamCMDManager.shared.cancelLogin()
+        SteamServiceManager.shared.cancelLogin()
         stopGuardWaitUpdates()
+        stopQRRefreshWatchdog()
         password = ""
         guardCode = ""
-        loginState = .idle
+        loginState = SteamServiceManager.shared.isLoggedIn ? .success : .idle
         errorMessage = nil
     }
 
     func cancelPendingWork() {
-        SteamCMDManager.shared.cancelLogin()
-        SteamCMDManager.shared.cancelSteamCMDInstallation()
+        if !SteamServiceManager.shared.isLoggedIn { SteamServiceManager.shared.cancelLogin() }
         stopGuardWaitUpdates()
+        stopQRRefreshWatchdog()
         password = ""
         guardCode = ""
     }
@@ -197,17 +123,12 @@ class SteamSetupViewModel: ObservableObject {
     func reset() {
         cancelPendingWork()
         currentStep = 0
-        steamCMDPath = SteamCMDManager.shared.steamCMDPath
-        steamCMDInstallState = .detecting
-        loginState = .idle
+        loginState = SteamServiceManager.shared.isLoggedIn ? .success : .idle
         errorMessage = nil
-        loginLog.removeAll()
-        username = SteamCMDManager.shared.savedUsername
+        username = SteamServiceManager.shared.savedUsername
     }
 
-    func completeSetup() {
-        SteamCMDManager.shared.savedUsername = username
-    }
+    func completeSetup() {}
 
     func nextStep() {
         guard currentStep < totalSteps - 1 else { return }
@@ -216,25 +137,72 @@ class SteamSetupViewModel: ObservableObject {
 
     func previousStep() {
         guard currentStep > 0 else { return }
-        if currentStep == 2 { cancelLogin() }
-        if currentStep == 1 { cancelSteamCMDInstallation() }
+        if currentStep == 1 && !SteamServiceManager.shared.isLoggedIn { cancelLogin() }
         currentStep -= 1
+    }
+
+    private func applyLoginState(_ state: SteamLoginState) {
+        loginState = state
+        switch state {
+        case .waitingForGuard(.mobileConfirm):
+            stopQRRefreshWatchdog()
+            startGuardWaitUpdates()
+        case .failed(let message):
+            stopGuardWaitUpdates()
+            stopQRRefreshWatchdog()
+            errorMessage = message
+        case .success:
+            stopGuardWaitUpdates()
+            stopQRRefreshWatchdog()
+            errorMessage = nil
+            password = ""
+            guardCode = ""
+            username = SteamServiceManager.shared.accountName
+            if currentStep == 1 { currentStep = 2 }
+        case .waitingForQR(let challenge):
+            stopGuardWaitUpdates()
+            startQRRefreshWatchdog(challenge: challenge)
+            errorMessage = nil
+        case .waitingForGuard:
+            stopQRRefreshWatchdog()
+            errorMessage = nil
+        case .idle, .loggingIn:
+            stopGuardWaitUpdates()
+            stopQRRefreshWatchdog()
+        }
+    }
+
+    private func startQRRefreshWatchdog(challenge: String) {
+        if qrChallenge != challenge {
+            qrChallenge = challenge
+            qrChallengeUpdatedAt = Date()
+        }
+        guard qrRefreshTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self,
+                  case .waitingForQR = self.loginState,
+                  let updatedAt = self.qrChallengeUpdatedAt,
+                  Date().timeIntervalSince(updatedAt) >= 30 else { return }
+            self.refreshQRCode()
+        }
+        qrRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopQRRefreshWatchdog() {
+        qrRefreshTimer?.invalidate()
+        qrRefreshTimer = nil
+        qrChallenge = ""
+        qrChallengeUpdatedAt = nil
     }
 
     private func startGuardWaitUpdates() {
         guard guardWaitTimer == nil else { return }
         guardWaitStartedAt = Date()
         guardWaitElapsed = 0
-        lastGuardHeartbeat = 0
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             guard let self, let startedAt = self.guardWaitStartedAt else { return }
-            let elapsed = max(0, Int(Date().timeIntervalSince(startedAt)))
-            self.guardWaitElapsed = elapsed
-            let heartbeat = elapsed / 5 * 5
-            if heartbeat >= 5, heartbeat != self.lastGuardHeartbeat {
-                self.lastGuardHeartbeat = heartbeat
-                self.loginLog.append(L("[Mirage] Steam 手机确认仍在等待（%lld 秒）", heartbeat))
-            }
+            self.guardWaitElapsed = max(0, Int(Date().timeIntervalSince(startedAt)))
         }
         guardWaitTimer = timer
         RunLoop.main.add(timer, forMode: .common)
@@ -245,10 +213,10 @@ class SteamSetupViewModel: ObservableObject {
         guardWaitTimer = nil
         guardWaitStartedAt = nil
         guardWaitElapsed = 0
-        lastGuardHeartbeat = 0
     }
 
     deinit {
         guardWaitTimer?.invalidate()
+        qrRefreshTimer?.invalidate()
     }
 }

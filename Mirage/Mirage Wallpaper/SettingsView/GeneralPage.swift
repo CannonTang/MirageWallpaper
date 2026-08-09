@@ -49,7 +49,7 @@ struct GeneralPage: SettingsPage {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(source.title).font(.callout)
-                if source.role == .managedSteamCMD {
+                if source.role == .managedWorkshop {
                     Text("当前下载位置")
                         .font(.caption2)
                         .padding(.horizontal, 6)
@@ -250,7 +250,7 @@ struct GeneralPage: SettingsPage {
                         viewModel.settings.steamAPIEndpoint = .official
                     }
                 } message: {
-                    Text("该镜像仅允许中国大陆用户访问，且并非 Steam 官方服务，不保证安全性和可用性。它只代理浏览 API，不能加速 SteamCMD 登录或壁纸下载。")
+                    Text("该镜像仅允许中国大陆用户访问，且并非 Steam 官方服务，不保证安全性和可用性。它只代理浏览 API，不能加速 Steam 登录或壁纸下载。")
                 }
             }
 
@@ -266,7 +266,7 @@ struct GeneralPage: SettingsPage {
                                     .font(.callout)
                                     .bold()
                                 Text(apiKeyIsEmpty
-                                     ? "内置 Key 由所有用户共享，可能因请求过多而暂时不可用。设置专属 Key 可显著提高创意工坊浏览稳定性。它只用于浏览，不影响 SteamCMD 登录和壁纸下载。"
+                                     ? "内置 Key 由所有用户共享，可能因请求过多而暂时不可用。设置专属 Key 可显著提高创意工坊浏览稳定性。它只用于浏览，不影响 Steam 登录和壁纸下载。"
                                      : "Steam Web API Key 应为 32 位十六进制字符。当前将继续使用内置 Key。")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

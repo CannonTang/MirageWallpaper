@@ -101,10 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.contentViewModel.refresh()
         }
 
-        DispatchQueue.global(qos: .utility).async {
-            SteamCMDManager.shared.reapOrphanedProcesses()
-            SteamCMDManager.shared.refreshSessionIfNeeded()
-        }
+        SteamServiceManager.shared.start()
 
         let w = wallpaperViewModel.currentWallpaper
         if w.isValid {
@@ -150,7 +147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // desktop. Bounded to roughly two seconds in total.
         wallpaperViewModel.renderer.stopAllAndWait()
 
-        SteamCMDManager.shared.shutdown()
+        SteamServiceManager.shared.shutdown()
 
         // Same constraint: a transient override is one Mirage only took for
         // tint consistency, so the user's own picture goes back synchronously

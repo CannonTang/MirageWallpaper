@@ -280,7 +280,7 @@ struct WorkshopView: View {
                     Image(systemName: "person.crop.circle.fill")
                         .foregroundStyle(.green)
                         .font(.caption)
-                    Text(SteamCMDManager.shared.savedUsername)
+                    Text(SteamServiceManager.shared.accountName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -325,7 +325,7 @@ struct WorkshopView: View {
                 Text("连接 Steam 以下载壁纸")
                     .font(.callout)
                     .bold()
-                Text("设置 SteamCMD 后可直接从创意工坊下载壁纸到本地（需拥有 Wallpaper Engine）")
+                Text("登录 Steam 后可直接从创意工坊下载壁纸到本地（需拥有 Wallpaper Engine）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -373,7 +373,7 @@ struct SteamAPIKeyReminderBanner: View {
                 Text("建议设置专属 Steam Web API Key")
                     .font(.callout)
                     .bold()
-                Text("内置 Key 由所有用户共享，可能因请求过多影响浏览；专属 Key 不影响 SteamCMD 登录和下载。")
+                Text("内置 Key 由所有用户共享，可能因请求过多影响浏览；专属 Key 不影响 Steam 登录和下载。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

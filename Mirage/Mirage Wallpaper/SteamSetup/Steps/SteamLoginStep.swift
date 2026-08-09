@@ -6,26 +6,19 @@
 
 import SwiftUI
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 struct SteamLoginStep: View {
     @ObservedObject var viewModel: SteamSetupViewModel
-
     @State private var isPasswordVisible = false
-    @State private var showLog = false
+    @State private var showPasswordLogin = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
+        VStack(spacing: 18) {
             Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.blue, .indigo],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .font(.system(size: 44))
+                .foregroundStyle(.blue)
 
             Text("登录 Steam 账号")
                 .font(.title2)
@@ -35,13 +28,12 @@ struct SteamLoginStep: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
 
             VStack(alignment: .leading, spacing: 6) {
                 Label("Mirage 并非 Steam 官方客户端。", systemImage: "info.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                Text("若继续登录，密码仅通过本机的 Valve SteamCMD 安全终端提交，不会写入命令行或 Mirage 日志。SteamCMD 会在本机保存会话以便下载；您可随时在创意工坊页面“退出登录”清除它。")
+                Text("登录由内置 Steam 服务直接连接 Valve。二维码和密码均只在本机处理，刷新令牌保存在 macOS 钥匙串中，可随时退出并清除。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -51,24 +43,22 @@ struct SteamLoginStep: View {
             .background(Color.orange.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 8))
 
-            VStack(spacing: 12) {
+            Group {
                 switch viewModel.loginState {
                 case .idle, .failed:
-                    loginForm
+                    entryView
                 case .loggingIn:
                     loggingInView
+                case .waitingForQR(let challenge):
+                    qrView(challenge)
                 case .waitingForGuard(let guardType):
-                    if guardType == .mobileConfirm {
-                        mobileConfirmView
-                    } else {
-                        guardCodeView(guardType)
-                    }
+                    guardType == .mobileConfirm ? AnyView(mobileConfirmView) : AnyView(guardCodeView(guardType))
                 case .success:
                     successView
                 }
             }
-            .frame(width: 300)
-            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: viewModel.loginState)
+            .frame(width: 320)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.loginState)
 
             if let error = viewModel.errorMessage {
                 Text(error)
@@ -76,63 +66,12 @@ struct SteamLoginStep: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 30)
-                    .transition(.opacity)
             }
-
-            if viewModel.loginState != .idle {
-                VStack(spacing: 4) {
-                    HStack(spacing: 10) {
-                        Button {
-                            showLog.toggle()
-                        } label: {
-                            Label(LocalizedStringKey(showLog ? "隐藏日志" : "显示 SteamCMD 日志"), systemImage: "terminal")
-                                .font(.caption2)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-
-                        Button("复制脱敏日志") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(viewModel.loginLog.joined(separator: "\n"), forType: .string)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    }
-
-                    if showLog {
-                        ScrollView {
-                            ScrollViewReader { proxy in
-                                VStack(alignment: .leading, spacing: 1) {
-                                    ForEach(Array(viewModel.loginLog.enumerated()), id: \.offset) { idx, line in
-                                        Text(line)
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .foregroundStyle(.green)
-                                            .id(idx)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .onChange(of: viewModel.loginLog.count) { _, _ in
-                                    if let last = viewModel.loginLog.indices.last {
-                                        proxy.scrollTo(last, anchor: .bottom)
-                                    }
-                                }
-                            }
-                        }
-                        .frame(width: 400, height: 100)
-                        .padding(6)
-                        .background(Color.black.opacity(0.85))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                }
-            }
-
-            Spacer()
         }
         .padding()
     }
 
-    var loginForm: some View {
+    private var entryView: some View {
         VStack(spacing: 10) {
             if let savedUsername = viewModel.reusableSessionUsername {
                 Button {
@@ -142,16 +81,34 @@ struct SteamLoginStep: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-
-                HStack {
-                    Divider()
-                    Text("或使用密码登录")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Divider()
-                }
             }
 
+            if showPasswordLogin {
+                passwordForm
+                Button("改用二维码登录") {
+                    showPasswordLogin = false
+                    viewModel.startQRLogin()
+                }
+                .buttonStyle(.link)
+            } else {
+                Button {
+                    viewModel.startQRLogin()
+                } label: {
+                    Label("使用 Steam 手机应用扫码登录", systemImage: "qrcode")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("改用账户密码登录") {
+                    showPasswordLogin = true
+                }
+                .buttonStyle(.link)
+            }
+        }
+    }
+
+    private var passwordForm: some View {
+        VStack(spacing: 10) {
             HStack {
                 Image(systemName: "person.fill")
                     .foregroundStyle(.secondary)
@@ -159,7 +116,6 @@ struct SteamLoginStep: View {
                 TextField("全球 Steam 登录账户名（非昵称）", text: $viewModel.username)
                     .textFieldStyle(.roundedBorder)
             }
-
             HStack {
                 Image(systemName: "lock.fill")
                     .foregroundStyle(.secondary)
@@ -175,11 +131,10 @@ struct SteamLoginStep: View {
                     isPasswordVisible.toggle()
                 } label: {
                     Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
-                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help(isPasswordVisible ? "隐藏密码" : "显示密码")
             }
-
             Button {
                 viewModel.login()
             } label: {
@@ -188,116 +143,116 @@ struct SteamLoginStep: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.username.isEmpty || viewModel.password.isEmpty)
-            .padding(.top, 4)
         }
     }
 
-    var loggingInView: some View {
-        VStack(spacing: 16) {
+    private var loggingInView: some View {
+        VStack(spacing: 14) {
             ProgressView()
-                .scaleEffect(1.5)
-            Text("正在登录...")
+                .controlSize(.large)
+            Text("正在连接 Steam…")
                 .foregroundStyle(.secondary)
-            Button("取消登录") {
-                viewModel.cancelLogin()
+            Button("取消登录") { viewModel.cancelLogin() }
+                .buttonStyle(.bordered)
+        }
+    }
+
+    private func qrView(_ challenge: String) -> some View {
+        VStack(spacing: 12) {
+            if let image = qrImage(challenge) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 196, height: 196)
+                    .padding(12)
+                    .background(.white)
+                    .id(challenge)
+            }
+            Text("使用 Steam 手机应用扫描二维码")
+                .font(.callout)
+                .bold()
+            Text("在 Steam 手机应用中打开扫码功能并确认登录")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            HStack {
+                Button {
+                    viewModel.refreshQRCode()
+                } label: {
+                    Label("刷新二维码", systemImage: "arrow.clockwise")
+                }
+                Button("取消登录") { viewModel.cancelLogin() }
             }
             .buttonStyle(.bordered)
+            Button("改用账户密码登录") {
+                viewModel.cancelLogin()
+                showPasswordLogin = true
+            }
+            .buttonStyle(.link)
         }
     }
 
-    func guardCodeView(_ type: SteamGuardType) -> some View {
+    private func guardCodeView(_ type: SteamGuardType) -> some View {
         VStack(spacing: 12) {
             Image(systemName: type == .email ? "envelope.badge.shield.half.filled.fill" : "iphone")
                 .font(.system(size: 36))
                 .foregroundStyle(.blue)
-
             Text(LocalizedStringKey(type == .email ? "请输入邮箱验证码" : "请输入手机验证码"))
                 .font(.callout)
                 .bold()
-
-            Text(type == .email ?
-                 "验证码已发送到您的邮箱" :
-                 "请查看 Steam 手机令牌")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Image(systemName: "shield.fill")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20)
-                TextField("验证码", text: $viewModel.guardCode)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
-            }
-
-            Button {
-                viewModel.submitGuardCode()
-            } label: {
-                Label("验证", systemImage: "checkmark.circle.fill")
-                    .frame(width: 100)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(viewModel.guardCode.isEmpty)
-
-            Button("取消登录") {
-                viewModel.cancelLogin()
-            }
-            .buttonStyle(.bordered)
+            TextField("验证码", text: $viewModel.guardCode)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 160)
+            Button("验证") { viewModel.submitGuardCode() }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.guardCode.isEmpty)
+            Button("取消登录") { viewModel.cancelLogin() }
+                .buttonStyle(.bordered)
         }
     }
 
-    var successView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.green)
-                .transition(.scale.combined(with: .opacity))
-
-            Text("登录成功")
-                .font(.title3)
-                .bold()
-
-            HStack {
-                Image(systemName: "person.fill")
-                    .foregroundStyle(.green)
-                Text(viewModel.username)
-            }
-            .font(.callout)
-        }
-    }
-
-    var mobileConfirmView: some View {
-        VStack(spacing: 16) {
+    private var mobileConfirmView: some View {
+        VStack(spacing: 14) {
             Image(systemName: "iphone.radiowaves.left.and.right")
-                .font(.system(size: 48))
+                .font(.system(size: 44))
                 .foregroundStyle(.blue)
-                .symbolEffect(.pulse, options: .repeating)
-
             Text("请在手机上确认登录")
                 .font(.title3)
                 .bold()
-
             Text("打开 Steam 手机应用，在通知中确认此次登录请求")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
-
-            HStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.8)
-                Text(viewModel.guardWaitElapsed > 0
-                     ? "等待确认中… \(viewModel.guardWaitElapsed) 秒"
-                     : "等待确认中…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 8)
-
-            Button("取消登录") {
-                viewModel.cancelLogin()
-            }
-            .buttonStyle(.bordered)
+            ProgressView()
+            Text("等待确认中… \(viewModel.guardWaitElapsed) 秒")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("取消登录") { viewModel.cancelLogin() }
+                .buttonStyle(.bordered)
         }
+    }
+
+    private var successView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.green)
+            Text("登录成功")
+                .font(.title3)
+                .bold()
+            Label(viewModel.username, systemImage: "person.fill")
+                .font(.callout)
+        }
+    }
+
+    private func qrImage(_ value: String) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(value.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)) else { return nil }
+        let representation = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
     }
 }

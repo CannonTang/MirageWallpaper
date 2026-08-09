@@ -235,7 +235,7 @@ struct WorkshopItemDetail: View {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
                     Label(
-                        LocalizedStringKey(workshopViewModel.steamSetupState == .steamCMDMissing ? "安装 SteamCMD" : "登录全球 Steam"),
+                        LocalizedStringKey(workshopViewModel.steamSetupState == .serviceUnavailable ? "检查 Steam 服务" : "登录全球 Steam"),
                         systemImage: "person.crop.circle.badge.exclamationmark"
                     )
                     .frame(maxWidth: .infinity)
@@ -244,15 +244,11 @@ struct WorkshopItemDetail: View {
             }
         } else if let state = workshopViewModel.downloadState(for: item.publishedFileId) {
             switch state {
-            case .downloading(let percent):
+            case .downloading(let progress):
                 VStack(spacing: 4) {
-                    if let percent {
-                        ProgressView(value: percent)
-                            .animation(.linear, value: percent)
-                    } else {
-                        ProgressView(value: 0)
-                    }
-                    Text(percent.map { L("%d%% 下载中…", Int($0 * 100)) } ?? L("正在连接 Steam…"))
+                    ProgressView(value: progress.fraction)
+                        .animation(.linear, value: progress.fraction)
+                    Text(L("%d%% 下载中…", Int(progress.fraction * 100)))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -270,11 +266,11 @@ struct WorkshopItemDetail: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(true)
-            case .starting:
+            case .resolving:
                 HStack {
                     ProgressView()
                         .scaleEffect(0.7)
-                    Text("正在启动 SteamCMD…")
+                    Text("正在解析创意工坊内容…")
                         .font(.caption)
                 }
             case .validating:

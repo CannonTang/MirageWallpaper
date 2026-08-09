@@ -227,23 +227,18 @@ struct DiscoverCard: View {
     @ViewBuilder
     func downloadStateIndicator(_ state: DownloadState) -> some View {
         switch state {
-        case .downloading(let percent):
+        case .downloading(let progress):
             ZStack {
                 Circle()
                     .fill(.ultraThinMaterial)
                     .frame(width: 22, height: 22)
-                if let percent {
-                    Circle()
-                        .trim(from: 0, to: percent)
-                        .stroke(Color.blue, lineWidth: 2)
-                        .frame(width: 16, height: 16)
-                        .rotationEffect(.degrees(-90))
-                } else {
-                    ProgressView()
-                        .controlSize(.mini)
-                }
+                Circle()
+                    .trim(from: 0, to: progress.fraction)
+                    .stroke(Color.blue, lineWidth: 2)
+                    .frame(width: 16, height: 16)
+                    .rotationEffect(.degrees(-90))
             }
-        case .queued, .starting:
+        case .queued, .resolving:
             Image(systemName: "clock.fill")
                 .foregroundStyle(.white, .orange)
                 .symbolRenderingMode(.palette)

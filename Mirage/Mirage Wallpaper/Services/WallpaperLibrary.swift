@@ -41,8 +41,7 @@ enum WPImportError: LocalizedError, Identifiable {
 enum WallpaperLibrarySourceRole: String, Hashable {
     case steam
     case customSteam
-    case managedSteamCMD
-    case legacySteamCMD
+    case managedWorkshop
     case imported
 }
 
@@ -185,8 +184,7 @@ final class WallpaperLibrary {
             append(.steam, L("Steam 创意工坊目录"), L("系统 Steam 的默认内容目录"), defaultSteamWorkshopDirectory, always: true)
         }
 
-        append(.managedSteamCMD, L("Mirage 下载目录"), L("SteamCMD 当前下载和更新壁纸的位置"), SteamCMDManager.shared.isolatedSteamCMDContentDirectory, always: true)
-        append(.legacySteamCMD, L("Mirage 旧版下载目录"), L("仅用于兼容旧版本中已经下载的壁纸"), SteamCMDManager.shared.steamCMDContentDirectory)
+        append(.managedWorkshop, L("Mirage 下载目录"), L("Mirage 从 Steam 创意工坊下载和更新壁纸的位置"), SteamServiceManager.shared.contentDirectory, always: true)
         append(.imported, L("导入壁纸目录"), L("手动导入或由视频创建的本地壁纸"), importedDirectory, always: true)
         return result
     }
@@ -494,7 +492,7 @@ final class WallpaperLibrary {
         wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectory.path)
     }
 
-    /// True when a wallpaper lives in one of the Steam/SteamCMD sources. This
+    /// True when a wallpaper lives in one of the Steam sources. This
     /// is intentionally separate from `isImported`: a numeric folder name in a
     /// user-selected import directory is not enough evidence that it is a
     /// Workshop item.

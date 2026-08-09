@@ -411,8 +411,9 @@ final class SteamWebAPI {
     func downloadedItemURL(_ workshopId: String) -> URL? {
         let dirs = [
             WallpaperLibrary.shared.steamWorkshopDirectory,
-            WallpaperLibrary.shared.defaultSteamWorkshopDirectory
-        ] + SteamCMDManager.shared.steamCMDContentDirectories
+            WallpaperLibrary.shared.defaultSteamWorkshopDirectory,
+            SteamServiceManager.shared.contentDirectory
+        ]
         return dirs
             .map { $0.appending(path: workshopId) }
             .first { FileManager.default.fileExists(atPath: $0.appending(path: "project.json").path) }

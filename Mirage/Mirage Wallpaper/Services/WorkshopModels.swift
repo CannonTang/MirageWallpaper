@@ -493,25 +493,34 @@ struct PresetDependencyPrompt: Identifiable {
 
 enum DownloadState: Equatable {
     case queued
-    case starting
-    case downloading(percent: Double?)
+    case resolving
+    case downloading(DownloadProgress)
     case validating
     case completed
     case failed(String)
+}
+
+struct DownloadProgress: Equatable {
+    var receivedBytes: Int64
+    var totalBytes: Int64
+    var bytesPerSecond: Double
+    var etaSeconds: Double?
+
+    var fraction: Double {
+        guard totalBytes > 0 else { return 0 }
+        return min(1, max(0, Double(receivedBytes) / Double(totalBytes)))
+    }
 }
 
 // MARK: - Steam Setup State
 
 enum SteamSetupState: Equatable {
     case notConfigured
-    case steamCMDMissing
+    case serviceUnavailable
     case needsLogin
     case ready
 }
 
-/// Each Workshop dependency is intentionally tracked on its own.  A reachable
-/// Web API must not imply that SteamCMD, the Steam session, or the content CDN
-/// is also usable.
 enum SteamServiceState: Equatable {
     case unknown
     case checking
@@ -532,34 +541,15 @@ enum SteamServiceState: Equatable {
 
 struct SteamServiceStatus: Equatable {
     var browsingAPI: SteamServiceState = .unknown
-    var steamCMD: SteamServiceState = .unknown
+    var client: SteamServiceState = .unknown
     var authentication: SteamServiceState = .unknown
     var workshopDownload: SteamServiceState = .unknown
-}
-
-enum SteamCMDInstallState: Equatable {
-    case detecting
-    case rosettaRequired
-    case installingRosetta
-    case rosettaInstallFailed(String)
-    case found(String)
-    case notFound
-    case downloading(Double)
-    case extracting
-    case initializing
-    case installed(String)
-    case failed(String)
-}
-
-enum SteamCMDDetectionResult: Equatable {
-    case found(URL)
-    case notFound
-    case rosettaRequired
 }
 
 enum SteamLoginState: Equatable {
     case idle
     case loggingIn
+    case waitingForQR(String)
     case waitingForGuard(SteamGuardType)
     case success
     case failed(String)
@@ -569,21 +559,6 @@ enum SteamGuardType: Equatable {
     case email
     case mobile
     case mobileConfirm
-}
-
-enum SteamDiagnosticCategory: String, Codable, CaseIterable {
-    case browsingAPI = "浏览 API"
-    case steamCMDInstall = "SteamCMD 安装"
-    case authentication = "Steam 认证"
-    case workshopDownload = "创意工坊下载"
-}
-
-struct SteamDiagnosticEvent: Identifiable, Equatable {
-    let id = UUID()
-    let timestamp: Date
-    let category: SteamDiagnosticCategory
-    let domain: String
-    let message: String
 }
 
 // MARK: - Steam API Response Models

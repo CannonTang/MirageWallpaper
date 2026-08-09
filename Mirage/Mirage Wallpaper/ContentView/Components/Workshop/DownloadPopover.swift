@@ -67,7 +67,7 @@ struct DownloadPopover: View {
             HStack {
                 let active = workshopViewModel.downloadQueue.filter {
                     if case .downloading = $0.state { return true }
-                    if case .starting = $0.state { return true }
+                    if case .resolving = $0.state { return true }
                     if case .validating = $0.state { return true }
                     return false
                 }.count
@@ -109,7 +109,7 @@ struct DownloadPopover: View {
     }
 
     private func revealInFinder(_ task: DownloadTask) {
-        guard let path = SteamCMDManager.shared.downloadedItemDirectory(
+        guard let path = SteamServiceManager.shared.downloadedItemDirectory(
             workshopId: task.workshopItem.publishedFileId
         ) else {
             revealError = L("未找到该壁纸的本地下载目录。")
@@ -152,7 +152,7 @@ struct DownloadRow: View {
                 switch task.state {
                 case .queued:
                     HStack(spacing: 6) {
-                        Text("等待 SteamCMD 按顺序下载…")
+                        Text("等待可用下载槽…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -160,30 +160,21 @@ struct DownloadRow: View {
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
-                case .starting:
+                case .resolving:
                     HStack(spacing: 6) {
                         ProgressView()
                             .controlSize(.small)
-                        Text("正在启动 SteamCMD…")
+                        Text("正在解析创意工坊内容…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                case .downloading(let percent):
-                    if let percent {
-                        ProgressView(value: percent)
-                            .animation(.linear, value: percent)
-                    } else {
-                        ProgressView(value: 0)
-                    }
-                    HStack {
-                        Text(percent.map { "\(Int($0 * 100))%" } ?? L("正在连接 Steam…"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(task.workshopItem.formattedFileSize)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
+                case .downloading(let progress):
+                    ProgressView(value: progress.fraction)
+                        .animation(.linear, value: progress.fraction)
+                    Text(progressSummary(progress))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 case .validating:
                     Text("验证中...")
                         .font(.caption)
@@ -209,7 +200,7 @@ struct DownloadRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             switch task.state {
-            case .downloading, .starting, .queued:
+            case .downloading, .resolving, .queued:
                 Button { onCancel() } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
@@ -240,5 +231,27 @@ struct DownloadRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: NSColor.controlBackgroundColor))
+    }
+
+    private func progressSummary(_ progress: DownloadProgress) -> String {
+        let percent = Int(progress.fraction * 100)
+        let received = ByteCountFormatter.string(fromByteCount: progress.receivedBytes, countStyle: .file)
+        let total = progress.totalBytes > 0
+            ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file)
+            : L("未知大小")
+        let speed = progress.bytesPerSecond > 0
+            ? L("%@/秒", ByteCountFormatter.string(fromByteCount: Int64(progress.bytesPerSecond), countStyle: .file))
+            : L("正在连接 Steam…")
+        if let eta = progress.etaSeconds, eta.isFinite {
+            return L("%d%% · %@ / %@ · %@ · 剩余 %@", percent, received, total, speed, etaText(eta))
+        }
+        return L("%d%% · %@ / %@ · %@", percent, received, total, speed)
+    }
+
+    private func etaText(_ seconds: Double) -> String {
+        let value = max(0, Int(seconds.rounded()))
+        if value < 60 { return L("%d 秒", value) }
+        if value < 3600 { return L("%d 分 %d 秒", value / 60, value % 60) }
+        return L("%d 小时 %d 分", value / 3600, value % 3600 / 60)
     }
 }

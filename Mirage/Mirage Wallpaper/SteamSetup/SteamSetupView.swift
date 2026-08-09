@@ -35,10 +35,8 @@ struct SteamSetupView: View {
                         case 0:
                             welcomeStep
                         case 1:
-                            SteamCMDStep(viewModel: viewModel)
-                        case 2:
                             SteamLoginStep(viewModel: viewModel)
-                        case 3:
+                        case 2:
                             completeStep
                         default:
                             EmptyView()
@@ -179,7 +177,7 @@ struct SteamSetupView: View {
                 Label("中国大陆网络说明", systemImage: "network.badge.shield.half.filled")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("此功能依赖全球 Steam 的 Web API、SteamCMD 登录服务和内容 CDN。蒸汽平台兼容性不保证；网络线路只能改善个别环节，Mirage 不承诺任何线路一定能解决登录或下载问题。")
+                Text("此功能依赖全球 Steam 的 Web API、登录服务和内容 CDN。蒸汽平台兼容性不保证；网络线路只能改善个别环节，Mirage 不承诺任何线路一定能解决登录或下载问题。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -193,7 +191,7 @@ struct SteamSetupView: View {
                 FeatureRow(icon: "magnifyingglass", color: .blue,
                            title: "搜索浏览", text: "搜索、筛选、排序海量壁纸")
                 FeatureRow(icon: "arrow.down.circle", color: .green,
-                           title: "一键下载", text: "通过 SteamCMD 直接下载到本地")
+                           title: "并发下载", text: "实时显示速度、进度和预计剩余时间")
                 FeatureRow(icon: "paintbrush", color: .purple,
                            title: "即刻使用", text: "下载完成自动加入壁纸库")
             }
@@ -213,7 +211,7 @@ struct SteamSetupView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(.green)
-                .symbolEffect(.bounce, value: viewModel.currentStep == 3)
+                .symbolEffect(.bounce, value: viewModel.currentStep == 2)
 
             Text("设置完成！")
                 .font(.title)
@@ -225,14 +223,6 @@ struct SteamSetupView: View {
                 .multilineTextAlignment(.center)
 
             VStack(alignment: .leading, spacing: 8) {
-                if let path = viewModel.steamCMDPath {
-                    HStack {
-                        Image(systemName: "terminal.fill")
-                            .foregroundStyle(.green)
-                        Text("SteamCMD: \(path.lastPathComponent)")
-                            .font(.caption)
-                    }
-                }
                 if !viewModel.username.isEmpty {
                     HStack {
                         Image(systemName: "person.fill")
