@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.3</title>
+            <pubDate>Sun, 09 Aug 2026 03:12:35 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>279</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: f35dca475f5fa48e3c57d96866073021c366cf0f
+Channel: beta
+
+fix(app): make menu bar pause and mute transient
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-279-f35dca475f5f-macOS-x86_64.zip" length="199102522" type="application/octet-stream" sparkle:edSignature="FzTPmLFPwzLs/4IRFYvNivWzwQYur951q0CpIe/l+vqvaW8XUU0TmWEcqi/yXjwAyOQWuuIa5g870//vqOd+BA=="/>
+        </item>
+        <item>
+            <title>1.0.3</title>
             <pubDate>Sat, 08 Aug 2026 12:45:03 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -201,23 +218,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
         </item>
         <item>
             <title>1.0.2</title>
-            <pubDate>Fri, 07 Aug 2026 10:51:08 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>265</sparkle:version>
-            <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 17de2a62b0bf6914ef1f4b73a004df9bd240fe09
-Channel: beta
-
-fix(app): restore web audio and stabilize wallpaper snapshots
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-265-17de2a62b0bf-macOS-x86_64.zip" length="198947970" type="application/octet-stream" sparkle:edSignature="dFUQJsTqcJpAqKoZ5EibJAm77yDsRogJHEtuSocrNBmvtYBldPU/bEvldTtJ7cwTj+uGuSAXH0oQUFFIQqVHAQ=="/>
-        </item>
-        <item>
-            <title>1.0.2</title>
             <pubDate>Thu, 06 Aug 2026 23:58:17 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:version>263</sparkle:version>
@@ -283,6 +283,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: OwDxMx+CWSa+V/C1iO9Sl6s8KJ4OkYls7nCKRoKsO6dKu5oUq4oDhoHjz0jhoH7h9xRi/dVLV9v900IuJFshBA==
-length: 17171
+edSignature: isvUSR/TqeDNpt5vGAfM6Uk9jXS3Zx7pMJY3m2wu/bRdMa9ZDSVo+KXpXURaDEdG/IAkyWoCXwnNb+4cKnMQAQ==
+length: 17158
 -->
