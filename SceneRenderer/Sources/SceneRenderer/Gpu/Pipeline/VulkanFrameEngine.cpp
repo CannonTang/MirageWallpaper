@@ -622,7 +622,7 @@ struct VulkanRender::Impl {
 
     std::unique_ptr<FinPass> m_testpass { nullptr };
     ReDrawCB                 m_redraw_cb;
-    std::function<void(void*, uint32_t, uint32_t)> m_metal_frame_cb;
+    MetalFrameCB m_metal_frame_cb;
 
     std::unique_ptr<StagingBuffer> m_dyn_buf { nullptr };
     ShaderReflectionCache          m_shader_reflection_cache;
@@ -834,6 +834,11 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     std::vector<Extension> inst_exts { base_inst_exts.begin(), base_inst_exts.end() };
     std::vector<Extension> device_exts { base_device_exts.begin(), base_device_exts.end() };
+    if (info.metal_frame_callback) {
+        for (auto& extension : device_exts) {
+            if (extension.name == "VK_EXT_metal_objects") extension.required = true;
+        }
+    }
     const bool needs_vulkan_video = RequiresVulkanVideoDeviceExtensions(info.video_hwdec);
     if (needs_vulkan_video) {
         AppendVideoDeviceExtensions(device_exts);

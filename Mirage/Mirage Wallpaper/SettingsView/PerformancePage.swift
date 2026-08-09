@@ -93,6 +93,11 @@ struct PerformancePage: SettingsPage {
                     Text("50%（高性能）").tag(GSTextureResolutionQuality.highPerformance)
                 }
 
+                Toggle("启用 MetalFX（场景壁纸）", isOn: Binding(
+                    get: { viewModel.settings.shouldEnableMetalFX },
+                    set: { viewModel.settings.metalFXEnabled = $0 }
+                ))
+
                 Picker("壁纸加载方式", selection: Binding(
                     get: { viewModel.settings.wallpaperLoadSource ?? .disk },
                     set: { viewModel.settings.wallpaperLoadSource = $0 }
@@ -136,7 +141,7 @@ struct PerformancePage: SettingsPage {
             } header: {
                 Label("渲染质量", systemImage: "memorychip.fill")
             } footer: {
-                Text("抗锯齿、渲染分辨率和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。")
+                Text("抗锯齿、渲染分辨率、MetalFX 和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

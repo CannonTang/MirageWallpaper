@@ -493,6 +493,7 @@ struct RenderOptions: Equatable {
     var fillMode: FillMode = .cover
     var enableSpectrum: Bool = true
     var renderScale: Double = 1.0
+    var enableMetalFX: Bool = true
     var msaaSamples: Int = 1
     var loadFromMemory: Bool = false
     var enableHDRVideo: Bool = false
@@ -990,6 +991,7 @@ final class RendererController {
             args += [assetsPath, pkgPath]
             args += ["--fps", String(options.fps)]
             args += ["--render-scale", String(format: "%.3f", options.renderScale)]
+            if options.enableMetalFX { args += ["--metalfx"] }
             args += ["--msaa", String(options.msaaSamples)]
             if options.loadFromMemory { args += ["--load-from-memory"] }
             args += ["--display-id", String(displayID)]
@@ -1171,6 +1173,7 @@ final class RendererController {
         let launched = candidate.launchOptions
         return launched.enableSpectrum == options.enableSpectrum &&
             launched.renderScale == options.renderScale &&
+            launched.enableMetalFX == options.enableMetalFX &&
             launched.msaaSamples == options.msaaSamples &&
             launched.loadFromMemory == options.loadFromMemory &&
             candidate.desiredUserProperties == options.userProperties

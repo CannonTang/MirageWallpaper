@@ -83,6 +83,24 @@ void* ExportMetalTexture(const Device& device, const ImageParameters& image) {
     return reinterpret_cast<void*>(texture_info.mtlTexture);
 }
 
+void* ExportMetalCommandQueue(const Device& device) {
+    auto export_metal_objects = device.handle().Dispatch().vkExportMetalObjectsEXT;
+    if (export_metal_objects == nullptr) return nullptr;
+
+    VkExportMetalCommandQueueInfoEXT queue_info {
+        .sType           = VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT,
+        .pNext           = nullptr,
+        .queue           = *device.graphics_queue().handle,
+        .mtlCommandQueue = nullptr,
+    };
+    VkExportMetalObjectsInfoEXT export_info {
+        .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT,
+        .pNext = &queue_info,
+    };
+    export_metal_objects(*device.handle(), &export_info);
+    return reinterpret_cast<void*>(queue_info.mtlCommandQueue);
+}
+
 const char* EnvPath(const char* primary) {
     const char* value = std::getenv(primary);
     if (value != nullptr && value[0] != '\0') return value;
@@ -151,7 +169,8 @@ void FinPass::setPresentLayout(VkImageLayout layout) { m_desc.present_layout = l
 void FinPass::setPresentQueueIndex(uint32_t i) { m_desc.present_queue_index = i; }
 void FinPass::setPresentFormat(VkFormat fmt) { m_desc.present_format = fmt; }
 void FinPass::setPresentCanTransferSrc(bool can) { m_desc.present_can_transfer_src = can; }
-void FinPass::setMetalFrameCallback(std::function<void(void*, uint32_t, uint32_t)> cb) {
+void FinPass::setMetalFrameCallback(
+    std::function<void(void*, void*, uint32_t, uint32_t)> cb) {
     m_desc.metal_frame_callback = std::move(cb);
 }
 bool FinPass::setResultRequest(std::optional<TextureRequest> request) {
@@ -290,6 +309,7 @@ void FinPass::finishFrameDump(const Device& device) {
         if (void* texture = ExportMetalTexture(device, m_desc.vk_result); texture != nullptr) {
             if (m_desc.metal_frame_callback) {
                 m_desc.metal_frame_callback(texture,
+                                            ExportMetalCommandQueue(device),
                                             m_desc.vk_result.extent.width,
                                             m_desc.vk_result.extent.height);
             }

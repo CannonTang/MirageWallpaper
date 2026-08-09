@@ -100,6 +100,7 @@ struct GlobalSettings: Codable, Equatable {
     var antiAliasing = GSAntiAliasingQuality.msaa_x2
     var postProcessing = GSPostProcessingQuality.disabled
     var textureResolution = GSTextureResolutionQuality.automatic
+    var metalFXEnabled: Bool? = true
     // Optional keeps settings written by older Mirage versions decodable.
     var wallpaperLoadSource: GSWallpaperLoadSource? = .disk
     var animatedPreviewPlayback: GSAnimatedPreviewPlayback? = .hover
@@ -108,6 +109,10 @@ struct GlobalSettings: Codable, Equatable {
 
     var animatedPreviewPlaybackMode: GSAnimatedPreviewPlayback {
         animatedPreviewPlayback ?? .hover
+    }
+
+    var shouldEnableMetalFX: Bool {
+        metalFXEnabled ?? true
     }
     
     // MARK: Automatic Setup
@@ -672,24 +677,28 @@ class GlobalSettingsViewModel: ObservableObject {
             self.settings.antiAliasing = .none
             self.settings.postProcessing = .disabled
             self.settings.textureResolution = .highPerformance
+            self.settings.metalFXEnabled = false
             self.settings.fps = 10
             self.settings.reflections = false
         case .medium:
             self.settings.antiAliasing = .none
             self.settings.postProcessing = .enabled
             self.settings.textureResolution = .automatic
+            self.settings.metalFXEnabled = true
             self.settings.fps = 15
             self.settings.reflections = true
         case .high:
             self.settings.antiAliasing = .msaa_x2
             self.settings.postProcessing = .enabled
             self.settings.textureResolution = .automatic
+            self.settings.metalFXEnabled = true
             self.settings.fps = 25
             self.settings.reflections = true
         case .ultra:
             self.settings.antiAliasing = .msaa_x2
             self.settings.postProcessing = .ultra
             self.settings.textureResolution = .highQuality
+            self.settings.metalFXEnabled = true
             self.settings.fps = 30
             self.settings.reflections = true
         }

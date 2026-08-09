@@ -22,7 +22,9 @@ export namespace sr
 {
 
 using ReDrawCB = std::function<void()>;
-using MetalFrameCB = std::function<void(void* mtl_texture, uint32_t width, uint32_t height)>;
+using MetalFrameCB =
+    std::function<void(void* mtl_texture, void* mtl_command_queue, uint32_t width,
+                       uint32_t height)>;
 
 struct VulkanSurfaceInfo {
     std::function<VkResult(VkInstance, VkSurfaceKHR*)> createSurfaceOp;

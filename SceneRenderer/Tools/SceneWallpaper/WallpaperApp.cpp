@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -151,6 +152,7 @@ struct Options {
     bool                      spectrum_enabled { true };
     bool                      external_spectrum { false };
     bool                      load_from_memory { false };
+    bool                      metalfx { false };
 };
 
 struct AppState {
@@ -206,6 +208,7 @@ void PrintUsage(const char* argv0) {
         << "  -f, --fps N                 Render FPS (default 30)\n"
         << "  -R, --resolution WxH        Override render resolution\n"
         << "      --render-scale S        Render scale 0.25..1.0 (default 1.0)\n"
+        << "      --metalfx               Enable MetalFX Spatial scaling\n"
         << "  -C, --cache-path DIR        Cache directory\n"
         << "  -M, --msaa N                MSAA samples for screen RT\n"
         << "  -P, --user-properties FILE  JSON object of WE user properties\n"
@@ -312,6 +315,8 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             out.external_spectrum = true;
         } else if (arg == "--load-from-memory") {
             out.load_from_memory = true;
+        } else if (arg == "--metalfx") {
+            out.metalfx = true;
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
@@ -462,9 +467,9 @@ int main(int argc, char** argv) {
     // explicit (fences + semaphores), so the asynchronous default is correct.
     // Still overrideable from the shell for debugging.
 
-    sr::SceneWallpaper wallpaper;
-    AppState           state;
-    state.wallpaper = &wallpaper;
+    auto     wallpaper = std::make_unique<sr::SceneWallpaper>();
+    AppState state;
+    state.wallpaper = wallpaper.get();
 
     SceneRendererMacDesktopConfig desktop_config {
         .title        = "SceneRenderer Wallpaper",
@@ -507,8 +512,10 @@ int main(int argc, char** argv) {
             std::lround(static_cast<double>(render_height) * options.render_scale));
     }
 
-    if (! wallpaper.init()) {
+    if (! wallpaper->init()) {
         std::cerr << "Failed to initialize SceneWallpaper runtime\n";
+        wallpaper.reset();
+        state.wallpaper = nullptr;
         SceneRendererMacDesktopDestroy(state.desktop);
         return 1;
     }
@@ -528,47 +535,63 @@ int main(int argc, char** argv) {
         config.cache_dir = options.cache_dir;
 
     if (! LoadUserProperties(options.user_properties, config)) {
+        wallpaper.reset();
+        state.wallpaper = nullptr;
         SceneRendererMacDesktopDestroy(state.desktop);
         return 1;
     }
 
     sr::RenderInitInfo info;
     info.enable_valid_layer = options.valid_layer;
-    info.offscreen          = false;
+    const bool use_metalfx = options.metalfx &&
+                             SceneRendererMacDesktopPrepareMetalFX(state.desktop);
+    info.offscreen          = use_metalfx;
     info.width              = ClampRenderExtent(render_width, 1920);
     info.height             = ClampRenderExtent(render_height, 1080);
     info.msaa_samples       = options.msaa;
     info.redraw_callback    = [&state]() {
         SceneRendererMacDesktopWake(state.desktop);
     };
-    void* metal_layer = SceneRendererMacDesktopMetalLayer(state.desktop);
-    if (metal_layer == nullptr) {
-        std::cerr << "Failed to obtain CAMetalLayer for Vulkan surface\n";
-        SceneRendererMacDesktopDestroy(state.desktop);
-        return 1;
-    }
-    info.surface_info.instanceExts.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
-    info.surface_info.instanceExts.emplace_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
-    info.surface_info.createSurfaceOp = [metal_layer](VkInstance instance, VkSurfaceKHR* surface) {
-        auto create_surface = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(
-            vkGetInstanceProcAddr(instance, "vkCreateMetalSurfaceEXT"));
-        if (create_surface == nullptr) return VK_ERROR_EXTENSION_NOT_PRESENT;
-        VkMetalSurfaceCreateInfoEXT create_info {
-            .sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT,
-            .pNext = nullptr,
-            .flags = 0,
-            .pLayer = metal_layer,
+    if (use_metalfx) {
+        info.metal_frame_callback = [&state](void* texture, void* command_queue,
+                                             std::uint32_t width,
+                                             std::uint32_t height) {
+            SceneRendererMacDesktopPresentMetalFrame(state.desktop, texture, command_queue,
+                                                      width, height);
         };
-        return create_surface(instance, &create_info, nullptr, surface);
-    };
+    } else {
+        void* metal_layer = SceneRendererMacDesktopMetalLayer(state.desktop);
+        if (metal_layer == nullptr) {
+            std::cerr << "Failed to obtain CAMetalLayer for Vulkan surface\n";
+            wallpaper.reset();
+            state.wallpaper = nullptr;
+            SceneRendererMacDesktopDestroy(state.desktop);
+            return 1;
+        }
+        info.surface_info.instanceExts.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        info.surface_info.instanceExts.emplace_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+        info.surface_info.createSurfaceOp =
+            [metal_layer](VkInstance instance, VkSurfaceKHR* surface) {
+                auto create_surface = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(
+                    vkGetInstanceProcAddr(instance, "vkCreateMetalSurfaceEXT"));
+                if (create_surface == nullptr) return VK_ERROR_EXTENSION_NOT_PRESENT;
+                VkMetalSurfaceCreateInfoEXT create_info {
+                    .sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .pLayer = metal_layer,
+                };
+                return create_surface(instance, &create_info, nullptr, surface);
+            };
+    }
 
-    wallpaper.setOnAudioDemand(EmitAudioDemand);
-    wallpaper.configure(std::move(config));
-    wallpaper.initVulkan(std::move(info));
+    wallpaper->setOnAudioDemand(EmitAudioDemand);
+    wallpaper->configure(std::move(config));
+    wallpaper->initVulkan(std::move(info));
 
     if (options.mouse_position) {
-        wallpaper.mouseEnter(true);
-        wallpaper.mouseInput((*options.mouse_position)[0], (*options.mouse_position)[1]);
+        wallpaper->mouseEnter(true);
+        wallpaper->mouseInput((*options.mouse_position)[0], (*options.mouse_position)[1]);
     }
 
     if (options.run_seconds > 0) {
@@ -587,8 +610,10 @@ int main(int argc, char** argv) {
     // control thread — otherwise a race between RenderInit/LoadScene message
     // dispatch and a premature stdin EOF (triggering NSApp stop / cleanup) can
     // cause "Sender::acquire on null" panics in the mpsc channel layer.
-    if (! wallpaper.waitVulkanInited(30000)) {
+    if (! wallpaper->waitVulkanInited(30000)) {
         std::cerr << "Vulkan initialization timed out\n";
+        wallpaper.reset();
+        state.wallpaper = nullptr;
         SceneRendererMacDesktopDestroy(state.desktop);
         return 1;
     }
@@ -597,11 +622,13 @@ int main(int argc, char** argv) {
         using clock   = std::chrono::steady_clock;
         auto deadline = clock::now() + std::chrono::seconds(30);
         while (clock::now() < deadline) {
-            if (wallpaper.sceneReady()) break;
+            if (wallpaper->sceneReady()) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        if (! wallpaper.sceneReady()) {
+        if (! wallpaper->sceneReady()) {
             std::cerr << "Scene load timed out\n";
+            wallpaper.reset();
+            state.wallpaper = nullptr;
             SceneRendererMacDesktopDestroy(state.desktop);
             return 1;
         }
@@ -611,7 +638,7 @@ int main(int argc, char** argv) {
     if (options.control_stdin) {
         void* desktop = state.desktop;
         control.emplace(
-            wallpaper,
+            *wallpaper,
             [desktop]() { SceneRendererMacDesktopStop(desktop); },
             [desktop]() { SceneRendererMacDesktopActivate(desktop); },
             [desktop]() { SceneRendererMacDesktopDeactivate(desktop); },
@@ -624,7 +651,12 @@ int main(int argc, char** argv) {
 
     const int ok = SceneRendererMacDesktopRun(state.desktop);
 
-    if (control) control->stop();
+    if (control) {
+        control->stop();
+        control.reset();
+    }
+    state.wallpaper = nullptr;
+    wallpaper.reset();
     SceneRendererMacDesktopDestroy(state.desktop);
     state.desktop = nullptr;
     return ok ? 0 : 1;

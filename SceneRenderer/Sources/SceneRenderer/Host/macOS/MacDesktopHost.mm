@@ -3,12 +3,14 @@
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CGWindowLevel.h>
 #import <Metal/Metal.h>
+#import <MetalFX/MetalFX.h>
 #import <QuartzCore/CATransaction.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <mutex>
 
 // --- media-status routing --------------------------------------------------
 //
@@ -66,7 +68,214 @@ struct MacDesktopHost {
     std::atomic<bool>                activation_failure_reported { false };
     std::atomic<bool>                deactivation_requested { false };
     std::atomic<bool>                deactivation_confirmed { false };
+    std::atomic<bool>                metal_presenter_enabled { false };
+    std::mutex                       present_mutex;
+    id<MTLDevice>                    presenter_device { nil };
+    id<MTLCommandQueue>              fallback_queue { nil };
+    id<MTLRenderPipelineState>       present_pipeline { nil };
+    id<MTLSamplerState>              present_sampler { nil };
+    id<MTLFXSpatialScaler>           spatial_scaler { nil };
+    id<MTLTexture>                   spatial_output { nil };
+    MTLPixelFormat                   scaler_input_format { MTLPixelFormatInvalid };
+    MTLPixelFormat                   scaler_output_format { MTLPixelFormatInvalid };
+    NSUInteger                       scaler_input_width { 0 };
+    NSUInteger                       scaler_input_height { 0 };
+    NSUInteger                       scaler_output_width { 0 };
+    NSUInteger                       scaler_output_height { 0 };
+    bool                             scaler_attempted { false };
+    bool                             metalfx_supported { false };
+    bool                             logged_metalfx { false };
+    bool                             logged_linear { false };
 };
+
+NSString* PresenterShaderSource() {
+    return @"#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "struct VSOut { float4 position [[position]]; float2 uv; };\n"
+            "vertex VSOut vs_main(uint vid [[vertex_id]]) {\n"
+            "    float2 pos[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n"
+            "    float2 uv[3] = { float2(0.0, 1.0), float2(2.0, 1.0), float2(0.0, -1.0) };\n"
+            "    VSOut value;\n"
+            "    value.position = float4(pos[vid], 0.0, 1.0);\n"
+            "    value.uv = uv[vid];\n"
+            "    return value;\n"
+            "}\n"
+            "fragment float4 fs_main(VSOut value [[stage_in]], texture2d<float> texture [[texture(0)]], sampler texture_sampler [[sampler(0)]]) {\n"
+            "    return texture.sample(texture_sampler, value.uv);\n"
+            "}\n";
+}
+
+void ResetSpatialScaler(MacDesktopHost* host) {
+    if (host == nullptr) return;
+    if (host->spatial_scaler != nil) {
+        [host->spatial_scaler release];
+        host->spatial_scaler = nil;
+    }
+    if (host->spatial_output != nil) {
+        [host->spatial_output release];
+        host->spatial_output = nil;
+    }
+    host->scaler_input_format = MTLPixelFormatInvalid;
+    host->scaler_output_format = MTLPixelFormatInvalid;
+    host->scaler_input_width = 0;
+    host->scaler_input_height = 0;
+    host->scaler_output_width = 0;
+    host->scaler_output_height = 0;
+    host->scaler_attempted = false;
+}
+
+void ReleasePresenter(MacDesktopHost* host) {
+    if (host == nullptr) return;
+    ResetSpatialScaler(host);
+    if (host->present_sampler != nil) {
+        [host->present_sampler release];
+        host->present_sampler = nil;
+    }
+    if (host->present_pipeline != nil) {
+        [host->present_pipeline release];
+        host->present_pipeline = nil;
+    }
+    if (host->fallback_queue != nil) {
+        [host->fallback_queue release];
+        host->fallback_queue = nil;
+    }
+    host->presenter_device = nil;
+    host->metalfx_supported = false;
+}
+
+bool BuildPresenter(MacDesktopHost* host, id<MTLDevice> device) {
+    if (host == nullptr || device == nil || host->surface_layer == nil) return false;
+    if (host->presenter_device == device && host->fallback_queue != nil &&
+        host->present_pipeline != nil && host->present_sampler != nil) return true;
+
+    ReleasePresenter(host);
+    host->presenter_device = device;
+    host->fallback_queue = [device newCommandQueue];
+    if (host->fallback_queue == nil) return false;
+
+    NSError* error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:PresenterShaderSource()
+                                                  options:nil
+                                                    error:&error];
+    if (library == nil) {
+        NSLog(@"SceneRenderer Metal presenter shader compile failed: %@", error);
+        return false;
+    }
+    id<MTLFunction> vertex = [library newFunctionWithName:@"vs_main"];
+    id<MTLFunction> fragment = [library newFunctionWithName:@"fs_main"];
+    if (vertex == nil || fragment == nil) {
+        [vertex release];
+        [fragment release];
+        [library release];
+        return false;
+    }
+
+    MTLRenderPipelineDescriptor* pipeline_desc = [[MTLRenderPipelineDescriptor alloc] init];
+    pipeline_desc.vertexFunction = vertex;
+    pipeline_desc.fragmentFunction = fragment;
+    pipeline_desc.colorAttachments[0].pixelFormat = host->surface_layer.pixelFormat;
+    host->present_pipeline =
+        [device newRenderPipelineStateWithDescriptor:pipeline_desc error:&error];
+    [pipeline_desc release];
+    [vertex release];
+    [fragment release];
+    [library release];
+    if (host->present_pipeline == nil) {
+        NSLog(@"SceneRenderer Metal presenter pipeline creation failed: %@", error);
+        return false;
+    }
+
+    MTLSamplerDescriptor* sampler_desc = [[MTLSamplerDescriptor alloc] init];
+    sampler_desc.minFilter = MTLSamplerMinMagFilterLinear;
+    sampler_desc.magFilter = MTLSamplerMinMagFilterLinear;
+    sampler_desc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    sampler_desc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    host->present_sampler = [device newSamplerStateWithDescriptor:sampler_desc];
+    [sampler_desc release];
+    host->metalfx_supported = [MTLFXSpatialScalerDescriptor supportsDevice:device];
+    return host->present_sampler != nil;
+}
+
+void SetPresenterDevice(MacDesktopHost* host, id<MTLDevice> device) {
+    if (host == nullptr || device == nil || host->surface_layer == nil ||
+        host->surface_layer.device == device) return;
+    auto update = ^{
+      host->surface_layer.device = device;
+      host->surface_layer.framebufferOnly = NO;
+    };
+    if (NSThread.isMainThread) update();
+    else dispatch_sync(dispatch_get_main_queue(), update);
+}
+
+bool EnsureSpatialScaler(MacDesktopHost* host, id<MTLTexture> source,
+                         id<MTLTexture> destination) {
+    if (host == nullptr || source == nil || destination == nil ||
+        ! host->metalfx_supported) return false;
+    const bool same_key = host->scaler_input_format == source.pixelFormat &&
+                          host->scaler_output_format == destination.pixelFormat &&
+                          host->scaler_input_width == source.width &&
+                          host->scaler_input_height == source.height &&
+                          host->scaler_output_width == destination.width &&
+                          host->scaler_output_height == destination.height;
+    if (same_key && host->scaler_attempted) return host->spatial_scaler != nil;
+
+    ResetSpatialScaler(host);
+    host->scaler_input_format = source.pixelFormat;
+    host->scaler_output_format = destination.pixelFormat;
+    host->scaler_input_width = source.width;
+    host->scaler_input_height = source.height;
+    host->scaler_output_width = destination.width;
+    host->scaler_output_height = destination.height;
+    host->scaler_attempted = true;
+
+    MTLFXSpatialScalerDescriptor* desc = [[MTLFXSpatialScalerDescriptor alloc] init];
+    desc.colorTextureFormat = source.pixelFormat;
+    desc.outputTextureFormat = destination.pixelFormat;
+    desc.inputWidth = source.width;
+    desc.inputHeight = source.height;
+    desc.outputWidth = destination.width;
+    desc.outputHeight = destination.height;
+    desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+    host->spatial_scaler = [desc newSpatialScalerWithDevice:host->presenter_device];
+    [desc release];
+    return host->spatial_scaler != nil;
+}
+
+id<MTLTexture> EnsureSpatialOutput(MacDesktopHost* host, id<MTLTexture> destination) {
+    if (host == nullptr || host->spatial_scaler == nil || destination == nil) return nil;
+    if (host->spatial_output != nil &&
+        host->spatial_output.pixelFormat == destination.pixelFormat &&
+        host->spatial_output.width == destination.width &&
+        host->spatial_output.height == destination.height) return host->spatial_output;
+    if (host->spatial_output != nil) {
+        [host->spatial_output release];
+        host->spatial_output = nil;
+    }
+    MTLTextureDescriptor* desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:destination.pixelFormat
+                                                           width:destination.width
+                                                          height:destination.height
+                                                       mipmapped:NO];
+    desc.storageMode = MTLStorageModePrivate;
+    desc.usage = host->spatial_scaler.outputTextureUsage | MTLTextureUsageShaderRead;
+    host->spatial_output = [host->presenter_device newTextureWithDescriptor:desc];
+    return host->spatial_output;
+}
+
+void EncodeTexture(MacDesktopHost* host, id<MTLCommandBuffer> command_buffer,
+                   id<MTLTexture> source, id<MTLTexture> destination) {
+    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = destination;
+    pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> encoder =
+        [command_buffer renderCommandEncoderWithDescriptor:pass];
+    [encoder setRenderPipelineState:host->present_pipeline];
+    [encoder setFragmentTexture:source atIndex:0];
+    [encoder setFragmentSamplerState:host->present_sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+}
 
 NSScreen* ResolveScreen(CGDirectDisplayID display_id) {
     if (display_id == 0) return nil;
@@ -272,6 +481,37 @@ void ConfirmActivated(SRHostRef* ref, int attempts_left) {
     });
 }
 
+void FramePresented(SRHostRef* ref) {
+    auto* host = ref != nil ? static_cast<MacDesktopHost*>(ref.hostPtr) : nullptr;
+    if (host == nullptr || ! NormalizeGeometry(host)) return;
+    if (! host->first_frame_presented.exchange(true) &&
+        host->callbacks.first_frame_presented != nullptr) {
+        host->callbacks.first_frame_presented(host->callbacks.userdata);
+    }
+    if (host->activation_requested.load() &&
+        host->activation_frame_pending.load() && ValidateGeometry(host, false)) {
+        host->activation_frame_pending.store(false);
+        host->window.alphaValue = 1.0;
+        [CATransaction flush];
+        ConfirmActivated(ref, 200);
+        return;
+    }
+    if (host->activation_requested.load() && ! host->activation_confirmed.load() &&
+        ValidateGeometry(host, true)) {
+        if (! host->activation_confirmed.exchange(true) &&
+            host->callbacks.activated != nullptr) {
+            host->callbacks.activated(host->callbacks.userdata);
+        }
+    }
+}
+
+void ScheduleFramePresented(SRHostRef* ref) {
+    if (ref == nil) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      FramePresented(ref);
+    });
+}
+
 void StopApplicationOnMainThread();
 
 void EmitMouseEnter(MacDesktopHost* host, bool entered) {
@@ -451,6 +691,10 @@ extern "C" void SceneRendererMacDesktopDestroy(void* handle) {
     if (host->hostRef != nil) {
         host->hostRef.hostPtr = nullptr;
     }
+    {
+        std::scoped_lock lock(host->present_mutex);
+        ReleasePresenter(host);
+    }
 
     auto cleanup = ^{
       if (host->input_timer != nil) {
@@ -493,26 +737,7 @@ extern "C" void SceneRendererMacDesktopWake(void* handle) {
       auto* current = static_cast<MacDesktopHost*>(ref.hostPtr);
       if (current == nullptr) return;
       if (! NormalizeGeometry(current)) return;
-      if (! current->first_frame_presented.exchange(true) &&
-          current->callbacks.first_frame_presented != nullptr) {
-          current->callbacks.first_frame_presented(current->callbacks.userdata);
-      }
-      if (current->activation_requested.load() &&
-          current->activation_frame_pending.load() &&
-          ValidateGeometry(current, false)) {
-          current->activation_frame_pending.store(false);
-          current->window.alphaValue = 1.0;
-          [CATransaction flush];
-          ConfirmActivated(ref, 200);
-          return;
-      }
-      if (current->activation_requested.load() &&
-          ! current->activation_confirmed.load() && ValidateGeometry(current, true)) {
-          if (! current->activation_confirmed.exchange(true) &&
-              current->callbacks.activated != nullptr) {
-              current->callbacks.activated(current->callbacks.userdata);
-          }
-      }
+      if (! current->metal_presenter_enabled.load()) FramePresented(ref);
     });
 }
 
@@ -567,6 +792,102 @@ extern "C" void SceneRendererMacDesktopDeactivate(void* handle) {
         deactivate();
     } else {
         dispatch_sync(dispatch_get_main_queue(), deactivate);
+    }
+}
+
+extern "C" bool SceneRendererMacDesktopPrepareMetalFX(void* handle) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    if (host == nullptr || host->surface_layer == nil || host->surface_layer.device == nil)
+        return false;
+    std::scoped_lock lock(host->present_mutex);
+    host->surface_layer.framebufferOnly = NO;
+    const bool ready = BuildPresenter(host, host->surface_layer.device);
+    host->metal_presenter_enabled.store(ready);
+    if (ready) {
+        NSLog(@"SceneRenderer MetalFX presenter prepared on %@, supported=%@",
+              host->surface_layer.device.name,
+              host->metalfx_supported ? @"YES" : @"NO");
+    }
+    return ready;
+}
+
+extern "C" void SceneRendererMacDesktopPresentMetalFrame(
+    void* handle, void* texture, void* command_queue, std::uint32_t source_width,
+    std::uint32_t source_height) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    if (host == nullptr || texture == nullptr || ! host->metal_presenter_enabled.load()) return;
+
+    @autoreleasepool {
+        std::scoped_lock lock(host->present_mutex);
+        if (! host->metal_presenter_enabled.load() || host->surface_layer == nil) return;
+
+        id<MTLTexture> source = (__bridge id<MTLTexture>)texture;
+        SetPresenterDevice(host, source.device);
+        if (source == nil || ! BuildPresenter(host, source.device)) return;
+        id<CAMetalDrawable> drawable = [host->surface_layer nextDrawable];
+        if (drawable == nil || drawable.texture == nil) return;
+
+        id<MTLCommandQueue> imported_queue =
+            command_queue != nullptr ? (__bridge id<MTLCommandQueue>)command_queue : nil;
+        const bool shared_queue = imported_queue != nil && imported_queue.device == source.device;
+        id<MTLCommandQueue> queue = shared_queue ? imported_queue : host->fallback_queue;
+        id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
+        if (command_buffer == nil) return;
+
+        const NSUInteger content_width =
+            std::min<NSUInteger>(source_width == 0 ? source.width : source_width, source.width);
+        const NSUInteger content_height =
+            std::min<NSUInteger>(source_height == 0 ? source.height : source_height, source.height);
+        bool used_metalfx = false;
+        if (content_width > 0 && content_height > 0 &&
+            drawable.texture.width >= content_width &&
+            drawable.texture.height >= content_height &&
+            EnsureSpatialScaler(host, source, drawable.texture)) {
+            const MTLTextureUsage input_usage = host->spatial_scaler.colorTextureUsage;
+            const MTLTextureUsage output_usage = host->spatial_scaler.outputTextureUsage;
+            const bool valid_input = (source.usage & input_usage) == input_usage;
+            id<MTLTexture> output = nil;
+            if ((drawable.texture.usage & output_usage) == output_usage &&
+                drawable.texture.storageMode == MTLStorageModePrivate) {
+                output = drawable.texture;
+            } else {
+                output = EnsureSpatialOutput(host, drawable.texture);
+            }
+            if (valid_input && output != nil) {
+                host->spatial_scaler.inputContentWidth = content_width;
+                host->spatial_scaler.inputContentHeight = content_height;
+                host->spatial_scaler.colorTexture = source;
+                host->spatial_scaler.outputTexture = output;
+                [host->spatial_scaler encodeToCommandBuffer:command_buffer];
+                host->spatial_scaler.colorTexture = nil;
+                host->spatial_scaler.outputTexture = nil;
+                if (output != drawable.texture) {
+                    EncodeTexture(host, command_buffer, output, drawable.texture);
+                }
+                used_metalfx = true;
+            }
+        }
+        if (! used_metalfx) {
+            EncodeTexture(host, command_buffer, source, drawable.texture);
+        }
+
+        if (used_metalfx && ! host->logged_metalfx) {
+            host->logged_metalfx = true;
+            NSLog(@"SceneRenderer MetalFX Spatial active: %lux%lu -> %lux%lu",
+                  content_width, content_height, drawable.texture.width,
+                  drawable.texture.height);
+        } else if (! used_metalfx && ! host->logged_linear) {
+            host->logged_linear = true;
+            NSLog(@"SceneRenderer MetalFX Spatial unavailable for this frame; using linear fallback");
+        }
+
+        SRHostRef* ref = host->hostRef;
+        [drawable addPresentedHandler:^(id<MTLDrawable>) {
+          ScheduleFramePresented(ref);
+        }];
+        [command_buffer presentDrawable:drawable];
+        [command_buffer commit];
+        if (! shared_queue) [command_buffer waitUntilCompleted];
     }
 }
 

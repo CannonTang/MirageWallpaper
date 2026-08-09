@@ -10,6 +10,7 @@ find_package(Vulkan REQUIRED)
 find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
 find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
 find_library(METAL_FRAMEWORK Metal REQUIRED)
+find_library(METALFX_FRAMEWORK MetalFX REQUIRED)
 find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
 # Desktop-picture stills: encodes the composited frame read back through the
 # engine's live-frame callback as HEIC/JPEG.
@@ -29,6 +30,7 @@ target_link_libraries(SceneWallpaper
         ${COCOA_FRAMEWORK}
         ${COREGRAPHICS_FRAMEWORK}
         ${METAL_FRAMEWORK}
+        ${METALFX_FRAMEWORK}
         ${IMAGEIO_FRAMEWORK}
         ${UNIFORMTYPEIDENTIFIERS_FRAMEWORK}
         ${QUARTZCORE_FRAMEWORK})

@@ -202,6 +202,7 @@
 "可自定义" = "Customizable";
 "名称" = "Name";
 "启动" = "Startup";
+"启用 MetalFX（场景壁纸）" = "Enable MetalFX (scene wallpapers)";
 "启用全部" = "Enable all";
 "启用音频频谱（场景与网页壁纸）" = "Enable audio spectrum (scenes and web wallpapers)";
 "启用音频频谱（网页壁纸）" = "Enable audio spectrum (web wallpaper)";
@@ -321,6 +322,7 @@
 "打开播放列表" = "Open playlist";
 "打开系统屏保设置" = "Open system screen saver settings";
 "抗锯齿" = "Anti-aliasing";
+"抗锯齿、渲染分辨率、MetalFX 和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。" = "Anti-aliasing, render resolution, MetalFX, and loading mode take effect after switching wallpapers. Memory mode uses more memory but avoids repeated disk reads during playback. Frame rate changes take effect immediately. The web frame rate limit applies only to the main page's animation callbacks; it is not a hard limit for media, CSS, or WebKit compositing.";
 "抗锯齿、渲染分辨率和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。" = "Anti-aliasing, render resolution, and loading mode take effect after switching wallpapers. Memory mode uses more memory but avoids repeated disk reads during playback. Frame rate changes take effect immediately. The web frame rate limit applies only to the main page's animation callbacks; it is not a hard limit for media, CSS, or WebKit compositing.";
 "抗锯齿在切换壁纸后生效；帧率调节实时生效。质量选项主要作用于场景壁纸。" = "Anti-aliasing takes effect after switching wallpapers; frame rate adjustment takes effect in real time. Quality options mainly affect scene wallpapers.";
 "抽象" = "Abstract";
