@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.3</title>
+            <pubDate>Sun, 09 Aug 2026 04:18:13 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>280</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: afae3f137c721c50b72d8c6a3fb5a81b268db368
+Channel: beta
+
+fix(app): refine menu bar, login launch, and workshop browsing
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-280-afae3f137c72-macOS-arm64.zip" length="194029480" type="application/octet-stream" sparkle:edSignature="MBAIsBHrhaZNJ0t39oSSh86Eeth67FPGKy2f5WhwEzxhehsEYS2IOPLindTfIcoLbhiacV8V/b4BaO3VTGMABg=="/>
+        </item>
+        <item>
+            <title>1.0.3</title>
             <pubDate>Sun, 09 Aug 2026 03:12:42 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -127,27 +145,6 @@ to become active.
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-274-b108edba3544-macOS-arm64.zip" length="193996687" type="application/octet-stream" sparkle:edSignature="FhDfmrFdB0pau9sS66UaTFORVrJIshdxfVrmtht/5Q83xsI/XV5MrugWPuxCcKQMJvaBEQ0O37/yrtfr5dc0Ag=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sat, 08 Aug 2026 03:27:54 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>273</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 783485f45562f4455f47fb9a93cd5ac7dc2372f7
-Channel: beta
-
-fix(app): forward to the running instance instead of starting a second
-
-A login item launch plus a manual open produced two processes driving
-the same displays. Post a distributed notification so the existing
-instance raises its window, then exit.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-273-783485f45562-macOS-arm64.zip" length="193995222" type="application/octet-stream" sparkle:edSignature="2J3iLZvX1piU1YfkSPxqu8W2NbA/yLTOFZgG6uNN6LRxHWl9AbuWRVNCdbedGfdGvhIE/GsfcuMcWDGwa0r7DQ=="/>
         </item>
         <item>
             <title>1.0.3</title>
@@ -294,6 +291,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: OEJu4jJYg4ZZSLf0al5ZZmiY2zEjdL8AOhrLXuKwCFj+lxPV+6Zz2+S65NowE3d8uubgBXYOYf0hkO4gB2JjAg==
-length: 18016
+edSignature: 2OQ715zrWWc+rM2/0vwtAaiBVrUDwLellNZ+S6uqIH+Dy5NNvWhaQHiUP/Rur6/nzekcEjDhgnO7jKGWQckhDg==
+length: 17832
 -->
