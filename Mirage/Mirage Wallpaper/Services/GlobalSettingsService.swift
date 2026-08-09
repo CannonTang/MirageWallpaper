@@ -113,6 +113,7 @@ struct GlobalSettings: Codable, Equatable {
     // MARK: Automatic Setup
     var autoStart = false
     var hideMenuBarIcon: Bool? = false
+    var monochromeMenuBarIcon: Bool? = false
     var safeMode = false
     // Optional solely for backwards-compatible decoding of settings written
     // before the software-update section existed.
@@ -171,6 +172,10 @@ struct GlobalSettings: Codable, Equatable {
         hideMenuBarIcon ?? false
     }
 
+    var shouldUseMonochromeMenuBarIcon: Bool {
+        monochromeMenuBarIcon ?? false
+    }
+
     var isDeveloperModeEnabled: Bool {
         developerMode ?? false
     }
@@ -210,6 +215,7 @@ class GlobalSettingsViewModel: ObservableObject {
     var didCurrentWallpaperChangeCancellable: Cancellable?
     var didAddToLoginItemCancellable: Cancellable?
     var didChangeStatusItemVisibilityCancellable: Cancellable?
+    var didChangeStatusItemIconCancellable: Cancellable?
     var didChangeDeveloperModeCancellable: Cancellable?
     var didChangeOverrideWallpaperCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
@@ -239,12 +245,7 @@ class GlobalSettingsViewModel: ObservableObject {
         if initial.shouldPauseWhenWindowCoverageExceeds {
             initial.otherApplicationFocused = .keepRunning
         }
-        let hadLegacyLaunchAgent = Self.removeLegacyLaunchAgent()
-        var loginStatus = SMAppService.mainApp.status
-        if hadLegacyLaunchAgent, loginStatus == .notRegistered || loginStatus == .notFound {
-            try? SMAppService.mainApp.register()
-            loginStatus = SMAppService.mainApp.status
-        }
+        let loginStatus = SMAppService.mainApp.status
         switch loginStatus {
         case .enabled, .requiresApproval:
             initial.autoStart = true
@@ -268,6 +269,7 @@ class GlobalSettingsViewModel: ObservableObject {
         didCurrentWallpaperChangeCancellable?.cancel()
         didAddToLoginItemCancellable?.cancel()
         didChangeStatusItemVisibilityCancellable?.cancel()
+        didChangeStatusItemIconCancellable?.cancel()
         didChangeDeveloperModeCancellable?.cancel()
         didChangeOverrideWallpaperCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
@@ -297,6 +299,14 @@ class GlobalSettingsViewModel: ObservableObject {
             .removeDuplicates { $0.shouldHideMenuBarIcon == $1.shouldHideMenuBarIcon }
             .map { $0.shouldHideMenuBarIcon }
             .sink { AppDelegate.shared.applyStatusItemVisibility(hidden: $0) }
+
+        self.didChangeStatusItemIconCancellable =
+        self.$settings
+            .removeDuplicates {
+                $0.shouldUseMonochromeMenuBarIcon == $1.shouldUseMonochromeMenuBarIcon
+            }
+            .map { $0.shouldUseMonochromeMenuBarIcon }
+            .sink { AppDelegate.shared.applyStatusItemIcon(monochrome: $0) }
 
         self.didChangeDeveloperModeCancellable =
         self.$settings
@@ -559,6 +569,9 @@ class GlobalSettingsViewModel: ObservableObject {
         let appService = SMAppService.mainApp
         loginItemError = nil
         do {
+            if added {
+                try Self.removeLegacyLaunchAgentIfPresent()
+            }
             switch (added, appService.status) {
             case (true, .notRegistered), (true, .notFound):
                 try appService.register()
@@ -608,21 +621,20 @@ class GlobalSettingsViewModel: ObservableObject {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    @discardableResult
-    private static func removeLegacyLaunchAgent() -> Bool {
+    private static func removeLegacyLaunchAgentIfPresent() throws {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/LaunchAgents/cn.laobamac.Mirage.plist")
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = ["bootout", "gui/\(getuid())/cn.laobamac.Mirage"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-        try? FileManager.default.removeItem(at: url)
+        if (try? process.run()) != nil {
+            process.waitUntilExit()
+        }
+        try FileManager.default.removeItem(at: url)
         NSLog("[Mirage] Removed legacy LaunchAgent login item")
-        return true
     }
 
     func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {

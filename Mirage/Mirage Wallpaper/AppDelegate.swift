@@ -37,6 +37,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        if !globalSettingsViewModel.isFirstLaunch && !Self.isUserInitiatedLaunch {
+            enterMenuBarMode()
+        }
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
@@ -110,6 +113,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if globalSettingsViewModel.isFirstLaunch || Self.isUserInitiatedLaunch {
             openMainWindow()
+        } else {
+            enterMenuBarMode()
         }
 
         UpdateManager.shared.start()
@@ -207,8 +212,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func hideDockIconIfNoWindowsAreVisible() {
         DispatchQueue.main.async {
             guard !NSApp.windows.contains(where: { $0.isVisible }) else { return }
-            NSApp.setActivationPolicy(.accessory)
+            self.enterMenuBarMode()
         }
+    }
+
+    func enterMenuBarMode() {
+        NSApp.setActivationPolicy(.accessory)
     }
 
     func applyStatusItemVisibility(hidden: Bool) {

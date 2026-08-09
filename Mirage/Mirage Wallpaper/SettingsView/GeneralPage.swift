@@ -134,6 +134,13 @@ struct GeneralPage: SettingsPage {
                     get: { viewModel.settings.shouldHideMenuBarIcon },
                     set: { viewModel.settings.hideMenuBarIcon = $0 }
                 ))
+                Picker("菜单栏图标", selection: Binding(
+                    get: { viewModel.settings.shouldUseMonochromeMenuBarIcon },
+                    set: { viewModel.settings.monochromeMenuBarIcon = $0 }
+                )) {
+                    Text("彩色").tag(false)
+                    Text("黑白").tag(true)
+                }
             } header: {
                 Label("启动", systemImage: "star.fill")
             }

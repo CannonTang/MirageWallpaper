@@ -95,15 +95,22 @@ extension AppDelegate {
         self.statusItem.menu = menu
         self.statusItem.isVisible = !globalSettingsViewModel.settings.shouldHideMenuBarIcon
 
-        if let button = self.statusItem.button {
-            if let icon = NSImage(named: "MenuBarIcon") {
-                icon.isTemplate = false
-                icon.size = NSSize(width: 18, height: 18)
-                button.image = icon
-            } else {
-                let image = NSImage(systemSymbolName: "photo.on.rectangle.angled", accessibilityDescription: "Mirage")
-                button.image = image
-            }
+        applyStatusItemIcon(
+            monochrome: globalSettingsViewModel.settings.shouldUseMonochromeMenuBarIcon)
+    }
+
+    func applyStatusItemIcon(monochrome: Bool) {
+        guard let button = statusItem?.button else { return }
+        let resourceName = monochrome ? "MenuBarIconMonochrome" : "MenuBarIcon"
+        if let source = NSImage(named: resourceName),
+           let icon = source.copy() as? NSImage {
+            icon.isTemplate = monochrome
+            icon.size = NSSize(width: 18, height: 18)
+            button.image = icon
+        } else {
+            button.image = NSImage(
+                systemSymbolName: "photo.on.rectangle.angled",
+                accessibilityDescription: "Mirage")
         }
     }
 }

@@ -795,3 +795,6 @@
 "SteamCMD 安装失败：%@" = "SteamCMD installation failed: %@";
 "复制失败：%@" = "Copy failed: %@";
 "[Mirage] Steam 手机确认仍在等待（%lld 秒）" = "[Mirage] Waiting for Steam mobile confirmation (%lld seconds)";
+"菜单栏图标" = "Menu bar icon";
+"彩色" = "Color";
+"黑白" = "Monochrome";

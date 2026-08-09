@@ -127,18 +127,6 @@ struct WorkshopItemDetail: View {
                 sectionHeader("标签")
                 tagList(for: item)
 
-                sectionHeader("描述")
-                if item.itemDescription.isEmpty {
-                    Text("暂无描述")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text(item.itemDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(8)
-                }
-
                 sectionHeader("操作")
                 downloadSection(for: item)
 
@@ -150,6 +138,18 @@ struct WorkshopItemDetail: View {
                 } label: {
                     Label("在 Steam 中查看", systemImage: "safari")
                         .frame(maxWidth: .infinity)
+                }
+
+                sectionHeader("描述")
+                if item.itemDescription.isEmpty {
+                    Text("暂无描述")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text(item.itemDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(8)
                 }
 
                 sectionHeader("信息")
@@ -564,70 +564,81 @@ struct CreatorProfileView: View {
     }
 
     private var creatorScrollView: some View {
-        ScrollView {
-            LazyVGrid(columns: gridColumns, spacing: 10) {
-                ForEach(workshopViewModel.creatorItems) { item in
-                    WorkshopItemCard(
-                        item: item,
-                        isHovered: hoveredItemID == item.id,
-                        isSelected: false,
-                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                        isActive: selectedDetailItem == nil,
-                        animatedPreviewMode: animatedPreviewMode
-                    )
-                    .onHover { hovering in
-                        hoveredItemID = hovering ? item.id : nil
-                    }
-                    .onTapGesture {
-                        selectedDetailItem = item
-                    }
-                    .contextMenu {
-                        Section {
-                            Button {
-                                workshopViewModel.downloadItem(item)
-                            } label: {
-                                Label(
-                                    LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
-                                    systemImage: "arrow.down.circle.fill"
-                                )
-                            }
-                            .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
+        ScrollViewReader { proxy in
+            ScrollView {
+                Color.clear
+                    .frame(height: 0)
+                    .id("creatorTop")
 
-                            Button {
-                                selectedDetailItem = item
-                            } label: {
-                                Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
-                            }
+                LazyVGrid(columns: gridColumns, spacing: 10) {
+                    ForEach(workshopViewModel.creatorItems) { item in
+                        WorkshopItemCard(
+                            item: item,
+                            isHovered: hoveredItemID == item.id,
+                            isSelected: false,
+                            isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                            presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                            downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                            isActive: selectedDetailItem == nil,
+                            animatedPreviewMode: animatedPreviewMode
+                        )
+                        .onHover { hovering in
+                            hoveredItemID = hovering ? item.id : nil
                         }
-
-                        Section {
-                            Button {
-                                guard let url = URL(
-                                    string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
-                                ) else { return }
-                                NSWorkspace.shared.open(url)
-                            } label: {
-                                Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
-                            }
+                        .onTapGesture {
+                            selectedDetailItem = item
                         }
+                        .contextMenu {
+                            Section {
+                                Button {
+                                    workshopViewModel.downloadItem(item)
+                                } label: {
+                                    Label(
+                                        LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
+                                        systemImage: "arrow.down.circle.fill"
+                                    )
+                                }
+                                .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
 
-                        CreatorGridViewMenu(iconSize: $iconSize, pageSize: $creatorPageSize)
+                                Button {
+                                    selectedDetailItem = item
+                                } label: {
+                                    Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
+                                }
+                            }
+
+                            Section {
+                                Button {
+                                    guard let url = URL(
+                                        string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+                                    ) else { return }
+                                    NSWorkspace.shared.open(url)
+                                } label: {
+                                    Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
+                                }
+                            }
+
+                            CreatorGridViewMenu(iconSize: $iconSize, pageSize: $creatorPageSize)
+                        }
                     }
                 }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+                .padding(12)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
 
-            if workshopViewModel.creatorTotalPages > 1 {
-                PageNavigator(
-                    currentPage: workshopViewModel.creatorItemsPage,
-                    pageCount: workshopViewModel.creatorTotalPages,
-                    onSelect: workshopViewModel.goToCreatorPage
-                )
-                .padding(.bottom, 12)
+                if workshopViewModel.creatorTotalPages > 1 {
+                    PageNavigator(
+                        currentPage: workshopViewModel.creatorItemsPage,
+                        pageCount: workshopViewModel.creatorTotalPages,
+                        onSelect: workshopViewModel.goToCreatorPage
+                    )
+                    .padding(.bottom, 12)
+                }
+            }
+            .onChange(of: workshopViewModel.creatorItemsPage) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("creatorTop", anchor: .top)
+                }
             }
         }
     }

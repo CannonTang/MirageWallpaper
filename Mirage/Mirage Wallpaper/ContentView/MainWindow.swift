@@ -83,7 +83,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared.contentViewModel.isStaging = false
-        AppDelegate.shared.hideDockIconIfNoWindowsAreVisible()
+        AppDelegate.shared.enterMenuBarMode()
     }
     
     func windowDidResignKey(_ notification: Notification) { }
