@@ -49,6 +49,8 @@ class WallpaperViewModel: ObservableObject {
     private static let assignmentsDefaultsKey = "DisplayAssignments"
     private static let selectedDisplayDefaultsKey = "SelectedDisplay"
     private static let legacyWallpaperDefaultsKey = "CurrentWallpaper"
+    private static let runtimeKeyPrefix = "Runtime_"
+    private static let sessionPauseRepairDefaultsKey = "DidRepairSessionPausedRuntimes"
 
     @Published private(set) var displayStates: [DisplayKey: DisplayWallpaperState] = [:]
 
@@ -74,8 +76,8 @@ class WallpaperViewModel: ObservableObject {
     private var playbackCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
     private var propertyCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
     private var pendingPropertyCommands: [DisplayKey: [String: WEProjectProperty]] = [:]
-    private var lastVolumeByDisplay: [DisplayKey: Float] = [:]
-    private var lastRateByDisplay: [DisplayKey: Float] = [:]
+    private var sessionPaused = false
+    private var sessionMuted = false
 
     static var invalidWallpaper: WEWallpaper {
         WEWallpaper(using: .invalid,
@@ -98,6 +100,15 @@ class WallpaperViewModel: ObservableObject {
         if loaded.isEmpty, let migrated = Self.loadLegacyState(),
            let mainKey = registry.mainKey {
             loaded[mainKey] = migrated
+        }
+        if Self.repairRuntimesZeroedByLegacyPause() {
+            for (key, state) in loaded {
+                var repaired = state
+                if repaired.runtime.speed == 0 { repaired.runtime.speed = 1 }
+                if repaired.runtime.volume == 0 { repaired.runtime.volume = 1 }
+                guard repaired != state else { continue }
+                loaded[key] = repaired
+            }
         }
         displayStates = loaded
         committedAssignmentIDs = Dictionary(uniqueKeysWithValues: loaded.keys.map { ($0, UUID()) })
@@ -231,6 +242,14 @@ class WallpaperViewModel: ObservableObject {
         AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: key)
     }
 
+    private func isPaused(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
+        sessionPaused || state.speed == 0 || action == .pause
+    }
+
+    private func isMuted(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
+        sessionMuted || state.muted || globalMuted || state.volume == 0 || action == .mute
+    }
+
     // MARK: 信任（网页壁纸安全确认）
 
     private static let sessionTrustLock = NSLock()
@@ -294,6 +313,7 @@ class WallpaperViewModel: ObservableObject {
             return
         }
         let previous = displayStates[key]
+        clearSessionPlaybackOverrides()
         let resolved: WallpaperRuntimeState
         if let previous, previous.wallpaper.id == wallpaper.id {
             resolved = previous.runtime
@@ -673,14 +693,14 @@ class WallpaperViewModel: ObservableObject {
         opts.assignmentID = assignmentID
         opts.fps = globalFps
         opts.enableSpectrum = enableSpectrum
-        opts.muted = state.muted || globalMuted || state.volume == 0 || action == .mute
+        opts.muted = isMuted(state, action: action)
         opts.volume = state.volume * masterVolume
         opts.speed = state.speed
         opts.fillMode = state.fillMode
         opts.userProperties = effectiveProperties(for: w, runtime: state)
         let throttledFps = AppDelegate.shared.globalSettingsViewModel
             .throttledFps(base: globalFps)
-        let paused = state.speed == 0 || action == .pause
+        let paused = isPaused(state, action: action)
         opts.powerState = paused ? .pause
             : (throttledFps < globalFps ? .throttle : .run)
         opts.powerFps = throttledFps
@@ -771,7 +791,33 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 运行时状态持久化
 
-    private static func runtimeKey(for w: WEWallpaper) -> String { "Runtime_\(w.id)" }
+    private static func runtimeKey(for w: WEWallpaper) -> String { "\(runtimeKeyPrefix)\(w.id)" }
+
+    private static func repairRuntimesZeroedByLegacyPause() -> Bool {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: sessionPauseRepairDefaultsKey) else { return false }
+        defaults.set(true, forKey: sessionPauseRepairDefaultsKey)
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix(runtimeKeyPrefix) {
+            guard let data = defaults.data(forKey: key),
+                  var saved = try? decoder.decode(WallpaperRuntimeState.self, from: data)
+            else { continue }
+            var changed = false
+            if saved.speed == 0 {
+                saved.speed = 1
+                changed = true
+            }
+            if saved.volume == 0 {
+                saved.volume = 1
+                changed = true
+            }
+            guard changed, let repaired = try? encoder.encode(saved) else { continue }
+            defaults.set(repaired, forKey: key)
+        }
+        return true
+    }
 
     func loadRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
         Self.loadPersistedRuntime(for: w)
@@ -1072,7 +1118,6 @@ class WallpaperViewModel: ObservableObject {
 
     func setVolume(_ value: Float, for key: DisplayKey) {
         guard displayStates[key] != nil else { return }
-        lastVolumeByDisplay[key] = runtime(for: key).volume
         mutateRuntime(for: key) { $0.volume = value }
         schedulePlaybackPolicyApplication(for: key)
         syncStatusItems()
@@ -1080,32 +1125,55 @@ class WallpaperViewModel: ObservableObject {
 
     func setSpeed(_ value: Float, for key: DisplayKey) {
         guard displayStates[key] != nil else { return }
-        lastRateByDisplay[key] = runtime(for: key).speed
         mutateRuntime(for: key) { $0.speed = value }
         schedulePlaybackPolicyApplication(for: key)
         syncStatusItems()
     }
 
     func muteAll() {
-        for key in Array(displayStates.keys) { setVolume(0, for: key) }
+        guard !sessionMuted else { return }
+        sessionMuted = true
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
+        syncStatusItems()
     }
 
     func unmuteAll() {
-        for key in Array(displayStates.keys) {
-            let remembered = lastVolumeByDisplay[key] ?? 1
-            setVolume(remembered == 0 ? 1 : remembered, for: key)
-        }
+        guard sessionMuted else { return }
+        sessionMuted = false
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
+        syncStatusItems()
     }
 
     func pauseAll() {
-        for key in Array(displayStates.keys) { setSpeed(0, for: key) }
+        guard !sessionPaused else { return }
+        sessionPaused = true
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
+        syncStatusItems()
     }
 
     func resumeAll() {
-        for key in Array(displayStates.keys) {
-            let remembered = lastRateByDisplay[key] ?? 1
-            setSpeed(remembered == 0 ? 1 : remembered, for: key)
-        }
+        guard sessionPaused else { return }
+        sessionPaused = false
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
+        syncStatusItems()
+    }
+
+    private func clearSessionPlaybackOverrides() {
+        guard sessionPaused || sessionMuted else { return }
+        sessionPaused = false
+        sessionMuted = false
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
+        syncStatusItems()
     }
 
     private func schedulePlaybackPolicyApplication(for key: DisplayKey) {
@@ -1201,14 +1269,13 @@ class WallpaperViewModel: ObservableObject {
             let runtimeState = state.runtime
             let throttledFps = AppDelegate.shared.globalSettingsViewModel
                 .throttledFps(base: globalFps)
-            let paused = runtimeState.speed == 0 || action == .pause
+            let paused = isPaused(runtimeState, action: action)
             let powerState: MiragePowerState = paused ? .pause
                 : (throttledFps < globalFps ? .throttle : .run)
 
             let applied = AppliedPlaybackState(
                 paused: paused,
-                muted: runtimeState.muted || globalMuted || runtimeState.volume == 0 ||
-                    action == .mute,
+                muted: isMuted(runtimeState, action: action),
                 volume: runtimeState.volume * masterVolume,
                 speed: runtimeState.speed,
                 powerState: powerState,
@@ -1240,13 +1307,8 @@ class WallpaperViewModel: ObservableObject {
     // MARK: 状态栏菜单项文字同步
 
     private func syncStatusItems() {
-        let active = displayStates.filter { DisplayRegistry.shared.displayID(for: $0.key) != nil }
-        let muted = !active.isEmpty && active.values.allSatisfy {
-            $0.runtime.muted || $0.runtime.volume == 0
-        }
-        let paused = !active.isEmpty && active.values.allSatisfy { $0.runtime.speed == 0 }
-        syncStatusPauseItem(isPaused: paused)
-        syncStatusMuteItem(isMuted: muted)
+        syncStatusPauseItem(isPaused: sessionPaused)
+        syncStatusMuteItem(isMuted: sessionMuted)
     }
 
     private func syncStatusPauseItem(isPaused: Bool) {
