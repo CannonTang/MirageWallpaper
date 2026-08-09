@@ -127,6 +127,7 @@
 				5EC47E732A2DB2E600120CCC /* Frameworks */,
 				5EC47E742A2DB2E600120CCC /* Resources */,
 				A100000A0000000000000000 /* Copy Screen Savers */,
+				A20000010000000000000000 /* Build Steam Service */,
 			);
 			buildRules = (
 			);
@@ -240,6 +241,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A20000010000000000000000 /* Build Steam Service */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Steam Service";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "ROOT=\"$SRCROOT/..\"\nARCHITECTURES=\"${MIRAGE_ARCH:-$ARCHS}\"\nbash \"$SRCROOT/scripts/build_steam_service.sh\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\" \"$ROOT\" \"$ARCHITECTURES\" \"${EXPANDED_CODE_SIGN_IDENTITY:-}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXTargetDependency section */
 		A100000D0000000000000000 /* PBXTargetDependency */ = {
@@ -406,6 +429,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
@@ -458,6 +482,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;

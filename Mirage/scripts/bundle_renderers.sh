@@ -48,13 +48,6 @@ done
 
 mkdir -p "$FRAMEWORKS" "$RENDERERS" "$VK_ICD_DIR"
 
-ROSETTA_APP="$RESOURCES/RosettaTrigger.app"
-mkdir -p "$ROSETTA_APP/Contents/MacOS"
-cp -f "$ROOT/Mirage/RosettaTrigger/Info.plist" "$ROSETTA_APP/Contents/Info.plist"
-xcrun clang -arch x86_64 -mmacosx-version-min=14.2 \
-    "$ROOT/Mirage/RosettaTrigger/main.c" \
-    -o "$ROSETTA_APP/Contents/MacOS/RosettaTrigger"
-
 cp -f "$SCENE_BIN" "$RENDERERS/SceneWallpaper"
 cp -f "$WEB_BIN"   "$RENDERERS/WebWallpaper"
 cp -f "$VIDEO_BIN" "$RENDERERS/VideoWallpaper"
@@ -234,6 +227,11 @@ done
 for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
     sign_item "$bin"
 done
+while IFS= read -r item; do
+    if file "$item" | grep -q 'Mach-O'; then
+        sign_item "$item"
+    fi
+done < <(find "$RESOURCES/SteamService" -type f)
 if [ -d "${SAVER:-}" ]; then
     for lib in "$SAVER_FRAMEWORKS"/*.dylib; do
         [ -f "$lib" ] || continue
@@ -241,7 +239,6 @@ if [ -d "${SAVER:-}" ]; then
     done
     sign_bundle "$SAVER"
 fi
-sign_bundle "$ROSETTA_APP"
 sign_bundle "$APP"
 
 echo "[bundle] 完成"

@@ -1,0 +1,392 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
+using System.Collections.Concurrent;
+using SteamKit2;
+using SteamKit2.Authentication;
+using SteamKit2.CDN;
+using SteamKit2.Internal;
+
+namespace MirageSteamService;
+
+internal sealed class SteamSession : IAsyncDisposable
+{
+    public const uint AppId = 431960;
+
+    private readonly ProtocolWriter writer;
+    private readonly SteamClient client;
+    private readonly CallbackManager callbacks;
+    private readonly SteamUser user;
+    private readonly SteamApps apps;
+    private readonly SteamContent content;
+    private readonly PublishedFile publishedFiles;
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly SemaphoreSlim authGate = new(1, 1);
+    private readonly SemaphoreSlim appInfoGate = new(1, 1);
+    private readonly ConcurrentDictionary<(uint DepotId, string Host), SteamContent.CDNAuthToken> cdnTokens = new();
+    private readonly Task callbackLoop;
+    private TaskCompletionSource<bool>? connectedSource;
+    private TaskCompletionSource<bool>? resetConnectionSource;
+    private TaskCompletionSource<SteamUser.LoggedOnCallback>? loggedOnSource;
+    private InteractiveAuthenticator? authenticator;
+    private CancellationTokenSource? authCancellation;
+    private SteamApps.PICSProductInfoCallback.PICSProductInfo? appInfo;
+    private bool shuttingDown;
+
+    public bool IsLoggedIn { get; private set; }
+    public string AccountName { get; private set; } = "";
+    public SteamClient Client => client;
+    public SteamApps Apps => apps;
+    public SteamContent Content => content;
+    public PublishedFile PublishedFiles => publishedFiles;
+
+    public SteamSession(ProtocolWriter writer)
+    {
+        this.writer = writer;
+        var configuration = SteamConfiguration.Create(builder => builder.WithHttpClientFactory(_ =>
+        {
+            var sockets = new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+                ConnectTimeout = TimeSpan.FromSeconds(20)
+            };
+            var httpClient = new HttpClient(new CountingHandler(sockets), true)
+            {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
+            var version = typeof(SteamClient).Assembly.GetName().Version?.ToString(3) ?? "3.4.0";
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"SteamKit/{version}");
+            return httpClient;
+        }));
+        client = new SteamClient(configuration);
+        callbacks = new CallbackManager(client);
+        user = client.GetHandler<SteamUser>()!;
+        apps = client.GetHandler<SteamApps>()!;
+        content = client.GetHandler<SteamContent>()!;
+        publishedFiles = client.GetHandler<SteamUnifiedMessages>()!.CreateService<PublishedFile>();
+        callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
+        callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
+        callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
+        callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
+        callbackLoop = RunCallbacksAsync();
+    }
+
+    public async Task LoginWithRefreshTokenAsync(string username, string refreshToken, CancellationToken cancellationToken)
+    {
+        await authGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            writer.AuthState("connecting", username);
+            await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+            await LogOnAsync(username, refreshToken, cancellationToken).ConfigureAwait(false);
+            AccountName = username;
+            writer.AuthState("loggedIn", username);
+        }
+        finally
+        {
+            authGate.Release();
+        }
+    }
+
+    public async Task LoginWithPasswordAsync(string username, string password, string? guardData, CancellationToken cancellationToken)
+    {
+        await authGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CancelAuthentication();
+            authCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
+            var loginAuthenticator = new InteractiveAuthenticator(writer);
+            authenticator = loginAuthenticator;
+            writer.AuthState("connecting", username);
+            await EnsureConnectedAsync(authCancellation.Token).ConfigureAwait(false);
+            writer.AuthState("authenticating", username);
+            var session = await client.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
+                {
+                    Username = username,
+                    Password = password,
+                    IsPersistentSession = true,
+                    GuardData = guardData,
+                    Authenticator = loginAuthenticator,
+                    DeviceFriendlyName = "Mirage for macOS"
+                })
+                .WaitAsync(authCancellation.Token)
+                .ConfigureAwait(false);
+            var result = await PollCredentialsResultAsync(session, loginAuthenticator, authCancellation.Token).ConfigureAwait(false);
+            await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
+            AccountName = result.AccountName;
+            writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData ?? guardData);
+        }
+        finally
+        {
+            authenticator = null;
+            authCancellation?.Dispose();
+            authCancellation = null;
+            authGate.Release();
+        }
+    }
+
+    public async Task LoginWithQrAsync(CancellationToken cancellationToken)
+    {
+        await authGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CancelAuthentication();
+            authCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
+            writer.AuthState("connecting");
+            await EnsureConnectedAsync(authCancellation.Token).ConfigureAwait(false);
+            var session = await client.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+                {
+                    IsPersistentSession = true,
+                    DeviceFriendlyName = "Mirage for macOS"
+                })
+                .WaitAsync(authCancellation.Token)
+                .ConfigureAwait(false);
+            session.ChallengeURLChanged = () => writer.AuthState("qr", challengeUrl: session.ChallengeURL);
+            writer.AuthState("qr", challengeUrl: session.ChallengeURL);
+            var result = await session.PollingWaitForResultAsync(authCancellation.Token).ConfigureAwait(false);
+            writer.AuthState("authenticating", result.AccountName);
+            await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
+            AccountName = result.AccountName;
+            writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData);
+        }
+        finally
+        {
+            authCancellation?.Dispose();
+            authCancellation = null;
+            authGate.Release();
+        }
+    }
+
+    public bool SubmitChallenge(string code)
+    {
+        return authenticator?.Submit(code) == true;
+    }
+
+    private static async Task<AuthPollResult> PollCredentialsResultAsync(CredentialsAuthSession session, InteractiveAuthenticator loginAuthenticator, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await session.PollingWaitForResultAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (AsyncJobFailedException) when (loginAuthenticator.IsWaitingForDeviceConfirmation)
+        {
+            var failures = 1;
+            var interval = session.PollingInterval < TimeSpan.FromSeconds(1) ? TimeSpan.FromSeconds(1) : session.PollingInterval;
+            while (true)
+            {
+                await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var result = await session.PollAuthSessionStatusAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+                    failures = 0;
+                    if (result != null) return result;
+                }
+                catch (AsyncJobFailedException) when (failures < 5)
+                {
+                    failures += 1;
+                }
+                catch (AsyncJobFailedException)
+                {
+                    throw new ServiceException("AUTH_SERVICE_TEMPORARY", "Steam authentication service did not return the confirmed session.");
+                }
+            }
+        }
+    }
+
+    public void CancelAuthentication()
+    {
+        authenticator?.Cancel();
+        try { authCancellation?.Cancel(); } catch (ObjectDisposedException) { } catch (AggregateException) { }
+    }
+
+    public async Task ResetConnectionAsync()
+    {
+        var source = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        resetConnectionSource = source;
+        connectedSource = null;
+        loggedOnSource = null;
+        client.Disconnect();
+        try { await source.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch (TimeoutException) { }
+        if (ReferenceEquals(resetConnectionSource, source)) resetConnectionSource = null;
+    }
+
+    public async Task<SteamApps.PICSProductInfoCallback.PICSProductInfo> GetAppInfoAsync(CancellationToken cancellationToken)
+    {
+        if (appInfo != null) return appInfo;
+        await appInfoGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (appInfo != null) return appInfo;
+            cancellationToken.ThrowIfCancellationRequested();
+            var tokens = await apps.PICSGetAccessTokens([AppId], []).ToTask().WaitAsync(cancellationToken).ConfigureAwait(false);
+            var request = new SteamApps.PICSRequest(AppId);
+            if (tokens.AppTokens.TryGetValue(AppId, out var token)) request.AccessToken = token;
+            cancellationToken.ThrowIfCancellationRequested();
+            var response = await apps.PICSGetProductInfo([request], []).ToTask().WaitAsync(cancellationToken).ConfigureAwait(false);
+            var results = response?.Results ?? throw new ServiceException("APP_INFO_UNAVAILABLE", "Wallpaper Engine app information is unavailable for this account.");
+            foreach (var result in results)
+            {
+                if (result.Apps.TryGetValue(AppId, out var info))
+                {
+                    appInfo = info;
+                    return info;
+                }
+            }
+            throw new ServiceException("APP_INFO_UNAVAILABLE", "Wallpaper Engine app information is unavailable for this account.");
+        }
+        finally
+        {
+            appInfoGate.Release();
+        }
+    }
+
+    public async Task<(Server Server, string? Token)> GetDownloadServerAsync(uint depotId, int offset, CancellationToken cancellationToken)
+    {
+        var servers = await content.GetServersForSteamPipe().WaitAsync(cancellationToken).ConfigureAwait(false);
+        var eligible = servers
+            .Where(server => !string.IsNullOrWhiteSpace(server.Host) && (server.AllowedAppIds.Length == 0 || server.AllowedAppIds.Contains(AppId)) && (server.Type == "CDN" || server.Type == "SteamCache"))
+            .OrderBy(server => server.WeightedLoad)
+            .ToArray();
+        if (eligible.Length == 0) throw new ServiceException("NO_CONTENT_SERVER", "Steam returned no eligible content server.");
+        var selected = eligible[Math.Abs(offset) % eligible.Length];
+        var host = selected.Host!;
+        var key = (depotId, host);
+        if (!cdnTokens.TryGetValue(key, out var auth) || auth.Expiration <= DateTime.UtcNow.AddMinutes(1))
+        {
+            var result = await content.GetCDNAuthToken(AppId, depotId, host).WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (result.Result == EResult.OK)
+            {
+                auth = result;
+                cdnTokens[key] = result;
+            }
+            else
+            {
+                return (selected, null);
+            }
+        }
+        return (selected, auth.Token);
+    }
+
+    public void Logout()
+    {
+        CancelAuthentication();
+        IsLoggedIn = false;
+        AccountName = "";
+        appInfo = null;
+        cdnTokens.Clear();
+        if (client.IsConnected) user.LogOff();
+        writer.AuthState("loggedOut");
+    }
+
+    private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
+    {
+        if (client.IsConnected) return;
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            connectedSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                client.Connect();
+                await connectedSource.Task.WaitAsync(TimeSpan.FromSeconds(12), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception error)
+            {
+                lastError = error;
+                connectedSource = null;
+                try { client.Disconnect(); } catch { }
+                if (attempt < 3)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+        throw lastError ?? new ServiceException("CONNECTION_LOST", "Steam connection closed.");
+    }
+
+    private async Task LogOnAsync(string username, string refreshToken, CancellationToken cancellationToken)
+    {
+        loggedOnSource = new TaskCompletionSource<SteamUser.LoggedOnCallback>(TaskCreationOptions.RunContinuationsAsynchronously);
+        user.LogOn(new SteamUser.LogOnDetails
+        {
+            Username = username,
+            AccessToken = refreshToken,
+            ShouldRememberPassword = true,
+            LoginID = 0x4D495247
+        });
+        var result = await loggedOnSource.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        if (result.Result != EResult.OK) throw new ServiceException("AUTH_FAILED", result.Result.ToString());
+        IsLoggedIn = true;
+    }
+
+    private async Task RunCallbacksAsync()
+    {
+        try
+        {
+            while (!lifetime.IsCancellationRequested)
+            {
+                await callbacks.RunWaitCallbackAsync(lifetime.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+        }
+    }
+
+    private void OnConnected(SteamClient.ConnectedCallback callback)
+    {
+        connectedSource?.TrySetResult(true);
+    }
+
+    private void OnDisconnected(SteamClient.DisconnectedCallback callback)
+    {
+        if (callback.UserInitiated)
+        {
+            resetConnectionSource?.TrySetResult(true);
+            return;
+        }
+        connectedSource?.TrySetException(new ServiceException("CONNECTION_LOST", "Steam connection closed."));
+        loggedOnSource?.TrySetException(new ServiceException("CONNECTION_LOST", "Steam connection closed."));
+        if (IsLoggedIn && !shuttingDown)
+        {
+            IsLoggedIn = false;
+            writer.AuthState("loggedOut", message: "Steam connection closed.", errorCode: "CONNECTION_LOST");
+        }
+    }
+
+    private void OnLoggedOn(SteamUser.LoggedOnCallback callback)
+    {
+        loggedOnSource?.TrySetResult(callback);
+    }
+
+    private void OnLoggedOff(SteamUser.LoggedOffCallback callback)
+    {
+        if (shuttingDown || !IsLoggedIn) return;
+        IsLoggedIn = false;
+        writer.AuthState("loggedOut", message: callback.Result.ToString());
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        shuttingDown = true;
+        CancelAuthentication();
+        if (client.IsConnected)
+        {
+            if (IsLoggedIn) user.LogOff();
+            client.Disconnect();
+        }
+        lifetime.Cancel();
+        try { await callbackLoop.ConfigureAwait(false); } catch { }
+        lifetime.Dispose();
+        authGate.Dispose();
+        appInfoGate.Dispose();
+    }
+}

@@ -26,6 +26,8 @@ cmake-build-debug
 /record
 /CMakeUserPresets.json
 /defaultprojects
+/SteamService/bin/
+/SteamService/obj/
 .DS_Store
 .claude
 .codex
