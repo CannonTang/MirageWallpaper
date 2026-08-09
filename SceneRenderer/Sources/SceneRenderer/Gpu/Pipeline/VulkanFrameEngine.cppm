@@ -82,6 +82,8 @@ struct PreparedPassDiagnostic {
     bool                                      prepared { false };
 };
 
+void UpdateCameraFillModeForExtent(Scene&, sr::FillMode, unsigned width, unsigned height);
+
 class VulkanRender {
 public:
     VulkanRender();

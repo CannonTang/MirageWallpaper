@@ -2703,6 +2703,11 @@ RenderSceneSnapshot ExtractRenderSceneSnapshot(Scene& scene);
 // Scene.h
 // ============================================================================
 
+enum class SceneProjectionKind {
+    OrthographicCanvas,
+    Perspective3D,
+};
+
 class Scene : NoCopy, NoMove {
 public:
     Scene();
@@ -2904,6 +2909,10 @@ public:
 
     i32                  ortho[2] { 1920, 1080 };
     float                viewport_scale { 1.0f };
+    void SetProjectionKind(SceneProjectionKind kind) { m_projection_kind = kind; }
+    bool UsesSyntheticPerspectiveCamera() const {
+        return m_projection_kind == SceneProjectionKind::OrthographicCanvas;
+    }
     void SetViewportScale(float scale) {
         viewport_scale = std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
     }
@@ -2990,6 +2999,9 @@ private:
     bool                                     m_render_graph_dirty { false };
     bool                                     m_dynamic_topology_dirty { false };
     bool                                     m_planar_reflection_enabled { false };
+    SceneProjectionKind                      m_projection_kind {
+        SceneProjectionKind::OrthographicCanvas
+    };
     SceneAnimationCurve                      m_viewport_scale_curve;
     double                                   m_root_camera_default_width { 1.0 };
     double                                   m_root_camera_default_height { 1.0 };

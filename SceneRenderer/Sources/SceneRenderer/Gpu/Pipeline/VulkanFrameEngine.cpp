@@ -1399,12 +1399,10 @@ bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {
     return true;
 }
 
-void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fillmode) {
+void sr::vulkan::UpdateCameraFillModeForExtent(sr::Scene& scene, sr::FillMode fillmode,
+                                               unsigned width, unsigned height) {
     using namespace sr;
-    auto width  = m_device->out_extent().width;
-    auto height = m_device->out_extent().height;
-
-    if (width == 0) return;
+    if (width == 0 || height == 0) return;
     const auto projection_extent = scene.OrthographicProjectionExtent();
     double     sw = projection_extent[0], sh = projection_extent[1];
     double fboAspect = width / (double)height, sAspect = sw / sh;
@@ -1416,7 +1414,7 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
         gCam.SetWidth(sw);
         gCam.SetHeight(sh);
         gPerCam.SetAspect(sAspect);
-        if (! gPerCam.IsLookAt())
+        if (scene.UsesSyntheticPerspectiveCamera() && ! gPerCam.IsLookAt())
             gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
         break;
     case FillMode::ASPECTFIT:
@@ -1429,7 +1427,7 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
             gCam.SetHeight(sh);
         }
         gPerCam.SetAspect(fboAspect);
-        if (! gPerCam.IsLookAt())
+        if (scene.UsesSyntheticPerspectiveCamera() && ! gPerCam.IsLookAt())
             gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
         break;
     case FillMode::ASPECTCROP:
@@ -1443,7 +1441,7 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
             gCam.SetHeight(sh);
         }
         gPerCam.SetAspect(fboAspect);
-        if (! gPerCam.IsLookAt())
+        if (scene.UsesSyntheticPerspectiveCamera() && ! gPerCam.IsLookAt())
             gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
         break;
     }
@@ -1453,7 +1451,13 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
     scene.CaptureCameraPathViewports();
 }
 
+void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fillmode) {
+    const auto extent = m_device->out_extent();
+    UpdateCameraFillModeForExtent(scene, fillmode, extent.width, extent.height);
+}
+
 void VulkanRender::Impl::clearLastRenderGraph(RenderGraphResourceRetention retention) {
+    flushPendingFrame();
     m_program.destroyPasses(*m_device, m_rendering_resources);
     ReleaseCompletedRetiredResources(m_rendering_resources);
     m_program.clear();

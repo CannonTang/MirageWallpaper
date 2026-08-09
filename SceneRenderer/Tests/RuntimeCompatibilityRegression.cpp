@@ -73,6 +73,51 @@ void TestExplicitCameraFactories() {
     Check(perspective.Fov() == 45.0, "perspective factory preserves field of view");
 }
 
+void TestPerspectiveFillModePreservesFov() {
+    sr::Scene scene;
+    scene.SetProjectionKind(sr::SceneProjectionKind::Perspective3D);
+    scene.ortho[0] = 1920;
+    scene.ortho[1] = 1080;
+    scene.cameras["global"] = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(1920.0, 1080.0, -5000.0, 5000.0));
+    auto perspective = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakePerspective(16.0 / 9.0, 0.01, 10000.0, 50.0));
+    sr::SceneNode camera_node;
+    perspective->AttatchNode(&camera_node);
+    scene.cameras["global_perspective"] = perspective;
+    scene.activeCamera = perspective.get();
+
+    sr::vulkan::UpdateCameraFillModeForExtent(
+        scene, sr::FillMode::ASPECTCROP, 1920, 1080);
+
+    Check(Near(perspective->Fov(), 50.0f),
+          "perspective scene fill mode preserves authored field of view");
+    Check(Near(perspective->Aspect(), 16.0f / 9.0f),
+          "perspective scene fill mode updates output aspect");
+}
+
+void TestOrthographicFillModeDerivesPerspectiveFov() {
+    sr::Scene scene;
+    scene.SetProjectionKind(sr::SceneProjectionKind::OrthographicCanvas);
+    scene.ortho[0] = 1920;
+    scene.ortho[1] = 1080;
+    scene.cameras["global"] = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(1920.0, 1080.0, -5000.0, 5000.0));
+    auto perspective = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakePerspective(16.0 / 9.0, 5.0, 15000.0, 50.0));
+    sr::SceneNode camera_node;
+    perspective->AttatchNode(&camera_node);
+    scene.cameras["global_perspective"] = perspective;
+
+    sr::vulkan::UpdateCameraFillModeForExtent(
+        scene, sr::FillMode::ASPECTCROP, 1920, 1080);
+
+    const float expected = static_cast<float>(
+        std::atan(1080.0 / 1000.0 / 2.0) * 2.0 * 180.0 / std::numbers::pi);
+    Check(Near(perspective->Fov(), expected),
+          "orthographic scene fill mode derives embedded perspective field of view");
+}
+
 void TestAuthoredSceneZoom() {
     sr::Scene scene;
     scene.ortho[0] = 1920;
@@ -640,6 +685,8 @@ void TestParticleRuntimeState() {
 
 int main() {
     TestExplicitCameraFactories();
+    TestPerspectiveFillModePreservesFov();
+    TestOrthographicFillModeDerivesPerspectiveFov();
     TestAuthoredSceneZoom();
     TestAnimatedSceneZoom();
     TestAnimatedSceneZoomWithCameraPath();

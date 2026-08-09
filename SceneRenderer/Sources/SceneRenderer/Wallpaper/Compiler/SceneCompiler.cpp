@@ -2658,6 +2658,8 @@ void InitContext(ParseContext& context, fs::VFS& vfs, const wpscene::SceneMetada
     }
     scene.ortho[0]  = ortho_extent[0];
     scene.ortho[1]  = ortho_extent[1];
+    scene.SetProjectionKind(sc.general.isOrtho ? SceneProjectionKind::OrthographicCanvas
+                                                : SceneProjectionKind::Perspective3D);
     scene.SetViewportScale(sc.general.zoom);
     if (sc.general.isOrtho) {
         SceneAnimationCurve viewport_scale_curve;
