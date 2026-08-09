@@ -49,4 +49,4 @@ The app bundles a `MirageScreenSaver.saver` that you can install from Settings â
 
 ## Where data is stored
 
-Mirage's local wallpapers, SteamCMD data, cache, and configuration all have fixed locations. For the full list, see [Data directories](/en/advanced/data-directories/).
+Mirage's local wallpapers, Workshop downloads, cache, and configuration all have fixed locations. For the full list, see [Data Directories](/en/advanced/data-directories/).

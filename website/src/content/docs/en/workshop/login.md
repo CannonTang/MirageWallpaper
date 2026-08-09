@@ -1,42 +1,32 @@
 ---
 title: Steam Sign-In
-description: Sign in to your Steam account in Mirage, handle Steam Guard, and reuse a saved session.
+description: Mirage's QR, password, and Steam Guard flows, and how credentials are stored.
 ---
 
-Downloading Workshop content requires signing in to a Steam account. Sign-in happens in step 3 of the [setup wizard](/en/workshop/setup-wizard/), after which SteamCMD maintains the session.
+Downloading Workshop content requires a global Steam account that owns Wallpaper Engine. Mirage's embedded SteamKit2 service connects directly to Valve for sign-in.
 
-## Sign in with a password
+## QR sign-in
 
-1. Enter your **Steam username and password**.
-2. Mirage hands the credentials to the local SteamCMD process to complete sign-in. It **never uploads your password to any third-party server**, and doesn't keep it in plain text long-term.
-3. The sign-in log updates in real time, so you can see the cause if something goes wrong.
+QR is the default path:
 
-Once sign-in succeeds, SteamCMD writes its own session config in the isolated directory. Mirage uses this to determine that you're signed in, and reuses it automatically for later downloads.
+1. Mirage requests a short-lived challenge URL from Steam and renders the QR code locally.
+2. Scan it in the Steam mobile app and approve the request.
+3. Steam returns a refresh token and Mirage establishes a long-lived session.
 
-## Steam Guard
+The QR image is never uploaded to another service. When Steam refreshes the challenge URL, the wizard redraws the code immediately. If no new challenge arrives within 30 seconds, Mirage automatically starts a fresh QR sign-in session. You can also select **Refresh QR Code** at any time. After mobile approval and successful Steam sign-in, the wizard advances to the completion step automatically.
 
-If your account has Steam Guard enabled, sign-in requires a second verification step:
+## Password and Steam Guard
 
-- **Code method**: enter the email or token code to continue. If the session has ended, you'll be prompted to sign in again.
-- **Mobile confirmation method**: Mirage enters a waiting state and prints "still waiting" in the log every 5 seconds. Tap confirm in the Steam mobile app, and it continues automatically.
+If scanning is unavailable, switch to account-name and password sign-in. The password is sent only over standard input between the app and its local helper. It is not placed in process arguments, written to logs, or stored long-term.
 
-## Reuse a saved session
+For Steam Guard accounts, the wizard shows email code, mobile code, or mobile confirmation state. Codes are used only for the current attempt.
 
-If this machine already has a **validated SteamCMD session**, the wizard offers "Use saved session":
+## Persisted session
 
-- You can continue without entering your password again.
-- Mirage only persists your **username** for reuse; the session itself is maintained by SteamCMD.
+After sign-in, Mirage stores the refresh token and GuardData in the macOS Keychain and keeps only the account name in preferences. The next launch restores the session directly. If a token is rejected, Mirage removes it and asks you to sign in again.
 
-If the saved session has become invalid, Mirage prompts: "The saved Steam session is no longer valid, please sign in again with your password."
+Signing out from the Workshop ends the current session and removes its refresh token and GuardData from Keychain.
 
-## Cancel and retry
-
-- You can **cancel** during sign-in at any time; Mirage clears the password and code inputs.
-- Going back a step also safely cancels a sign-in in progress.
-- If you run into problems, retry, or see [Troubleshooting](/en/workshop/troubleshooting/).
-
-## Privacy
-
-- Your password is only used for local SteamCMD sign-in.
-- Diagnostic logs redact sensitive fields like passwords, API keys, and tokens (replacing them with `[redacted]`).
-- For more detail, see [SteamCMD and Steam Sign-In](/en/workshop/steamcmd/).
+:::note
+Mirage is not an official Steam client and does not bypass Wallpaper Engine ownership or Workshop access controls.
+:::

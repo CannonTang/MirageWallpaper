@@ -1,70 +1,42 @@
 ---
 title: Data Directories
-description: Where Mirage keeps wallpaper source directories, the SteamCMD directory, caches, and settings.
+description: Where Mirage stores wallpaper sources, Workshop downloads, caches, and settings.
 ---
 
-Mirage scans wallpapers from several sources and keeps downloads, caches, and settings in separate locations. Knowing these paths helps with backing up, cleaning up, and troubleshooting.
+## Wallpaper sources
 
-## Wallpaper Source Directories
-
-Mirage's wallpaper library scans all of the following sources at once (you can view the real paths and "Show in Finder" in the "Wallpaper library" section of [General Settings](/en/settings/general/)):
-
-| Source | Description |
+| Source | Default location |
 | --- | --- |
-| Steam Workshop directory | The system Steam's default Workshop content directory (App ID `431960`) |
-| Custom Workshop directory | A Wallpaper Engine content directory you specify manually (once set, the system default directory is demoted to a compatibility fallback) |
-| Mirage download directory | Where SteamCMD currently downloads and updates wallpapers (marked "current download location") |
-| Mirage legacy download directory | Only used for compatibility with wallpapers downloaded by older versions |
-| Import directory | Local wallpapers imported manually or created from videos |
+| Mirage Workshop downloads | `~/Library/Application Support/Mirage/Workshop/content/431960/` |
+| Mirage local imports | `~/Library/Application Support/Mirage/Wallpapers/` |
+| System Steam Workshop | `~/Library/Application Support/Steam/steamapps/workshop/content/431960/` |
 
-Only subdirectories whose **root contains `project.json`** are recognized as wallpapers.
+General Settings lets you choose custom locations for the system Steam Workshop directory and the import directory. Mirage manages its own Workshop download directory.
 
-## SteamCMD Directory
+## Download staging
 
-The SteamCMD that Mirage manages uses a dedicated directory under the application support directory:
+In-progress items are stored under:
 
 ```text
-~/Library/Application Support/Mirage/steamcmd/
-├── .mirage-ready                       # installation-complete marker
-├── home/                               # isolated HOME
-│   └── Library/Application Support/Steam/
-│       ├── config/config.vdf           # SteamCMD session
-│       └── steamapps/workshop/content/431960/   # current download directory
-└── steamapps/workshop/content/431960/  # legacy download directory (compatibility)
+~/Library/Application Support/Mirage/Workshop/content/431960/.staging/<item ID>/
 ```
 
-This directory is accessible only to the current user (`0700`). See [SteamCMD and Steam Login](/en/workshop/steamcmd/) for details.
+After every chunk validates and a root `project.json` is present, the staging directory is atomically moved to the sibling `<item ID>/` path. Failed or cancelled staging does not appear in the wallpaper library and can be reused on retry.
 
-## Cache
+## Credentials and settings
 
-Thumbnails and data from Workshop browsing are cached in the cache directory:
+- Steam refresh tokens and GuardData are stored in the macOS Keychain.
+- The Steam account name, global settings, web-wallpaper trust records, and per-wallpaper runtime values are stored in `UserDefaults`.
+- Passwords and Steam Guard codes are not persisted.
 
-```text
-~/Library/Caches/Mirage/WorkshopCache/
-```
+## Cache and screen saver
 
-Clearing the cache does not affect downloaded wallpapers; it only makes the next browse re-fetch the data.
-
-## Screen Saver Component
-
-The live screen saver is installed into the current user's screen saver directory:
-
-```text
-~/Library/Screen Savers/MirageScreenSaver.saver
-~/Library/Application Support/Mirage/screensaver.json   # screen saver configuration
-```
-
-See [Live Screen Saver](/en/screensaver/overview/).
-
-## Settings and Runtime State
-
-- **Global settings**, trusted web wallpapers, the SteamCMD username, and the like are stored in the app's `UserDefaults` (preferences).
-- **Per-wallpaper runtime state** (volume, speed, fill, custom properties, etc.) is stored in `UserDefaults` under keys of the form `Runtime_<id>`.
-
-## Custom Directories
-
-In [General Settings](/en/settings/general/), you can set custom locations for the "Steam Workshop directory" and the "Import directory", and you can "Restore Defaults" at any time.
+| Data | Default location |
+| --- | --- |
+| Workshop preview cache | `~/Library/Caches/Mirage/WorkshopCache/` |
+| Live screen saver | `~/Library/Screen Savers/MirageScreenSaver.saver` |
+| Screen saver configuration | `~/Library/Application Support/Mirage/screensaver.json` |
 
 :::caution[Clean up with care]
-Deleting the download directory or the import directory removes the corresponding wallpapers; deleting the SteamCMD directory means you'll need to reinstall and log in again. Confirm a directory's contents before backing it up.
+Deleting an item directory removes that wallpaper. Deleting `.staging` discards reusable unfinished chunks but does not affect installed items. Signing out removes that account's session data from Keychain.
 :::

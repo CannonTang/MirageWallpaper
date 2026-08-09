@@ -29,7 +29,7 @@
 > [!IMPORTANT]
 > **Mirage is still in an early stage.** If you encounter a problem, please file a detailed [GitHub Issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose) with your macOS/App version, reproduction steps, expected and actual results, and relevant logs. You can also join the QQ feedback group: **2160040437**.
 
-Mirage uses SwiftUI and AppKit for wallpaper browsing, management, and macOS integration. Three independent renderer processes play scene, web, and video wallpapers. It can discover local Wallpaper Engine-style wallpaper packages, browse the Steam Workshop, install SteamCMD, sign in to Steam, and download supported Workshop items.
+Mirage uses SwiftUI and AppKit for wallpaper browsing, management, and macOS integration. Three independent renderer processes play scene, web, and video wallpapers. It can discover local Wallpaper Engine-style wallpaper packages, browse the Steam Workshop, sign in to Steam, and download supported Workshop items.
 
 > Mirage is actively developed. Compatibility with Wallpaper Engine scene content is still improving, and complex works may differ in effects, scripts, or materials.
 
@@ -56,9 +56,10 @@ Please independently verify the network, address, and amount before transferring
 - Imports directories containing `project.json`, or turns `.mp4`, `.mov`, and `.m4v` files into local wallpaper packages.
 - Browses Workshop trending, recent, popular, top-rated, and tag-based content.
 - Detects and downloads Workshop presets; asks before downloading a required base wallpaper.
-- Manages SteamCMD installation, an isolated data directory, Steam sign-in, and Steam Guard verification.
-- Reuses an authenticated interactive SteamCMD session instead of repeatedly starting and signing in before every download.
-- Queues downloads and reports launch, connection, download, validation, and completion states. Progress is based on SteamCMD network input and the Workshop item's file size.
+- Includes an embedded Steam service based on [SteamKit2 3.4.0](https://github.com/SteamRE/SteamKit), with QR, password, and Steam Guard sign-in. Refresh tokens are stored in macOS Keychain.
+- Calls SteamKit2 manifest and CDN APIs directly for Workshop downloads. The implementation follows proven design patterns from [DepotDownloader](https://github.com/SteamRE/DepotDownloader) without bundling or launching its executable.
+- Reuses one persistent Steam session instead of starting and signing in again for every download.
+- Downloads up to three Workshop items concurrently with live CDN byte counts, speed, progress, and estimated time remaining. Each task can be canceled independently.
 - Plays downloaded works directly and exposes volume, playback rate, fill mode, and wallpaper-provided properties.
 - Supports multi-display coverage, menu-bar controls, login launch, and restoring a desktop placeholder image.
 - Installs Mirage's standalone dynamic screen saver, which can play video, web, and scene wallpapers while retaining the selected preset and custom properties.
@@ -85,23 +86,23 @@ Mirage uses two independent Steam integrations:
 | Purpose | Service | API key required? |
 | --- | --- | --- |
 | Browsing, search, and Workshop metadata | Steam Web API | Yes |
-| Sign-in, Steam Guard, and downloading works | SteamCMD | No; a Steam account is required |
+| Sign-in, Steam Guard, and downloading works | Embedded Steam service (SteamKit2; download flow informed by DepotDownloader) | No; a Steam account is required |
 
 The built-in Steam Web API key is only used for initial browsing and is shared by all users. To avoid shared-rate-limit congestion, set your own key in **Settings → General → Steam API Key**. Obtain one from the [Steam API Key page](https://steamcommunity.com/dev/apikey).
 
-Users in mainland China can choose the SteamCF browsing mirror in Settings. It only proxies Workshop browsing APIs; it does not accelerate SteamCMD sign-in or downloads and is only available in mainland China.
+Users in mainland China can choose the SteamCF browsing mirror in Settings. It only proxies Workshop browsing APIs; it does not accelerate Steam sign-in or content downloads and is only available in mainland China.
 
-SteamCMD uses its own Mirage-managed directory rather than the system Steam client's data:
+Mirage writes downloaded content to its own directory instead of reusing the system Steam client's data:
 
 ```text
-~/Library/Application Support/Mirage/steamcmd
+~/Library/Application Support/Mirage/Workshop/content/431960
 ```
 
-After sign-in, the SteamCMD console session remains alive while Mirage runs. It ends only when Mirage quits, the user signs out, cancellation terminates the process, or the session expires. Downloads are currently serialized because one interactive SteamCMD session can reliably handle only one Workshop command at a time.
+After sign-in, the Steam session remains active while Mirage runs. Mirage resolves items concurrently through the shared session and uses bounded CDN chunk concurrency to serve up to three items fairly. Canceling one task does not interrupt other downloads.
+
+Mirage directly depends on SteamKit2 to communicate with Valve services. Its overall approach to manifest resolution, CDN server selection, chunk transfer, validation, and resumable reuse is informed by DepotDownloader. Mirage uses its own embedded service and task scheduler; it does not include the DepotDownloader command-line application or launch an external downloader.
 
 Workshop presets are explicitly marked in browsing, details, download management, and installed views. A preset contains property values and optional assets, but depends on a base wallpaper. If the dependency is installed, selecting the preset applies it immediately and opens customization. Otherwise, Mirage displays the dependency's name and size and asks whether to download it as well. Presets and base wallpapers remain separate installed items.
-
-> If you've already subscribed to a large number of wallpapers in Wallpaper Engine, you can pull them all at once through SteamCMD instead of downloading them one by one. See [Bulk pull subscribed wallpapers](https://mirage.simplehac.cn/en/workshop/download/#bulk-pull-subscribed-wallpapers).
 
 ## Wallpaper Package Format
 
@@ -140,6 +141,7 @@ Mirage resolves the declared entry point and supports some non-standard director
 - Full Xcode installation
 - Homebrew
 - CMake 4.3.1 or later
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Homebrew LLVM, Ninja, pkg-config, MoltenVK, Vulkan Loader/Headers, glslang, GLFW, FreeType, Fontconfig, LZ4, and FFmpeg
 
 Install dependencies:
@@ -156,10 +158,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./SceneRenderer/scripts/build.sh release
-./WebRenderer/scripts/build.sh release
-./VideoRenderer/scripts/build.sh release
-./Mirage/scripts/build.sh Release
+./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -172,7 +171,7 @@ Mirage/dist/Mirage.app
 
 The app includes `MirageScreenSaver.saver`, which can be installed from **Settings → Screen Saver**. It is copied to `~/Library/Screen Savers` for the current user and does not require Mirage to remain running. The packaging script embeds the scene screen-saver runtime and required resources.
 
-For a Debug build, replace `release` / `Release` in the four build commands with `debug` / `Debug`.
+`build_all.sh` builds the three renderers, Steam service, and main app in order, then packages the complete app bundle. Use `./scripts/build_all.sh debug` for a Debug build or `./scripts/build_all.sh app` to rebuild only the app.
 
 ### Configure a Built-in Steam Web API Key Locally
 
@@ -235,16 +234,14 @@ The current workflow uses temporary signing and does not include Apple Developer
 | Data | Default location |
 | --- | --- |
 | Mirage local wallpapers | `~/Library/Application Support/Mirage/Wallpapers` |
-| Mirage-managed SteamCMD | `~/Library/Application Support/Mirage/steamcmd` |
-| Mirage legacy SteamCMD content | `~/Library/Application Support/Mirage/steamcmd/steamapps/workshop/content/431960` |
-| Mirage current SteamCMD download content | `~/Library/Application Support/Mirage/steamcmd/home/Library/Application Support/Steam/steamapps/workshop/content/431960` |
+| Mirage Workshop downloads | `~/Library/Application Support/Mirage/Workshop/content/431960` |
 | System Steam Workshop content | `~/Library/Application Support/Steam/steamapps/workshop/content/431960` |
 | Workshop preview cache | `~/Library/Caches/Mirage/WorkshopCache` |
 | Wallpaper runtime settings | `UserDefaults` |
 | Dynamic screen-saver configuration | `~/Library/Application Support/Mirage/screensaver.json` |
 | Installed dynamic screen saver | `~/Library/Screen Savers/MirageScreenSaver.saver` |
 
-Mirage discovers valid works from the system Steam client, Mirage SteamCMD, and custom directories.
+Mirage discovers valid works from the system Steam client, the Mirage download directory, and custom directories.
 
 ## Repository Layout
 
@@ -252,6 +249,7 @@ Mirage discovers valid works from the system Steam client, Mirage SteamCMD, and 
 .
 ├── Mirage/                 # SwiftUI / AppKit application and packaging scripts
 │   └── Mirage Screen Saver/ # Standalone dynamic screen-saver target
+├── SteamService/           # SteamKit2 authentication service and DepotDownloader-informed downloader
 ├── SceneRenderer/          # C++20 + Vulkan/MoltenVK scene renderer
 ├── WebRenderer/            # WKWebView web renderer
 ├── VideoRenderer/          # AVFoundation video renderer
@@ -275,13 +273,20 @@ Desktop hosts are produced under each renderer's build directory: `Tools/SceneWa
 Before submitting a change, verify at least that:
 
 1. All three renderers build independently.
-2. `./Mirage/scripts/build.sh Release` produces a complete App bundle.
+2. `./scripts/build_all.sh` produces a complete App bundle.
 3. The App bundle contains all three renderers, runtime libraries, the MoltenVK ICD, and `assets`.
 4. No API keys, Steam sign-in data, build directories, or user wallpapers are committed.
 
 ## Acknowledgements
 
+- [SteamKit2](https://github.com/SteamRE/SteamKit) — direct dependency of Mirage's embedded Steam service; version 3.4.0, licensed under LGPL-2.1.
+- [DepotDownloader](https://github.com/SteamRE/DepotDownloader) — an important design reference for Workshop manifest, CDN chunk download, and validation flows; licensed under GPL-2.0. Mirage does not bundle its executable.
 - [MoltenVK](https://github.com/KhronosGroup/MoltenVK) for runtime translation.
 - [wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) for the UI framework.
 - [waywallen/ParticleSystem](https://github.com/waywallen/open-wallpaper-engine/blob/main/src/Scene/Particle/ParticleSystem.cpp) for the particle-system reference.
 - [laobamac/OpenMetalWallpaper](https://github.com/laobamac/OpenMetalWallpaper) for model parsing.
+- [rstd](https://github.com/hypengw/rstd).
+
+## License
+
+Mirage is released under [GPL-3.0](LICENSE). Steam service notices are stored in [`SteamService/Licenses`](SteamService/Licenses); all other third-party code and resources remain under their respective licenses. Mirage is not affiliated with or endorsed by Valve, Steam, or Wallpaper Engine.

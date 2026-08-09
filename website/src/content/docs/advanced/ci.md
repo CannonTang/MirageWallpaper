@@ -28,10 +28,11 @@ Mirage 通过 GitHub Actions 工作流 [`build-macos.yml`](https://github.com/la
 
 1. 检出仓库（`fetch-depth: 0`，用于计算递增构建号）；
 2. 校验 `MIRAGE_STEAM_WEB_API_KEY` Secret 是否为 32 位十六进制；
-3. 通过 Homebrew 安装构建依赖；
-4. 依次构建三个渲染器与 Mirage 主程序；
-5. 使用 Sparkle Ed25519 私钥签名更新包与 appcast；
-6. 发布到对应的 GitHub Release 与更新源。
+3. 安装 Homebrew 构建依赖和 .NET 10 SDK；
+4. 使用锁定文件恢复 SteamKit2 3.4.0，并依次构建三个渲染器、对应架构的 Steam 服务与 Mirage 主程序；
+5. 校验 App 与内嵌 Steam 服务均匹配矩阵架构，并检查 IPC 协议字段；
+6. 使用 Sparkle Ed25519 私钥签名更新包与 appcast；
+7. 发布到对应的 GitHub Release 与更新源。
 
 ## 发布通道
 

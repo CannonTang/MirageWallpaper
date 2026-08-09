@@ -90,7 +90,6 @@ export default defineConfig({
             { slug: 'workshop/overview' },
             { slug: 'workshop/setup-wizard' },
             { slug: 'workshop/api-key' },
-            { slug: 'workshop/steamcmd' },
             { slug: 'workshop/login' },
             { slug: 'workshop/browse' },
             { slug: 'workshop/download' },

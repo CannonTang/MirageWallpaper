@@ -5,7 +5,7 @@ description: Meet Mirage — a native live wallpaper manager for macOS and a Wal
 
 Mirage is a **native live wallpaper manager** for macOS, and also a **Wallpaper Engine compatible runtime**. Built with SwiftUI and AppKit, it handles wallpaper browsing, management, and system integration, while three separate renderer processes play scene, web, and video wallpapers.
 
-You can use it to read local Wallpaper Engine style wallpaper packages, or browse the Steam Workshop directly, install SteamCMD, sign in to Steam, and download wallpapers.
+You can use it to read local Wallpaper Engine-style wallpaper packages, or browse the Steam Workshop directly, sign in to Steam, and download wallpapers.
 
 ![A live scene wallpaper actually rendered by Mirage](/images/product/rendered-scene.webp)
 
@@ -21,7 +21,7 @@ Mirage is under active development, and compatibility with the Wallpaper Engine 
 - **Manage your wallpaper library**: browse installed wallpapers with search, sorting, favorites, and filtering by type, source, tag, and content rating.
 - **Import and convert**: import a directory containing a `project.json` directly, or convert `.mp4`, `.mov`, and `.m4v` videos into local wallpaper packages.
 - **Connect to the Steam Workshop**: browse trending, latest, popular, top-rated, and tag-based content, and recognize and download Workshop presets.
-- **Host SteamCMD**: Mirage manages the SteamCMD install, its own dedicated data directory, Steam sign-in, and Steam Guard verification.
+- **Embedded Steam service**: Mirage handles QR or password sign-in, Steam Guard, concurrent downloads, live speed, and content validation.
 - **System integration**: multi-display coverage, menu bar control, launch at login, and desktop placeholder image recovery.
 - **Live screen savers**: package video, web, and scene wallpapers into standalone screen savers that keep the current preset and custom properties.
 - **Smart power saving**: continue, mute, pause, or stop playback when a full-screen app is active, another app is playing audio, the screen sleeps, or the Mac is on battery power.

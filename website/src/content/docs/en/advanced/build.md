@@ -3,7 +3,7 @@ title: Building from Source
 description: Install dependencies, build the three renderers and the Mirage main app, and configure a built-in Steam Web API Key locally.
 ---
 
-Mirage consists of three independent renderers (C++ / Objective-C++) and a SwiftUI main app. Building requires a full Xcode installation and a set of Homebrew dependencies.
+Mirage consists of three independent renderers (C++ / Objective-C++), a SwiftUI main app, and a .NET Steam service based on SteamKit2. Building requires a full Xcode installation, the .NET 10 SDK, and a set of Homebrew dependencies.
 
 ## Requirements
 
@@ -12,6 +12,7 @@ Mirage consists of three independent renderers (C++ / Objective-C++) and a Swift
 - Full Xcode (not just the command line tools)
 - Homebrew
 - CMake 4.3.1 or later
+- .NET 10 SDK
 
 ## Installing Dependencies
 
@@ -21,20 +22,17 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
   glslang glfw freetype fontconfig lz4 ffmpeg
 ```
 
-These dependencies serve, respectively: the scene renderer (Vulkan/MoltenVK, glslang, GLFW, FreeType, Fontconfig, LZ4), the video renderer (FFmpeg), and the C++20 toolchain provided by Homebrew LLVM.
+These dependencies serve, respectively: the scene renderer (Vulkan/MoltenVK, glslang, GLFW, FreeType, Fontconfig, LZ4), the video renderer (FFmpeg), and the C++20 toolchain provided by Homebrew LLVM. The .NET 10 SDK publishes the SteamKit2 service as a self-contained `osx-arm64` or `osx-x64` executable.
 
 ## Building
 
-After cloning the repository, build the three renderers in dependency order, then build the main app:
+After cloning the repository, use the one-shot build script from the repository root:
 
 ```bash
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./SceneRenderer/scripts/build.sh release
-./WebRenderer/scripts/build.sh release
-./VideoRenderer/scripts/build.sh release
-./Mirage/scripts/build.sh Release
+./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -45,19 +43,19 @@ The final app is located at:
 Mirage/dist/Mirage.app
 ```
 
-The main app's build script embeds the three renderers, the scene runtime library, and the required resources into `Mirage.app`, which also includes `MirageScreenSaver.saver` that you can install from the settings.
+The script builds the three renderers, Steam service, and main app in order, then embeds the runtime libraries, required resources, and `MirageScreenSaver.saver` into `Mirage.app`. SteamKit2 is restored from the lock file. DepotDownloader informed the downloader design but is not installed or invoked.
 
 ### Building Everything at Once
 
 `scripts/build_all.sh` in the repository root orchestrates the entire build in dependency order:
 
 ```bash
-scripts/build_all.sh              # full release build: three renderers + app
-scripts/build_all.sh debug        # debug build
-scripts/build_all.sh renderers    # build the three renderers only
-scripts/build_all.sh app          # build the app only (assumes renderers are ready)
-scripts/build_all.sh scene|web|video   # build a single renderer
-scripts/build_all.sh clean        # clean all subproject build directories
+./scripts/build_all.sh                 # full release build: three renderers + Steam service + app
+./scripts/build_all.sh debug           # debug build
+./scripts/build_all.sh renderers       # build the three renderers only
+./scripts/build_all.sh app             # build the app only (assumes renderers are ready)
+./scripts/build_all.sh scene|web|video # build a single renderer
+./scripts/build_all.sh clean           # clean all subproject build directories
 ```
 
 Available environment variables:
@@ -70,7 +68,7 @@ Available environment variables:
 
 ### Debug Builds
 
-Just change `release` / `Release` in the four commands to `debug` / `Debug`.
+Run `./scripts/build_all.sh debug`. Individual subproject `scripts/build.sh` commands remain available when debugging one component in isolation.
 
 ## Configuring a Built-in Steam Web API Key Locally
 

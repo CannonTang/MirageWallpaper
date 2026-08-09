@@ -15,7 +15,7 @@ An Intel (`x86_64`) or Apple Silicon (`arm64`) Mac running macOS 14.2 or later. 
 
 ### Is Mirage an official Steam client?
 
-No. Mirage is not an official Steam client, and it is not affiliated with Valve or Wallpaper Engine. It browses the Workshop through Steam's official Web API and downloads content through SteamCMD, Valve's official command-line tool.
+No. Mirage is not an official Steam client and is not affiliated with Valve or Wallpaper Engine. It browses through the Steam Web API and uses an embedded SteamKit2-based service for sign-in and downloads.
 
 ## Wallpapers
 
@@ -43,11 +43,11 @@ A Steam Web API Key. The app ships with a shared key for first-time browsing, bu
 
 ### Do I have to pay to download Workshop content?
 
-You need a Steam account that owns Wallpaper Engine. Ownership and item access are verified by Steam on the first download. Mirage downloads through SteamCMD and does not need an API Key.
+You need a Steam account that owns Wallpaper Engine. Ownership and item access are verified by Steam on the first download. Downloads do not require an API Key.
 
-### Why do downloads happen one at a time?
+### Can Mirage download multiple items at once?
 
-A single interactive SteamCMD session can only reliably handle one Workshop command at a time, so the download queue currently runs serially. See [Downloading Wallpapers](/en/workshop/download/) for details.
+Yes. Mirage downloads up to three items concurrently and shares global CDN chunk capacity between them. Each task can be cancelled independently. See [Downloading Wallpapers](/en/workshop/download/) for details.
 
 ### What is a "preset"?
 

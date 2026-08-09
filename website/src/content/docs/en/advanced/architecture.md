@@ -10,11 +10,14 @@ Mirage uses a **multi-process architecture**: the SwiftUI main app handles the i
 | Component | Language / Framework | Responsibility |
 | --- | --- | --- |
 | Mirage.app | Swift / SwiftUI | Main interface, wallpaper library, Workshop, settings, process scheduling |
+| MirageSteamService | .NET 10 / SteamKit2 3.4.0 | Steam authentication, session restoration, Workshop manifest resolution, and CDN downloads |
 | SceneWallpaper | C++20 / Vulkan (via MoltenVK → Metal) | Renders scene wallpapers |
 | WebWallpaper | Objective-C++ / WKWebView | Renders web wallpapers |
 | VideoWallpaper | Objective-C++ / AVFoundation | Renders video wallpapers |
 
 The three renderers come from the `SceneRenderer`, `WebRenderer`, and `VideoRenderer` subprojects in the repository. Once built, they are invoked by the main app as executables.
+
+The Steam service is also an isolated helper process and communicates with the main app through a line-delimited JSON protocol over standard input and output. It connects to Valve directly through SteamKit2. Its manifest, CDN chunk, validation, and resumable-reuse flow is informed by DepotDownloader, but the DepotDownloader executable is neither bundled nor launched.
 
 ## Process Scheduling
 

@@ -25,7 +25,7 @@ You can also join the **QQ group 2160040437** to chat and share feedback.
 Pull Requests are welcome. Before submitting, please confirm at least that:
 
 1. The three renderers build independently;
-2. `./Mirage/scripts/build.sh Release` produces a complete app bundle;
+2. `./scripts/build_all.sh` produces a complete app bundle;
 3. The app bundle contains the three renderers, the runtime dynamic libraries, the MoltenVK ICD, and `assets`;
 4. You haven't committed API Keys, Steam login data, build directories, or user wallpapers.
 
@@ -39,12 +39,14 @@ The [Support Mirage](/en/reference/support/) page shows Afdian, WeChat Pay, Alip
 
 ## License
 
-Mirage is released under [GPL-3.0](https://github.com/laobamac/MirageWallpaper/blob/main/LICENSE). Third-party code and resources in the repository remain under their respective licenses.
+Mirage is released under [GPL-3.0](https://github.com/laobamac/MirageWallpaper/blob/main/LICENSE). Steam service notices are stored in [`SteamService/Licenses`](https://github.com/laobamac/MirageWallpaper/tree/main/SteamService/Licenses); all other third-party code and resources in the repository remain under their respective licenses.
 
 ## Acknowledgments
 
 Mirage's implementation references and uses the following projects:
 
+- [SteamKit2](https://github.com/SteamRE/SteamKit) — direct dependency of the embedded Steam service; currently version 3.4.0, licensed under LGPL-2.1
+- [DepotDownloader](https://github.com/SteamRE/DepotDownloader) — an important design reference for Workshop manifest, CDN chunk download, validation, and resumable-reuse flows; licensed under GPL-2.0. Mirage does not bundle its executable
 - [MoltenVK](https://github.com/KhronosGroup/MoltenVK) — runtime Vulkan → Metal translation
 - [wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) — UI framework reference
 - [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) — particle system reference

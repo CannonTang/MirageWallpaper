@@ -49,4 +49,4 @@ open "Mirage/dist/Mirage.app"
 
 ## 数据存放在哪里
 
-Mirage 的本地壁纸、SteamCMD 数据、缓存和配置都有固定位置，完整清单见[数据目录](/advanced/data-directories/)。
+Mirage 的本地壁纸、创意工坊下载、缓存和配置都有固定位置，完整清单见[数据目录](/advanced/data-directories/)。

@@ -5,7 +5,7 @@ description: 认识 Mirage —— 面向 macOS 的原生动态壁纸管理器与
 
 Mirage 是一款面向 macOS 的**原生动态壁纸管理器**，同时也是一个 **Wallpaper Engine 兼容运行时**。它用 SwiftUI 与 AppKit 提供壁纸浏览、管理和系统集成，并通过三个独立的渲染进程分别播放场景、网页和视频壁纸。
 
-你既可以用它读取本地的 Wallpaper Engine 风格壁纸包，也可以直接浏览 Steam 创意工坊、安装 SteamCMD、登录 Steam 并下载壁纸。
+你既可以用它读取本地的 Wallpaper Engine 风格壁纸包，也可以直接浏览 Steam 创意工坊、登录 Steam 并下载壁纸。
 
 ![Mirage 实际渲染的场景动态壁纸](/images/product/rendered-scene.webp)
 
@@ -21,7 +21,7 @@ Mirage 正在持续开发，Wallpaper Engine 场景格式的兼容性仍在完�
 - **管理壁纸库**：浏览已安装壁纸，支持搜索、排序，以及按类型、来源、标签、内容分级筛选和收藏。
 - **导入与转换**：直接导入包含 `project.json` 的目录，或把 `.mp4`、`.mov`、`.m4v` 视频转换成本地壁纸包。
 - **对接 Steam 创意工坊**：浏览趋势、最新、热门、评分和标签分类内容，识别并下载创意工坊预设。
-- **托管 SteamCMD**：由 Mirage 管理 SteamCMD 的安装、独立数据目录、Steam 登录和 Steam Guard 验证。
+- **内置 Steam 服务**：由 Mirage 处理二维码或密码登录、Steam Guard、并发下载、实时速度和内容校验。
 - **系统集成**：多显示器覆盖、菜单栏控制、登录启动、桌面占位图恢复。
 - **动态屏保**：把视频、网页、场景壁纸装成独立屏保，保留当前预设与自定义属性。
 - **智能省电**：在全屏应用、其他应用播放音频、屏幕休眠或电池供电时，可选择继续、静音、暂停或停止。

@@ -25,7 +25,7 @@ Mirage 是一个开源项目，欢迎反馈与参与。它目前仍处于早期�
 欢迎提交 Pull Request。提交前请至少确认：
 
 1. 三个渲染器可以独立构建；
-2. `./Mirage/scripts/build.sh Release` 能生成完整 App Bundle；
+2. `./scripts/build_all.sh` 能生成完整 App Bundle；
 3. App Bundle 中包含三个渲染器、运行时动态库、MoltenVK ICD 和 `assets`；
 4. 没有提交 API Key、Steam 登录数据、构建目录或用户壁纸。
 
@@ -39,12 +39,14 @@ Mirage 会继续免费开放开发。如果它为你的桌面带来了价值，�
 
 ## 许可证
 
-Mirage 使用 [GPL-3.0](https://github.com/laobamac/MirageWallpaper/blob/main/LICENSE) 发布。仓库中的第三方代码与资源继续遵循各自许可证。
+Mirage 使用 [GPL-3.0](https://github.com/laobamac/MirageWallpaper/blob/main/LICENSE) 发布。Steam 服务相关声明保存在 [`SteamService/Licenses`](https://github.com/laobamac/MirageWallpaper/tree/main/SteamService/Licenses)，仓库中的其他第三方代码与资源继续遵循各自许可证。
 
 ## 鸣谢
 
 Mirage 的实现参考并使用了以下项目：
 
+- [SteamKit2](https://github.com/SteamRE/SteamKit) — 内置 Steam 服务的直接依赖，当前版本 3.4.0，使用 LGPL-2.1 许可证
+- [DepotDownloader](https://github.com/SteamRE/DepotDownloader) — 创意工坊清单、CDN 分块下载、校验与断点复用流程的重要设计参考，使用 GPL-2.0 许可证；Mirage 不捆绑其可执行程序
 - [MoltenVK](https://github.com/KhronosGroup/MoltenVK) — 运行时 Vulkan → Metal 转译
 - [wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) — UI 框架参考
 - [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) — 粒子系统参考

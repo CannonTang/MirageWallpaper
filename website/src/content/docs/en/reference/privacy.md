@@ -1,56 +1,38 @@
 ---
 title: Privacy & Data
-description: How Mirage handles your Steam credentials, API Key, and local data.
+description: How Mirage handles Steam credentials, API Keys, and local data.
 ---
 
-Mirage is a locally running desktop app. It does not operate any account system, and it does not upload your usage data to Mirage's servers. This page covers the key privacy-related points.
+Mirage is a locally running desktop app. It does not operate a Mirage account system or upload usage data to Mirage servers.
 
-## Steam Credentials
+## Steam credentials
 
-- When you log in to Steam, your username and password are handed only to the **local SteamCMD process** to complete the login, and are **never uploaded to any third-party server**.
-- Your password is not kept in plain text long-term; after a successful login, SteamCMD maintains its own session in a local isolated directory.
-- Mirage only persists your **username**, to reuse the session next time.
-- Steam Guard codes are likewise used only for the current login.
+- Steam returns the QR challenge URL and Mirage renders it locally without using a third-party QR service.
+- Passwords are passed over standard input to the helper bundled with the app. They are not put in process arguments, written to logs, or stored long-term.
+- Refresh tokens and GuardData are stored in the macOS Keychain after sign-in; the account name is stored in preferences.
+- Steam Guard codes are used only for the current attempt.
+- Signing out removes that account's session data from Keychain.
 
-See [Steam Login](/en/workshop/login/) and [SteamCMD](/en/workshop/steamcmd/) for details.
+See [Steam Sign-In](/en/workshop/login/).
 
 ## Steam Web API Key
 
-- The API Key you enter is stored in local settings and is used only to **request Workshop browsing data from your own machine**.
-- Do not share your key publicly.
-- The app ships with a built-in key shared by all users, for browsing only.
+The API Key you enter is stored in local settings and is used only for Workshop browsing requests from your Mac. The shared key included with the app is also for browsing only and is not involved in sign-in or downloads.
 
-See [Steam Web API Key](/en/workshop/api-key/).
-
-## Network Requests
-
-Mirage makes network requests in a limited and predictable set of cases:
+## Network requests
 
 | Purpose | Target |
 | --- | --- |
-| Browse the Workshop | Steam Web API (the official endpoint or a mirror you choose) |
-| Download Workshop content | Steam, via SteamCMD |
-| Install SteamCMD | Valve's official CDN |
-| Check / download updates | Mirage's update feed (GitHub Release / appcast) |
-| Web wallpapers | Determined by the wallpaper itself (see below) |
+| Browse the Workshop | Steam Web API or a mirror you choose |
+| Sign-in and Steam Guard | Valve Steam authentication services |
+| Download Workshop content | Valve Steam content CDN |
+| Check or download updates | Mirage GitHub Releases and appcast |
+| Web wallpapers | Determined by the wallpaper itself |
 
-### Mirror Endpoints
+The optional SteamCF mirror is not an official Steam service. It only proxies the browsing API and does not accelerate sign-in or downloads.
 
-The optional SteamCF mirror available to users in mainland China is **not an official Steam service**. It offers no guarantee of security or availability, and it only proxies the browsing API — it does not accelerate logins or downloads. Whether to use it is up to you.
+## Logs and local data
 
-## Web Wallpapers
+Mirage automatically redacts password, API Key, access-token, and refresh-token fields in logs. Wallpapers, downloads, caches, and settings remain on your Mac; see [Data Directories](/en/advanced/data-directories/).
 
-Web wallpapers execute JavaScript and may make their own network requests or load remote resources. That's why Mirage has a [security confirmation](/en/settings/web-safety/) for untrusted web wallpapers. Only trust web wallpapers from reliable sources.
-
-## Diagnostic Logs
-
-- Mirage's Workshop support reports are **redacted automatically**: fields such as passwords, API Keys, and tokens are replaced with `[hidden]`.
-- Enabling "Verbose logging" records more information for debugging; before you export or share logs, please confirm for yourself that they contain nothing sensitive.
-
-## Local Data
-
-Your wallpapers, downloads, caches, and settings are all stored on your own machine. For the relevant paths, see [Data Directories](/en/advanced/data-directories/). You can view, back up, or clean up these directories in Finder at any time.
-
-## Affiliation Notice
-
-Mirage is not affiliated with, nor endorsed by, Valve, Steam, or Wallpaper Engine. Workshop content belongs to its respective authors; please observe the applicable licenses and terms of use.
+Mirage is not affiliated with or endorsed by Valve, Steam, or Wallpaper Engine.

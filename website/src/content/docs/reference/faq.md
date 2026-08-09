@@ -15,7 +15,7 @@ Intel（`x86_64`）或 Apple Silicon（`arm64`）Mac，macOS 14.2 或更高版�
 
 ### Mirage 是 Steam 官方客户端吗？
 
-不是。Mirage 并非 Steam 官方客户端，也不隶属于 Valve 或 Wallpaper Engine。它通过 Steam 官方 Web API 浏览创意工坊，通过 Valve 官方命令行工具 SteamCMD 下载内容。
+不是。Mirage 并非 Steam 官方客户端，也不隶属于 Valve 或 Wallpaper Engine。它通过 Steam Web API 浏览创意工坊，并通过基于 SteamKit2 的内置服务登录和下载内容。
 
 ## 壁纸
 
@@ -43,11 +43,11 @@ Mirage 对 Wallpaper Engine 场景格式的兼容性仍在完善。复杂作品�
 
 ### 下载创意工坊内容需要付费吗？
 
-需要一个拥有 Wallpaper Engine 的 Steam 账户。所有权与项目访问权限会在首次下载时由 Steam 验证。Mirage 通过 SteamCMD 下载，不需要 API Key。
+需要一个拥有 Wallpaper Engine 的 Steam 账户。所有权与项目访问权限会在首次下载时由 Steam 验证。下载不需要 API Key。
 
-### 为什么下载是一个一个进行的？
+### 可以同时下载多个作品吗？
 
-同一个交互式 SteamCMD 会话一次只能可靠处理一个创意工坊命令，因此下载队列当前串行执行。详见[下载壁纸](/workshop/download/)。
+可以。Mirage 最多同时下载三个作品，并在作品之间共享全局 CDN 分块并发。每个任务都能独立取消。详见[下载壁纸](/workshop/download/)。
 
 ### 什么是「预设」？
 

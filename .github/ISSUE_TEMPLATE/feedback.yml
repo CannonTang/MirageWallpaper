@@ -30,7 +30,7 @@ body:
       description: "请选择最接近的一项。 / Choose the closest category."
       options:
         - "Steam 创意工坊浏览或 API / Workshop browsing or API"
-        - "SteamCMD 安装、登录或 Steam Guard / SteamCMD installation, login, or Steam Guard"
+        - "Steam 登录、Steam Guard 或会话 / Steam sign-in, Steam Guard, or session"
         - "壁纸下载、导入或管理 / Wallpaper download, import, or management"
         - "场景壁纸播放或兼容性 / Scene wallpaper playback or compatibility"
         - "网页壁纸播放或兼容性 / Web wallpaper playback or compatibility"

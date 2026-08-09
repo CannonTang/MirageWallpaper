@@ -65,7 +65,7 @@ In mainland China, a route selector appears in Settings:
 - **Steam official Web API** (`api.steampowered.com`)
 - **SteamCF mirror**
 
-Switching to the mirror shows a warning: the mirror is only accessible to users in mainland China, is not an official Steam service, offers no guarantee of security or availability, and **only proxies the browsing API — it can't speed up SteamCMD login or wallpaper downloads**.
+Switching to the mirror shows a warning: the mirror is only accessible to users in mainland China, is not an official Steam service, offers no guarantee of security or availability, and **only proxies the browsing API; it cannot speed up Steam sign-in or wallpaper downloads**.
 
 ### Steam Web API Key
 

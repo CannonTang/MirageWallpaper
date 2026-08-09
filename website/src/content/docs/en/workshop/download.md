@@ -1,116 +1,40 @@
 ---
 title: Download and Manage
-description: Download wallpapers from the Workshop, track download progress, cancel tasks, and manage downloaded content.
+description: Download Workshop wallpapers concurrently, view live speed, cancel tasks, and manage installed content.
 ---
 
-Once you've found a wallpaper you like in the Workshop, Mirage uses its managed SteamCMD to download it to your local wallpaper library.
+## Starting a download
 
-## Start a download
+Start from an item card or detail view. Mirage uses the authenticated Steam session to resolve the item manifest and downloads it into Mirage's own wallpaper directory. The Steam account must own Wallpaper Engine. A Steam Web API Key is not required for downloads.
 
-Kick off a download from an item card or its detail page. Mirage uses the signed-in SteamCMD session to download the corresponding Workshop item (App ID `431960`) to an isolated download directory.
+The embedded service calls SteamKit2 manifest and CDN APIs directly. Its server selection, chunk scheduling, validation, and resumable-reuse design is informed by DepotDownloader, while the actual tasks run in Mirage's own service without the DepotDownloader command-line application.
 
-Downloading requires [SteamCMD and Steam Sign-In](/en/workshop/steamcmd/) to be set up first. If you're not signed in or the session has expired, Mirage prompts you to complete setup first.
+## Live progress
 
-## Download progress and badge
+The download manager shows:
 
-In-progress downloads show their status. The Workshop tab at the top displays a **badge** with the number of active downloads, so you can keep an eye on progress at any time.
+- Received bytes and total compressed size
+- Completion percentage
+- Smoothed live speed over the last few seconds
+- Estimated time remaining
+- Resolving, downloading, validating, and completed states
 
-## Parallel downloads and cancellation
+Speed comes from bytes actually received from Steam CDN HTTP response streams, not disk writes or the size advertised on the item page.
 
-Mirage supports multiple download tasks. You can **cancel** an in-progress download at any time; cancelled tasks are marked and won't clutter your wallpaper library.
+## Concurrency and cancellation
 
-## After a download completes
+Mirage handles up to three items at once. Each item can use up to four chunk requests, with a global limit of eight requests so one item cannot monopolize the connection. Each item has its own cancellation token; cancelling one does not terminate the Steam session or another download.
 
-Completed wallpapers go into your local wallpaper library, where you can browse, filter, and apply them from the Installed tab. They're grouped under the Workshop source; for their actual paths, see [Data Directories](/en/advanced/data-directories/).
+## Validation and installation
 
-## Presets and their dependencies
+Files are written under `Workshop/content/431960/.staging` first. Mirage validates every manifest chunk and requires a root `project.json`, then atomically replaces the final item directory on the same volume. Failed or cancelled work never enters the wallpaper library, while reusable staged chunks remain available for a retry.
 
-If what you downloaded is a **preset**, it needs a base work to display correctly. When you try to apply a preset that's missing its dependency, Mirage pops up a prompt and helps you download the required base work first, then applies the preset once the dependency is ready. See [Presets](/en/workshop/presets/).
+## Updating an item
 
-## Updates and re-downloading
+When an installed item is downloaded again, Mirage validates the existing files and requests only missing or changed chunks. The wallpaper library refreshes automatically after installation.
 
-Workshop content may get updated. Re-downloading the same item makes SteamCMD pull the latest version. You can also delete downloads you no longer need from the wallpaper library to free up space.
+## Presets and dependencies
 
-## Bulk pull subscribed wallpapers
+A preset depends on a base wallpaper. When the dependency is missing, Mirage asks for confirmation, queues the base item, and applies the preset after the dependency is ready. See [Presets and Dependencies](/en/workshop/presets/).
 
-If you've already subscribed to a large number of wallpapers in Wallpaper Engine, you can pull all of them at once through SteamCMD instead of searching and downloading them one by one.
-
-### Prerequisites
-
-- A **Steam account** that has subscribed to wallpapers in the Wallpaper Engine Workshop
-- This process downloads Wallpaper Engine itself (about 1 GB) along with all your subscribed Workshop content
-
-### Step 1: Install the Steam client and sign in
-
-Go to the [Steam website](https://store.steampowered.com/) to download and install the macOS Steam client, then sign in with the Steam account you use for wallpapers. This ensures your subscriptions are tied to your account so steamcmd can recognize them.
-
-### Step 2: Install steamcmd
-
-:::tip
-Mirage automatically downloads and installs steamcmd the first time you use the Workshop. However, if you prefer to **manage a dedicated steamcmd instance** to keep wallpaper sources separate, follow the instructions below to install it manually.
-:::
-
-**Option A: Homebrew**
-
-```bash
-brew install steamcmd
-```
-
-**Option B: Manual download**
-
-```bash
-mkdir -p ~/Steam && cd ~/Steam
-curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz" | tar zxvf -
-
-# Add to PATH
-echo 'export PATH="$PATH:$HOME/Steam"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-### Step 3: Sign in to steamcmd and pull
-
-```bash
-steamcmd
-```
-
-Inside the interactive console, run:
-
-```ansi
-Steam> login your_username your_password
-```
-
-If your account has Steam Guard enabled:
-
-- **Code method**: append the code to the command: `login username password code`
-- **Mobile confirmation**: leave out the code and approve the sign-in from the Steam mobile app
-
-Once signed in, set the platform type and start downloading:
-
-```ansi
-Steam> @sSteamCmdForcePlatformType windows
-Steam> app_update 431960 validate
-```
-
-:::caution
-The download may take a long time — steamcmd pulls Wallpaper Engine itself plus **every Workshop wallpaper you've subscribed to**. Duration depends on your subscription count and network conditions.
-:::
-
-Type `quit` when finished to exit steamcmd.
-
-### Step 4: Open Mirage
-
-Launch Mirage. The wallpaper library automatically scans the steamcmd download directories for Workshop content. All your subscribed wallpapers will appear under the **Installed** tab and can be applied immediately.
-
-If wallpapers don't show up:
-- Verify the steamcmd download path. See [Data Directories](/en/advanced/data-directories/) for the paths Mirage scans by default
-- Go to **Mirage Settings → General** and check or update the "steamcmd Workshop path"
-
-### Ongoing maintenance
-
-- **Daily use**: Mirage's built-in Workshop browsing and downloading remains fully available and works independently of the manual pull method
-- **Updating wallpapers**: the Steam client can automatically update subscribed content; you can also re-run `app_update 431960 validate` in steamcmd to pull the latest versions
-- **New subscriptions**: after subscribing to new wallpapers in the Steam client (or Wallpaper Engine), repeat Step 3 to sync them to Mirage
-
-## If you run into problems
-
-If a download fails, stalls, or sign-in acts up, first check your network and Steam sign-in status, then see [Troubleshooting](/en/workshop/troubleshooting/). Mirage provides a redacted diagnostic report you can use for feedback.
+See [Data Directories](/en/advanced/data-directories/) for the on-disk paths.

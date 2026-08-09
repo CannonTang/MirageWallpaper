@@ -28,10 +28,11 @@ Each runner performs the following in order:
 
 1. Check out the repository (`fetch-depth: 0`, used to compute the incrementing build number);
 2. Verify that the `MIRAGE_STEAM_WEB_API_KEY` secret is a 32-digit hex value;
-3. Install build dependencies via Homebrew;
-4. Build the three renderers and the Mirage main app in order;
-5. Sign the update packages and appcast with the Sparkle Ed25519 private key;
-6. Publish to the corresponding GitHub Release and update feed.
+3. Install Homebrew build dependencies and the .NET 10 SDK;
+4. Restore SteamKit2 3.4.0 from the lock file, then build the three renderers, the matching Steam service, and the Mirage main app in order;
+5. Verify that both the app and embedded Steam service match the matrix architecture, and validate the IPC protocol fields;
+6. Sign the update packages and appcast with the Sparkle Ed25519 private key;
+7. Publish to the corresponding GitHub Release and update feed.
 
 ## Release Channels
 

@@ -24,7 +24,7 @@
 > [!IMPORTANT]
 > **Mirage 当前仍处于早期阶段。** 如果遇到问题，请认真撰写 [GitHub Issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose)，说明系统与 App 版本、复现步骤、预期结果、实际现象和相关日志；也可以加入 **QQ 交流群 2160040437** 反馈。
 
-Mirage 使用 SwiftUI 与 AppKit 提供壁纸浏览、管理和系统集成，并通过三个独立渲染进程播放场景、网页和视频壁纸。应用可以读取本地 Wallpaper Engine 风格的壁纸包，也可以直接浏览 Steam 创意工坊、安装 SteamCMD、登录 Steam 并下载壁纸。
+Mirage 使用 SwiftUI 与 AppKit 提供壁纸浏览、管理和系统集成，并通过三个独立渲染进程播放场景、网页和视频壁纸。应用可以读取本地 Wallpaper Engine 风格的壁纸包，也可以直接浏览 Steam 创意工坊、登录 Steam 并下载壁纸。
 
 > Mirage 正在持续开发，Wallpaper Engine 场景格式的兼容性仍在完善。复杂作品可能存在特效、脚本或材质表现差异。
 
@@ -51,9 +51,10 @@ Mirage 会继续免费开放开发。如果它为你的桌面带来了价值，�
 - 直接导入包含 `project.json` 的目录，或把 `.mp4`、`.mov`、`.m4v` 视频转换为本地壁纸包。
 - 浏览 Steam 创意工坊的趋势、最新、热门、评分和标签分类内容。
 - 识别并下载创意工坊预设；缺少基础壁纸时会先征求同意再加入下载队列，依赖已安装时可直接应用。
-- 由 Mirage 管理 SteamCMD 的安装、独立数据目录、Steam 登录和 Steam Guard 验证。
-- 复用已登录的 SteamCMD 控制台会话，避免每次下载前重复启动和登录。
-- 下载任务排队执行，展示启动、连接、下载、校验和完成状态；进度依据 SteamCMD 进程网络接收量与作品文件大小计算。
+- 内置基于 [SteamKit2 3.4.0](https://github.com/SteamRE/SteamKit) 的 Steam 服务，支持二维码、密码和 Steam Guard 登录，刷新令牌保存在 macOS 钥匙串。
+- 创意工坊下载器直接调用 SteamKit2 的清单与 CDN API，实现参考 [DepotDownloader](https://github.com/SteamRE/DepotDownloader) 的成熟下载流程，但不捆绑或启动 DepotDownloader 可执行程序。
+- 复用一个长驻 Steam 会话，避免每次下载前重复启动和登录。
+- 最多同时下载三个创意工坊作品，实时显示 CDN 接收字节、下载速度、进度和预计剩余时间；每个任务可独立取消。
 - 已下载作品可直接播放，并打开音量、速度、填充模式及作品自定义属性侧栏。
 - 支持多显示器覆盖、菜单栏控制、登录启动和桌面占位图恢复。
 - 可安装 Mirage 自带的动态屏保，直接播放视频、网页和场景壁纸，并保留当前预设与自定义属性。
@@ -80,23 +81,23 @@ Mirage 对 Steam 的两类访问彼此独立：
 | 用途 | 服务 | 是否需要 API Key |
 | --- | --- | --- |
 | 浏览、搜索和读取作品信息 | Steam Web API | 是 |
-| 登录、Steam Guard 和下载作品 | SteamCMD | 否，需要 Steam 账户 |
+| 登录、Steam Guard 和下载作品 | 内置 Steam 服务（SteamKit2；下载流程参考 DepotDownloader） | 否，需要 Steam 账户 |
 
 应用内置的 Steam Web API Key 只用于首次浏览，并由所有用户共享。建议在“设置 → 通用 → Steam API Key”中填写自己的 Key，以避免共享额度繁忙。Key 可在 [Steam Web API Key 申请页面](https://steamcommunity.com/dev/apikey) 获取。
 
-中国大陆用户可以在设置中选择 SteamCF 浏览镜像。镜像只代理创意工坊浏览 API，不会加速 SteamCMD 登录或内容下载，并且仅允许中国大陆用户访问。
+中国大陆用户可以在设置中选择 SteamCF 浏览镜像。镜像只代理创意工坊浏览 API，不会加速 Steam 登录或内容下载，并且仅允许中国大陆用户访问。
 
-SteamCMD 使用 Mirage 自己的目录，不复用系统 Steam 客户端的数据：
+Mirage 将下载内容写入自己的目录，不复用系统 Steam 客户端的数据：
 
 ```text
-~/Library/Application Support/Mirage/steamcmd
+~/Library/Application Support/Mirage/Workshop/content/431960
 ```
 
-登录成功后，SteamCMD 会话会在 Mirage 运行期间持续保持；退出 Mirage、主动退出登录、取消导致进程终止或会话失效时才会结束。下载队列当前串行执行，这是因为同一个交互式 SteamCMD 会话一次只能可靠处理一个创意工坊命令。
+登录成功后，Steam 会话会在 Mirage 运行期间持续保持。Mirage 使用共享会话并行解析作品，并通过受限的 CDN 分块并发公平地服务最多三个作品；取消一个任务不会中断其他下载。
+
+Mirage 直接依赖 SteamKit2 与 Valve 服务通信。清单解析、CDN 服务器选择、分块下载、校验和断点复用的整体设计参考了 DepotDownloader；Mirage 使用自己的应用内服务和任务调度，不包含 DepotDownloader 命令行程序，也不会启动外部下载器。
 
 创意工坊预设会在浏览页、详情页、下载管理和“已安装”中明确标记。预设本身只保存属性与附带素材，并依赖一个基础壁纸：基础壁纸已经安装时，点击预设会直接应用并打开自定义侧栏；尚未安装时，Mirage 会显示基础壁纸名称和大小，询问是否一起下载。预设与基础壁纸都会保留为独立的已安装项目。
-
-> 如果你在 Wallpaper Engine 中已订阅了大量壁纸，可以通过 SteamCMD 一次性批量拉取，无需逐个下载。详见 [批量拉取已订阅壁纸](https://mirage.simplehac.cn/workshop/download/#批量拉取已订阅壁纸)。
 
 ## 壁纸包格式
 
@@ -135,6 +136,7 @@ Mirage 会解析作品声明的入口文件，并对部分非标准目录布局�
 - 完整版 Xcode
 - Homebrew
 - CMake 4.3.1 或更高版本
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Homebrew LLVM、Ninja、pkg-config、MoltenVK、Vulkan Loader/Headers、glslang、GLFW、FreeType、Fontconfig、LZ4 和 FFmpeg
 
 安装依赖：
@@ -151,10 +153,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./SceneRenderer/scripts/build.sh release
-./WebRenderer/scripts/build.sh release
-./VideoRenderer/scripts/build.sh release
-./Mirage/scripts/build.sh Release
+./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -167,7 +166,7 @@ Mirage/dist/Mirage.app
 
 App 内包含可在“设置 → 屏保”中安装的 `MirageScreenSaver.saver`。屏保组件会被复制到当前用户的 `~/Library/Screen Savers`，不要求 Mirage 主程序保持运行。场景屏保运行库和所需资源由打包脚本一并嵌入。
 
-Debug 构建只需把四条构建命令中的 `release` / `Release` 分别改成 `debug` / `Debug`。
+`build_all.sh` 会按顺序构建三个渲染器、Steam 服务和主程序，并完成 App Bundle 打包。Debug 构建使用 `./scripts/build_all.sh debug`；只重建主程序时可使用 `./scripts/build_all.sh app`。
 
 ### 本地配置内置 Steam Web API Key
 
@@ -230,16 +229,14 @@ GitHub Secrets 可以避免 Key 出现在仓库和普通构建日志中，但无
 | 数据 | 默认位置 |
 | --- | --- |
 | Mirage 本地壁纸 | `~/Library/Application Support/Mirage/Wallpapers` |
-| Mirage 管理的 SteamCMD | `~/Library/Application Support/Mirage/steamcmd` |
-| Mirage SteamCMD 旧版兼容内容 | `~/Library/Application Support/Mirage/steamcmd/steamapps/workshop/content/431960` |
-| Mirage SteamCMD 当前下载内容 | `~/Library/Application Support/Mirage/steamcmd/home/Library/Application Support/Steam/steamapps/workshop/content/431960` |
+| Mirage 创意工坊下载内容 | `~/Library/Application Support/Mirage/Workshop/content/431960` |
 | 系统 Steam 创意工坊内容 | `~/Library/Application Support/Steam/steamapps/workshop/content/431960` |
 | 创意工坊预览缓存 | `~/Library/Caches/Mirage/WorkshopCache` |
 | 壁纸运行时设置 | `UserDefaults` |
 | 动态屏保配置 | `~/Library/Application Support/Mirage/screensaver.json` |
 | 已安装动态屏保 | `~/Library/Screen Savers/MirageScreenSaver.saver` |
 
-Mirage 会同时发现系统 Steam、Mirage SteamCMD 和自定义目录中的有效作品。
+Mirage 会同时发现系统 Steam、Mirage 下载目录和自定义目录中的有效作品。
 
 ## 仓库结构
 
@@ -247,6 +244,7 @@ Mirage 会同时发现系统 Steam、Mirage SteamCMD 和自定义目录中的有
 .
 ├── Mirage/                 # SwiftUI / AppKit 主应用与打包脚本
 │   └── Mirage Screen Saver/ # 独立动态屏保目标
+├── SteamService/           # SteamKit2 登录服务与参考 DepotDownloader 设计的下载器
 ├── SceneRenderer/          # C++20 + Vulkan/MoltenVK 场景渲染器
 ├── WebRenderer/            # WKWebView 网页渲染器
 ├── VideoRenderer/          # AVFoundation 视频渲染器
@@ -270,12 +268,14 @@ VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-direc
 提交前请至少确认：
 
 1. 三个渲染器可以独立构建；
-2. `./Mirage/scripts/build.sh Release` 能生成完整 App Bundle；
+2. `./scripts/build_all.sh` 能生成完整 App Bundle；
 3. App Bundle 中包含三个渲染器、运行时动态库、MoltenVK ICD 和 `assets`；
 4. 没有提交 API Key、Steam 登录数据、构建目录或用户壁纸。
 
 ## 鸣谢
 
+- [SteamKit2](https://github.com/SteamRE/SteamKit) — Mirage 内置 Steam 服务的直接依赖，版本 3.4.0，使用 LGPL-2.1 许可证
+- [DepotDownloader](https://github.com/SteamRE/DepotDownloader) — 创意工坊清单、CDN 分块下载与校验流程的重要设计参考，使用 GPL-2.0 许可证；Mirage 不捆绑其可执行程序
 - [MoltenVK](https://github.com/KhronosGroup/MoltenVK) 提供运行时转译
 - [wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) 的UI框架 
 - [waywallen/ParticleSystem](https://github.com/waywallen/open-wallpaper-engine/blob/main/src/Scene/Particle/ParticleSystem.cpp) 的粒子系统 
@@ -284,4 +284,4 @@ VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-direc
 
 ## 许可证
 
-Mirage 使用 [GPL-3.0](LICENSE) 发布。仓库中的第三方代码与资源继续遵循各自许可证。Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获得其官方认可。
+Mirage 使用 [GPL-3.0](LICENSE) 发布。Steam 服务相关第三方声明位于 [`SteamService/Licenses`](SteamService/Licenses)，其余第三方代码与资源继续遵循各自许可证。Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获得其官方认可。

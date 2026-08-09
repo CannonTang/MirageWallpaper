@@ -65,7 +65,7 @@ Mirage 使用 Sparkle 处理更新：
 - **Steam 官方 Web API**（`api.steampowered.com`）
 - **SteamCF 镜像**
 
-切换到镜像时会弹出警告：该镜像仅允许中国大陆用户访问，并非 Steam 官方服务，不保证安全性与可用性，且**只代理浏览 API，不能加速 SteamCMD 登录或壁纸下载**。
+切换到镜像时会弹出警告：该镜像仅允许中国大陆用户访问，并非 Steam 官方服务，不保证安全性与可用性，且**只代理浏览 API，不能加速 Steam 登录或壁纸下载**。
 
 ### Steam Web API Key
 

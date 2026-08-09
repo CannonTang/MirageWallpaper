@@ -3,7 +3,7 @@ title: 从源码构建
 description: 安装依赖、构建三个渲染器和 Mirage 主程序，并在本地配置内置 Steam Web API Key。
 ---
 
-Mirage 由三个独立渲染器（C++ / Objective-C++）和一个 SwiftUI 主程序组成。构建需要完整的 Xcode 和一组 Homebrew 依赖。
+Mirage 由三个独立渲染器（C++ / Objective-C++）、一个 SwiftUI 主程序和一个基于 SteamKit2 的 .NET Steam 服务组成。构建需要完整的 Xcode、.NET 10 SDK 和一组 Homebrew 依赖。
 
 ## 环境要求
 
@@ -12,6 +12,7 @@ Mirage 由三个独立渲染器（C++ / Objective-C++）和一个 SwiftUI 主程
 - 完整版 Xcode（不是仅命令行工具）
 - Homebrew
 - CMake 4.3.1 或更高版本
+- .NET 10 SDK
 
 ## 安装依赖
 
@@ -21,20 +22,17 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
   glslang glfw freetype fontconfig lz4 ffmpeg
 ```
 
-这些依赖分别服务于：场景渲染器（Vulkan/MoltenVK、glslang、GLFW、FreeType、Fontconfig、LZ4）、视频渲染器（FFmpeg）以及 Homebrew LLVM 提供的 C++20 工具链。
+这些依赖分别服务于：场景渲染器（Vulkan/MoltenVK、glslang、GLFW、FreeType、Fontconfig、LZ4）、视频渲染器（FFmpeg）以及 Homebrew LLVM 提供的 C++20 工具链。.NET 10 SDK 用于将 SteamKit2 服务分别发布为 `osx-arm64` 或 `osx-x64` 自包含程序。
 
 ## 构建
 
-克隆仓库后，按依赖顺序构建三个渲染器，再构建主程序：
+克隆仓库后，可直接使用根目录的一次性构建脚本：
 
 ```bash
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./SceneRenderer/scripts/build.sh release
-./WebRenderer/scripts/build.sh release
-./VideoRenderer/scripts/build.sh release
-./Mirage/scripts/build.sh Release
+./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -45,19 +43,19 @@ open "Mirage/dist/Mirage.app"
 Mirage/dist/Mirage.app
 ```
 
-主程序的构建脚本会把三个渲染器和场景运行库、所需资源一并嵌入到 `Mirage.app`，其中也包含可在设置中安装的 `MirageScreenSaver.saver`。
+脚本会依次构建三个渲染器、Steam 服务和主程序，并把运行库、所需资源及 `MirageScreenSaver.saver` 一并嵌入 `Mirage.app`。SteamKit2 使用锁定依赖恢复，下载实现参考 DepotDownloader，但不需要安装 DepotDownloader 或任何外部下载器。
 
 ### 一次性构建全部
 
 仓库根目录的 `scripts/build_all.sh` 会按依赖顺序编排全部构建：
 
 ```bash
-scripts/build_all.sh              # 完整 release 构建：三个渲染器 + App
-scripts/build_all.sh debug        # debug 构建
-scripts/build_all.sh renderers    # 仅构建三个渲染器
-scripts/build_all.sh app          # 仅构建 App（假设渲染器已就绪）
-scripts/build_all.sh scene|web|video   # 单独构建某个渲染器
-scripts/build_all.sh clean        # 清理所有子项目构建目录
+./scripts/build_all.sh                 # 完整 release 构建：三个渲染器 + Steam 服务 + App
+./scripts/build_all.sh debug           # debug 构建
+./scripts/build_all.sh renderers       # 仅构建三个渲染器
+./scripts/build_all.sh app             # 仅构建 App（假设渲染器已就绪）
+./scripts/build_all.sh scene|web|video # 单独构建某个渲染器
+./scripts/build_all.sh clean           # 清理所有子项目构建目录
 ```
 
 可用环境变量：
@@ -70,7 +68,7 @@ scripts/build_all.sh clean        # 清理所有子项目构建目录
 
 ### Debug 构建
 
-把四条命令中的 `release` / `Release` 分别改成 `debug` / `Debug` 即可。
+执行 `./scripts/build_all.sh debug`。需要分开调试时，仍可直接运行各子项目的 `scripts/build.sh`。
 
 ## 本地配置内置 Steam Web API Key
 

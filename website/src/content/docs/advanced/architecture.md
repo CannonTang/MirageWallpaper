@@ -10,11 +10,14 @@ Mirage 采用**多进程架构**：SwiftUI 主程序负责界面与调度，实�
 | 组件 | 语言 / 框架 | 职责 |
 | --- | --- | --- |
 | Mirage.app | Swift / SwiftUI | 主界面、壁纸库、创意工坊、设置、进程调度 |
+| MirageSteamService | .NET 10 / SteamKit2 3.4.0 | Steam 登录、会话恢复、创意工坊清单解析与 CDN 下载 |
 | SceneWallpaper | C++20 / Vulkan（经 MoltenVK → Metal） | 渲染场景壁纸 |
 | WebWallpaper | Objective-C++ / WKWebView | 渲染网页壁纸 |
 | VideoWallpaper | Objective-C++ / AVFoundation | 渲染视频壁纸 |
 
 三个渲染器分别来自仓库中的 `SceneRenderer`、`WebRenderer`、`VideoRenderer` 子项目，构建后作为可执行文件被主程序调用。
+
+Steam 服务同样是独立辅助进程，通过标准输入输出的逐行 JSON 协议与主程序通信。它直接使用 SteamKit2 连接 Valve；清单、CDN 分块、校验和断点复用流程参考 DepotDownloader，但不包含或启动 DepotDownloader 可执行程序。
 
 ## 进程调度
 
