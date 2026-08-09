@@ -6,6 +6,68 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.0.5</title>
+            <pubDate>Sun, 09 Aug 2026 14:43:55 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>287</sparkle:version>
+            <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[# Mirage 1.0.5
+
+本版本带来创意工坊下载架构的重大升级：Mirage 现在通过直接集成 SteamKit2 的内置服务完成登录和下载，完全移除 SteamCMD，并新增场景壁纸的 MetalFX Spatial 缩放。
+
+## 重大更新：全新创意工坊下载服务
+
+- 使用面向 Apple Silicon 与 Intel Mac 的内置 SteamKit2 服务取代 SteamCMD；不再安装或启动外部命令行下载器，Apple Silicon Mac 也不再为创意工坊下载依赖 Rosetta 2。下载器的清单、CDN 和分块调度设计参考 DepotDownloader，但由 Mirage 自己的服务直接实现 (#13)。
+- 新增 Steam 手机应用二维码登录并将其设为默认方式，同时保留账户密码、邮箱或手机 Steam Guard 验证码以及手机确认流程。密码只通过本机进程间标准输入传递，不会保存或写入日志；刷新令牌和 Steam Guard 设备数据保存在 macOS 钥匙串中，并可在退出登录时一并清除。
+- 下载管理器现在最多并行处理三个作品，显示实际接收字节、平滑后的实时速度、完成进度和预计剩余时间。每个任务可以独立取消或重试，不会中断 Steam 会话或其他下载。
+- 下载改为直接解析创意工坊清单并从 Steam CDN 获取分块。Mirage 会复用已校验的现有文件和暂存分块，只重新获取缺失或变化的内容；全部文件通过清单校验且确认包含 `project.json` 后才原子安装，避免失败或取消产生不完整壁纸。
+- 简化首次设置流程，移除 SteamCMD 安装步骤；改进登录状态、下载阶段、错误信息和完成记录展示，并可从下载管理器直接在 Finder 中打开已安装作品。
+
+## 新增与改进
+
+- 场景壁纸新增 MetalFX Spatial 缩放选项，在降低渲染分辨率时通过 MetalFX 输出到显示分辨率；该选项默认启用，可在“设置 → 性能 → 渲染质量”中关闭，并在切换壁纸后生效。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 系统要求：macOS 14.2 或更高版本
+
+当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
+
+---
+
+
+# Mirage 1.0.5
+
+This release delivers a major overhaul of Workshop downloads. Mirage now signs in and downloads through an embedded service built directly on SteamKit2, removes SteamCMD entirely, and adds MetalFX Spatial scaling for Scene wallpapers.
+
+## Major Update: New Workshop Download Service
+
+- Replaced SteamCMD with an embedded SteamKit2 service built for both Apple Silicon and Intel Macs. Mirage no longer installs or launches an external command-line downloader, and Workshop downloads on Apple Silicon no longer depend on Rosetta 2. The manifest, CDN, and chunk-scheduling design draws from DepotDownloader, but is implemented directly by Mirage's own service (#13).
+- Added Steam Mobile QR sign-in as the default method while retaining account-password sign-in, email or mobile Steam Guard codes, and mobile confirmation. Passwords travel only through local inter-process standard input and are neither stored nor logged. Refresh tokens and Steam Guard device data are kept in the macOS Keychain and removed when signing out.
+- The download manager now processes up to three Workshop items concurrently and shows actual received bytes, smoothed real-time speed, progress, and estimated time remaining. Each task can be cancelled or retried independently without interrupting the Steam session or other downloads.
+- Downloads now resolve Workshop manifests directly and fetch chunks from the Steam CDN. Mirage reuses verified installed files and staged chunks, fetching only missing or changed data. It atomically installs an item only after every file passes manifest validation and a root `project.json` is present, preventing failed or cancelled downloads from creating incomplete wallpapers.
+- Simplified first-time setup by removing the SteamCMD installation step. Login states, download phases, errors, and completion history are clearer, and installed items can be revealed directly in Finder from the download manager.
+
+## Improvements
+
+- Added MetalFX Spatial scaling for Scene wallpapers, producing display-resolution output through MetalFX when using a reduced render resolution. It is enabled by default, can be disabled under Settings → Performance → Rendering Quality, and takes effect after switching wallpapers.
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- Requires macOS 14.2 or later
+
+Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.5/Mirage-287-3fe2d0be4540-macOS-arm64.zip" length="229155374" type="application/octet-stream" sparkle:edSignature="OHhQJe18sAk+FTZjt3x0UPUdhDGo6xjo2YqYTXUXXGio4N91wv4JHfhuDOsy4++G5c3BdG1n7Bu7sMhV9FhGAQ=="/>
+        </item>
+        <item>
             <title>1.0.4</title>
             <pubDate>Sun, 09 Aug 2026 14:21:51 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -22,24 +84,6 @@ docs(steam): document embedded workshop service
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-286-cffb48260bf9-macOS-arm64.zip" length="229155373" type="application/octet-stream" sparkle:edSignature="UjtRYlW6kUJ5Pne8UfAp+h2symMQgQJUNhdRvGe3IBQAPWVxJPhgR5IBK772hq5+3Gpp8D168vr+I8x56TBeDQ=="/>
-        </item>
-        <item>
-            <title>1.0.4</title>
-            <pubDate>Sun, 09 Aug 2026 11:37:15 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>283</sparkle:version>
-            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 3aa8957f58c075e9b8ec24de9a0edc4d994f13b4
-Channel: beta
-
-feat(renderer): add MetalFX spatial scaling
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-283-3aa8957f58c0-macOS-arm64.zip" length="194036373" type="application/octet-stream" sparkle:edSignature="0Tcly0G/igIoY63obdyL4u+//U0Uw1cNUpnYTCFeXFDz03zvouNcCMobsIN5UbTuxp9Jk8fl32Yr/rryrsBmDg=="/>
         </item>
         <item>
             <title>1.0.4</title>
@@ -110,24 +154,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.4/Mirage-282-ac0a0b9412cb-macOS-arm64.zip" length="194029984" type="application/octet-stream" sparkle:edSignature="PTVtqB+7vrrqgQCno6yDM6mEgvdIEb2mw53jx+lfJYe2Z+wuq+6JyesxARvJ+byaOSbaFeXPQ+NyWrrTE/CGDg=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sun, 09 Aug 2026 04:18:13 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>280</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: afae3f137c721c50b72d8c6a3fb5a81b268db368
-Channel: beta
-
-fix(app): refine menu bar, login launch, and workshop browsing
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-280-afae3f137c72-macOS-arm64.zip" length="194029480" type="application/octet-stream" sparkle:edSignature="MBAIsBHrhaZNJ0t39oSSh86Eeth67FPGKy2f5WhwEzxhehsEYS2IOPLindTfIcoLbhiacV8V/b4BaO3VTGMABg=="/>
         </item>
         <item>
             <title>1.0.3</title>
@@ -254,26 +280,9 @@ docs(workshop): fix docs url to mirage.simplehac.cn
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.0/Mirage-254-4e57bc82a387-macOS-arm64.zip" length="193813312" type="application/octet-stream" sparkle:edSignature="yAITXQM+AUErCWdhqAmtPf+jE8cL2GLwUDSKQp3lTaKsj86ZMhgLGgTWhBQlhbDRgzV3PpBgYfrsxeAMujGoCw=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Mon, 03 Aug 2026 11:59:03 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:version>233</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: fba45590a56f7873b56249f40f86d20ccfb82040
-Channel: stable
-
-fix(ci): publish stable releases on Bash 3.2
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.0/Mirage-233-fba45590a56f-macOS-arm64.zip" length="193333803" type="application/octet-stream" sparkle:edSignature="1/5t7x4jKIHQDCZfnHsucNFrCx/oB+7pCjII23I7zr4Ulpun6wy66XC5xSfztaPaUj0QCw56HwaANi7W4/vjBQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: j2qK+vcmyHKMgsCpt/h8YSXiW55BptyaDr9G5FqhYs4kv8cRtTCxPqyPb6SYHgzWJxZnl0t4DQe6MBgMUbosCg==
-length: 17676
+edSignature: u56J9LFLZJ0egcAktdvfrK7qXOQxtYTMPVNMthiCWBstqQZN+/02Iyqiar+xA7tgREjIGx2guWAxfazBxmTBCw==
+length: 20168
 -->
