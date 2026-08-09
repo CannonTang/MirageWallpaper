@@ -6,6 +6,75 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.0.4</title>
+            <pubDate>Sun, 09 Aug 2026 06:58:08 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>282</sparkle:version>
+            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[# Mirage 1.0.4
+
+本版本集中改进登录启动、菜单栏控制、创意工坊浏览和多显示器状态管理，并修复场景与视频壁纸在交互、缩放、透视和系统唤醒后的渲染问题。
+
+## 新增与改进
+
+- 菜单栏图标新增彩色与黑白样式选项；暂停、继续、静音和取消静音状态会即时同步，且这些操作仅对当前运行会话生效，不再改写各壁纸的持久化设置。
+- 设置窗口现在会复用同一个面板，并仅在确认后保存修改；取消时会恢复原设置，减少界面重建和无效写入。
+- 改进发现页和创意工坊的滚动响应、创作者作品网格尺寸、翻页定位和详情操作布局；优化动态预览缓存和并发加载，降低浏览大量作品时的主线程开销。
+
+## 修复
+
+- 修复“登录时启动”的注册和迁移流程，统一使用 macOS `SMAppService`；登录启动时保持主窗口和 Dock 图标隐藏，手动打开时会转发给已有实例，避免多个 Mirage 进程同时控制桌面。
+- 修复 SteamCMD 会话进程在启动或退出后残留并持续累积的问题。
+- 修复桌面图片覆盖在截帧、安装、清理和显示器断开重连时的恢复问题；全屏、窗口覆盖、休眠、显示桌面、停止、恢复和播放列表策略现在按显示器独立处理。
+- 修复视频壁纸在系统或屏幕唤醒后停滞、丢失播放项或媒体服务重置时无法恢复的问题，加入状态校验和有界重试。
+- 修复场景壁纸的指针着色器输入受视差延迟影响的问题，使鼠标交互效果及时响应并正确保留上一帧坐标。
+- 修复场景作者设置的动态全局缩放未生效的问题，并确保其可与摄像机路径缩放正确组合。
+- 修复透视场景在窗口尺寸或填充模式变化时错误重算视场角的问题，保留作者设定的 FOV，并改进渲染资源切换时的帧同步。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 系统要求：macOS 14.2 或更高版本
+
+当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
+
+---
+
+
+# Mirage 1.0.4
+
+This release improves login launch behavior, menu bar controls, Workshop browsing, and multi-display state management, while fixing Scene and Video wallpaper rendering across pointer input, zoom, perspective projection, and system wake.
+
+## Improvements
+
+- Added color and monochrome menu bar icon options. Pause, resume, mute, and unmute states now update immediately and apply only to the current session instead of overwriting each wallpaper's persisted settings.
+- Reused a single Settings panel and deferred persistence until confirmation. Cancelling now restores the previous settings, reducing interface rebuilds and unnecessary writes.
+- Improved scrolling in Discover and Workshop, creator-grid sizing, page navigation, and detail actions. Animated-preview caching and concurrent loading now reduce main-thread work while browsing large collections.
+
+## Fixes
+
+- Fixed login-item registration and migration by consistently using macOS `SMAppService`. Login launches now keep the main window and Dock icon hidden, while manual opens are forwarded to the existing instance so multiple Mirage processes cannot control the desktop at once.
+- Fixed SteamCMD session processes remaining behind and accumulating after app launches or exits.
+- Fixed desktop-picture override recovery across frame capture, installation, cleanup, and display disconnects or reconnects. Fullscreen, window coverage, sleep, Show Desktop, stop, resume, and playlist policies are now evaluated independently per display.
+- Fixed Video wallpapers failing to resume after system or display wake, losing their player item, or failing after a media-services reset by adding state verification and bounded recovery retries.
+- Fixed Scene wallpaper pointer shader inputs inheriting parallax delay, restoring immediate interaction and correct previous-frame coordinates.
+- Fixed authored animated global Scene zoom and its composition with camera-path zoom.
+- Fixed perspective Scenes recalculating authored field of view when the window size or fill mode changed, preserving the intended FOV and improving frame synchronization during render-resource transitions.
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- Requires macOS 14.2 or later
+
+Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.4/Mirage-282-ac0a0b9412cb-macOS-x86_64.zip" length="199113694" type="application/octet-stream" sparkle:edSignature="ULq5EuO8Obel/n2rOEgJuT5LsAPwd6l4ewToLCsGrxAXTouIPcqGDAL/06Dny0FXvJy/YauFryGgLfpot3KECA=="/>
+        </item>
+        <item>
             <title>1.0.3</title>
             <pubDate>Sun, 09 Aug 2026 04:18:07 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -21,124 +90,6 @@ fix(app): refine menu bar, login launch, and workshop browsing
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-280-afae3f137c72-macOS-x86_64.zip" length="199113028" type="application/octet-stream" sparkle:edSignature="wSUfTLWmXmn00YipPjB3vi1LVYvSFrCk0wL/tFlgLyImtzoXdpPWDvl/8esO9iMm7TgVswUitQ2LLvwqMX8UDw=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sun, 09 Aug 2026 03:12:35 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>279</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: f35dca475f5fa48e3c57d96866073021c366cf0f
-Channel: beta
-
-fix(app): make menu bar pause and mute transient
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-279-f35dca475f5f-macOS-x86_64.zip" length="199102522" type="application/octet-stream" sparkle:edSignature="FzTPmLFPwzLs/4IRFYvNivWzwQYur951q0CpIe/l+vqvaW8XUU0TmWEcqi/yXjwAyOQWuuIa5g870//vqOd+BA=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sat, 08 Aug 2026 12:45:03 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>277</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 4e198b13a0d3e9abe56a8940151e99728565680e
-Channel: beta
-
-fix(renderer): animate authored scene zoom
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-277-4e198b13a0d3-macOS-x86_64.zip" length="199097137" type="application/octet-stream" sparkle:edSignature="L70V2ermf0muLJNpnyu6WrNf4pwIxw3WcbW60lUA8Txm077xCv6le7WsMBik1gZk0Vp0C7Y6hBlfdXV5AIBXAQ=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sat, 08 Aug 2026 11:08:58 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>276</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 9bb0bb340b00c34470243098024bd75d70c71f2a
-Channel: beta
-
-fix(renderer): restore responsive pointer effects
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-276-9bb0bb340b00-macOS-x86_64.zip" length="199095137" type="application/octet-stream" sparkle:edSignature="FQb8FXc1Np5fulIrvewfwP8hVSVKcjbEaZrb13KB/11IKKCir517HIcsWOynPDH3UX99vpTEdC/l4gBtTmskDw=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sat, 08 Aug 2026 10:06:37 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>275</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: c64998ec7083ff1ca52241f1fa0966ddb823650e
-Channel: beta
-
-fix(app): stabilize settings, desktop overrides, and display policies
-
-Reuse the settings sheet and defer persistence until confirmation so opening and closing settings no longer rebuilds the main interface or writes on every edit. Keep the detail pane within usable bounds.\n\nRetry desktop captures and desktop image installation without falling back to preview artwork, verify new override paths before pruning old files, and persist per-display recovery records across disconnected monitors.\n\nEvaluate fullscreen, coverage, sleep, reveal, stop, resume, and playlist behavior independently for each display.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-275-c64998ec7083-macOS-x86_64.zip" length="199094905" type="application/octet-stream" sparkle:edSignature="BmHuPWscxx2Mx6ZHmkYk3n1a921qTW5Ew5Bwt3LD4GiZYtaBq0CrTek8gUs2jv2BwvrkYc6/kKmhIGyHZSu+Dg=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Sat, 08 Aug 2026 04:29:06 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>274</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: b108edba3544c4a308aa4ac2839cab8b7a52bf52
-Channel: beta
-
-fix(app): unstick browsing scroll, creator grid, and activation
-
-The Discover rows installed an app-wide scrollWheel monitor on hover
-that hand-forwarded vertical events: it walked up to the nearest
-ancestor NSScrollView, called scrollWheel(with:) on it directly, and
-swallowed the original. That bypasses responsive scrolling, and since
-phase events carry zero deltas they took the same branch and were
-consumed too, so gestures lost their begin and end. A gesture that
-scrolled content out from under the cursor also tore the monitor down
-mid-flight. Drop the monitor entirely and let AppKit route the event;
-the arrows only ever needed the horizontal offset, so read that from
-the clip view's boundsDidChange instead.
-
-The creator grid used adaptive(minimum:) with no maximum, so columns
-stretched to fill and 140 and 170 rendered identically in the 420pt
-pane. It also stored its size under ExplorerIconSize, shared with the
-library grid, which is why adjusting the view there appeared to move
-only the left side. Give it its own key with widths scaled for the
-narrow pane, bound the column, and hang the view menu on the scroll
-view and the empty states so a right-click in the gutter lands.
-
-refreshLoginItemStatus assigned loginItemStatus unconditionally, and
-@Published does not dedupe, so every activation invalidated everything
-observing the settings object. Every grid cell observed it just to read
-animatedPreviewPlaybackMode, so clicking the Dock icon rebuilt all three
-sections at once. Guard the assignment, pass the mode down as a plain
-value, and defer the refresh off the activation frame.
-
-Also bound the preview loader: cache the animated flag so the fast path
-stops rebuilding a CGImageSource on the main thread, size dataMemory to
-match the image cache so scrolling back does not miss into a full
-decode, cap in-flight IO, and sample 6 frames instead of 32 when
-picking a representative one. Preview loading now waits for its section
-to become active.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-274-b108edba3544-macOS-x86_64.zip" length="199078673" type="application/octet-stream" sparkle:edSignature="ETwDyJe0JMLAirNG+LQGDKqiZoL8e6ey9c6QPXBANyQIaMQsJ9YtF533OnKWAA2Heiy9SQX5j8WOARkhPI7PBw=="/>
         </item>
         <item>
             <title>1.0.3</title>
@@ -280,6 +231,6 @@ fix(ci): publish stable releases on Bash 3.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: w07xjS4PwUh3otmrKYlw9kQiVCT3AXmr5Rru6huUc5gBgwhhgYit0BsJYcjXNhZ+LT5YZLHxdhMVGS5uClYFCw==
-length: 16974
+edSignature: /6KlVmegrCMRdGrZJu0jKHkNPDCTqFmCvm7KgTb3LZWVYUKnXlC/JV6KAGgROi1Hhp2QslcwhI7wip1IMkpHBg==
+length: 15072
 -->
