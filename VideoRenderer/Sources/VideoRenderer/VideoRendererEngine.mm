@@ -45,6 +45,11 @@ static const NSTimeInterval kVRFirstFrameTimeout = 10.0;
 static const NSInteger kVRSnapshotAttempts = 6;
 static const NSTimeInterval kVRSnapshotRetryDelay = 0.2;
 
+static const NSInteger kVRMaxRecoveryAttempts = 5;
+static const NSTimeInterval kVRRecoveryBaseDelay = 0.75;
+static const NSTimeInterval kVRWakeVerifyDelay = 1.5;
+static const NSInteger kVRErrorMediaServicesWereReset = -11819;
+
 static NSError *VRVideoEngineError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:VRVideoEngineErrorDomain
                                code:code
@@ -121,6 +126,11 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, strong) AVPlayerItemVideoOutput *snapshotOutput;
 @property (nonatomic, assign) uint64_t openGeneration;
 @property (nonatomic, strong) dispatch_queue_t transcodeQueue;
+@property (nonatomic, strong, nullable) NSURL *playingURL;
+@property (nonatomic, assign) BOOL everProducedFrame;
+@property (nonatomic, assign) NSInteger recoveryAttempts;
+@property (nonatomic, assign) BOOL recoveryScheduled;
+@property (nonatomic, strong) NSMutableArray<id> *systemPowerObservers;
 - (void)detachLooperObserver;
 - (void)removeItemEndObservers;
 - (void)installItemEndObserversForLooper:(AVPlayerLooper *)looper;
@@ -129,6 +139,13 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 - (BOOL)startPlaybackOfURL:(NSURL *)url error:(NSError **)error;
 - (void)armFirstFrameWatchdogForGeneration:(uint64_t)generation deadline:(NSDate *)deadline;
 - (void)applyPlaybackState;
+- (void)scheduleRecovery;
+- (void)teardownPlaybackForRestart;
+- (BOOL)canRecoverFromError:(nullable NSError *)error;
+- (void)observeSystemPowerTransitions;
+- (void)handleSystemDidWake;
+- (void)verifyPlaybackAfterWakeForGeneration:(uint64_t)generation
+                                attemptsLeft:(NSInteger)attemptsLeft;
 @end
 
 @implementation VRVideoRendererEngine
@@ -173,6 +190,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         _loadFromMemory = config.loadFromMemory;
         _hdrEnabled = config.hdrEnabled;
         _itemEndObservers = [NSMutableArray array];
+        _systemPowerObservers = [NSMutableArray array];
         _transcodeQueue = dispatch_queue_create("VideoRenderer.transcode",
                                                 DISPATCH_QUEUE_SERIAL);
         dispatch_set_target_queue(_transcodeQueue,
@@ -198,6 +216,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
             [strongSelf reportPlaybackFailure:note.userInfo[AVPlayerItemFailedToPlayToEndTimeErrorKey]
                                      fallback:@"video stopped: failed to play to end"];
         }];
+        [self observeSystemPowerTransitions];
     }
     return self;
 }
@@ -230,6 +249,11 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         [center removeObserver:observer];
     }
     [_itemEndObservers removeAllObjects];
+    NSNotificationCenter *workspaceCenter = NSWorkspace.sharedWorkspace.notificationCenter;
+    for (id observer in _systemPowerObservers) {
+        [workspaceCenter removeObserver:observer];
+    }
+    [_systemPowerObservers removeAllObjects];
     [_player pause];
     [_player removeAllItems];
 }
@@ -242,12 +266,133 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.looperObserved = NO;
 }
 
+- (BOOL)canRecoverFromError:(NSError *)error {
+    if (self.playingURL == nil) return NO;
+    if (self.recoveryAttempts >= kVRMaxRecoveryAttempts) return NO;
+    if (self.everProducedFrame) return YES;
+    return [error.domain isEqualToString:AVFoundationErrorDomain] &&
+           error.code == kVRErrorMediaServicesWereReset;
+}
+
 - (void)reportPlaybackFailure:(NSError *)error fallback:(NSString *)fallback {
-    if (self.failureReported) return;
+    if (self.failureReported || self.recoveryScheduled) return;
+    if ([self canRecoverFromError:error]) {
+        NSString *reason = error.localizedDescription.length > 0
+            ? error.localizedDescription : fallback;
+        fprintf(stderr, "VideoRenderer: playback interrupted (%s); rebuilding\n",
+                reason.UTF8String ?: "unknown");
+        [self scheduleRecovery];
+        return;
+    }
     self.failureReported = YES;
     NSString *message = error.localizedDescription.length > 0 ? error.localizedDescription : fallback;
     fprintf(stderr, "VideoRenderer: playback failed: %s\n", message.UTF8String ?: "unknown error");
     if (self.videoDidFailBlock) self.videoDidFailBlock(message);
+}
+
+- (void)teardownPlaybackForRestart {
+    self.openGeneration += 1;
+    [self.player pause];
+    [self.player removeAllItems];
+    [self removeItemEndObservers];
+    [self detachLooperObserver];
+    self.looper = nil;
+    self.memoryAssetLoader = nil;
+    self.frameProbe = nil;
+    self.snapshotOutput = nil;
+    self.loaded = NO;
+    self.failureReported = NO;
+    self.firstFrameReported = NO;
+    self.lastItemEndReport = 0;
+}
+
+- (void)scheduleRecovery {
+    if (self.recoveryScheduled) return;
+    self.recoveryScheduled = YES;
+    self.recoveryAttempts += 1;
+    NSURL *url = self.playingURL;
+    const uint64_t generation = self.openGeneration;
+    const NSTimeInterval delay = kVRRecoveryBaseDelay * (NSTimeInterval)self.recoveryAttempts;
+    __weak __typeof__(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil) return;
+        strongSelf.recoveryScheduled = NO;
+        if (strongSelf.openGeneration != generation) return;
+        [strongSelf teardownPlaybackForRestart];
+        NSError *playError = nil;
+        if (![strongSelf startPlaybackOfURL:url error:&playError]) {
+            [strongSelf reportPlaybackFailure:playError
+                                     fallback:@"video could not be restarted"];
+        }
+    });
+}
+
+- (void)observeSystemPowerTransitions {
+    NSNotificationCenter *center = NSWorkspace.sharedWorkspace.notificationCenter;
+    __weak __typeof__(self) weakSelf = self;
+    void (^wake)(NSNotification *) = ^(NSNotification *note) {
+        (void)note;
+        [weakSelf handleSystemDidWake];
+    };
+    for (NSNotificationName name in @[ NSWorkspaceDidWakeNotification,
+                                       NSWorkspaceScreensDidWakeNotification ]) {
+        [self.systemPowerObservers addObject:
+            [center addObserverForName:name
+                                object:nil
+                                 queue:NSOperationQueue.mainQueue
+                            usingBlock:wake]];
+    }
+}
+
+- (void)handleSystemDidWake {
+    if (!self.loaded) return;
+    [self updateDynamicRangeForScreen:self.window.screen ?: NSScreen.mainScreen];
+    AVPlayerItem *current = self.player.currentItem;
+    if (current != nil && current.status == AVPlayerItemStatusFailed) {
+        [self reportPlaybackFailure:current.error
+                           fallback:@"video failed after the system woke"];
+        return;
+    }
+    [self applyPlaybackState];
+    const uint64_t generation = self.openGeneration;
+    __weak __typeof__(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kVRWakeVerifyDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf.openGeneration != generation) return;
+        [strongSelf verifyPlaybackAfterWakeForGeneration:generation attemptsLeft:3];
+    });
+}
+
+- (void)verifyPlaybackAfterWakeForGeneration:(uint64_t)generation
+                                attemptsLeft:(NSInteger)attemptsLeft {
+    if (self.openGeneration != generation) return;
+    if (!self.loaded || self.failureReported || self.recoveryScheduled) return;
+    if (self.hostPaused || self.playbackRate <= 0.0f) return;
+    AVPlayerItem *current = self.player.currentItem;
+    if (current == nil) {
+        [self reportPlaybackFailure:nil fallback:@"video lost its item after the system woke"];
+        return;
+    }
+    if (current.status == AVPlayerItemStatusFailed) {
+        [self reportPlaybackFailure:current.error
+                           fallback:@"video failed after the system woke"];
+        return;
+    }
+    if (self.player.timeControlStatus == AVPlayerTimeControlStatusPlaying) return;
+    if (attemptsLeft <= 0) {
+        [self reportPlaybackFailure:nil fallback:@"video stalled after the system woke"];
+        return;
+    }
+    [self.player playImmediatelyAtRate:self.playbackRate];
+    __weak __typeof__(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kVRWakeVerifyDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf verifyPlaybackAfterWakeForGeneration:generation
+                                          attemptsLeft:attemptsLeft - 1];
+    });
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -344,6 +489,10 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.firstFrameReported = NO;
     self.hostPaused = !self.autoplay;
     self.lastItemEndReport = 0;
+    self.playingURL = nil;
+    self.everProducedFrame = NO;
+    self.recoveryAttempts = 0;
+    self.recoveryScheduled = NO;
     self.openGeneration += 1;
 
     NSURL *source = manifest.videoURL;
@@ -441,6 +590,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.looper = [AVPlayerLooper playerLooperWithPlayer:self.player templateItem:item];
     self.player.volume = self.volume;
     self.player.muted = self.muted;
+    self.playingURL = url;
     self.loaded = YES;
 
     // Initial delivery arms the fallback end-of-item observer immediately and
@@ -503,6 +653,8 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         if ([probe hasNewPixelBufferForItemTime:current.currentTime]) {
             [current removeOutput:probe];
             strongSelf.frameProbe = nil;
+            strongSelf.everProducedFrame = YES;
+            strongSelf.recoveryAttempts = 0;
             if (!strongSelf.firstFrameReported) {
                 strongSelf.firstFrameReported = YES;
                 [strongSelf applyPlaybackState];
