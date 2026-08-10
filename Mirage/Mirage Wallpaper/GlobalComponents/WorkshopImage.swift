@@ -103,15 +103,33 @@ final class WorkshopImageLoader {
             guard let self else { return }
             self.ioLimiter.wait()
             defer { self.ioLimiter.signal() }
-            let disk = self.diskURL(for: url)
-            if let data = try? Data(contentsOf: disk), !data.isEmpty,
-               let image = Self.downsample(data, maxPixel: px) {
-                let animated = Self.isAnimated(data)
+            if url.isFileURL {
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+                      !data.isEmpty,
+                      let image = Self.downsample(data, maxPixel: px) else {
+                    DispatchQueue.main.async { completion(nil, nil) }
+                    return
+                }
+                let animatedData = Self.safeAnimationData(data)
+                let animated = animatedData != nil
                 self.setAnimatedFlag(animated, for: url)
                 self.store(data: data, image: image, dataKey: dataKey,
                            imageKey: key, animated: animated)
                 DispatchQueue.main.async {
-                    completion(image, animated ? data : nil)
+                    completion(image, animatedData)
+                }
+                return
+            }
+            let disk = self.diskURL(for: url)
+            if let data = try? Data(contentsOf: disk), !data.isEmpty,
+               let image = Self.downsample(data, maxPixel: px) {
+                let animatedData = Self.safeAnimationData(data)
+                let animated = animatedData != nil
+                self.setAnimatedFlag(animated, for: url)
+                self.store(data: data, image: image, dataKey: dataKey,
+                           imageKey: key, animated: animated)
+                DispatchQueue.main.async {
+                    completion(image, animatedData)
                 }
                 return
             }
@@ -126,14 +144,15 @@ final class WorkshopImageLoader {
                 }
                 try? data.write(to: disk, options: .atomic)
                 let image = Self.downsample(data, maxPixel: px)
-                let animated = Self.isAnimated(data)
+                let animatedData = Self.safeAnimationData(data)
+                let animated = animatedData != nil
                 self.setAnimatedFlag(animated, for: url)
                 if let image {
                     self.store(data: data, image: image, dataKey: dataKey,
                                imageKey: key, animated: animated)
                 }
                 DispatchQueue.main.async {
-                    completion(image, animated ? data : nil)
+                    completion(image, animatedData)
                 }
             }.resume()
             semaphore.wait()
@@ -148,9 +167,20 @@ final class WorkshopImageLoader {
         memory.setObject(image, forKey: imageKey, cost: cost(image))
     }
 
-    private static func isAnimated(_ data: Data) -> Bool {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
-        return CGImageSourceGetCount(source) > 1
+    private static func safeAnimationData(_ data: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let frameCount = CGImageSourceGetCount(source)
+        guard frameCount > 1,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0 else { return nil }
+        let (pixels, pixelOverflow) = width.multipliedReportingOverflow(by: height)
+        let (framePixels, frameOverflow) = pixels.multipliedReportingOverflow(by: frameCount)
+        let (decodedBytes, byteOverflow) = framePixels.multipliedReportingOverflow(by: 4)
+        guard !pixelOverflow, !frameOverflow, !byteOverflow,
+              decodedBytes <= 64 * 1024 * 1024 else { return nil }
+        return data
     }
 
     private static func downsample(_ data: Data, maxPixel: Int) -> NSImage? {
@@ -276,6 +306,9 @@ struct WorkshopImage: View {
                 }
             }
             .clipped()
+            .onAppear {
+                load()
+            }
             .background(
                 GeometryReader { proxy in
                     Color.clear
@@ -302,14 +335,29 @@ struct WorkshopImage: View {
                     load()
                 }
             }
+            .onChange(of: isAnimating) { _, animating in
+                if animating {
+                    load()
+                } else {
+                    animationData = nil
+                }
+            }
             .onDisappear {
                 loadToken &+= 1
                 animationData = nil
+                pendingLoad = isAnimating
             }
     }
 
     private func load() {
-        guard let url, boxSize.width > 1, boxSize.height > 1 else { return }
+        guard boxSize.width > 1, boxSize.height > 1 else { return }
+        guard let url else {
+            image = nil
+            animationData = nil
+            failed = true
+            pendingLoad = false
+            return
+        }
         let scale = displayScale
         if let cached = WorkshopImageLoader.shared.cachedImage(url: url, targetSize: boxSize, scale: scale) {
             image = cached
