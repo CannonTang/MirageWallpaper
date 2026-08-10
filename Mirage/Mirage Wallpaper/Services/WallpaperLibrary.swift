@@ -42,6 +42,7 @@ enum WallpaperLibrarySourceRole: String, Hashable {
     case steam
     case customSteam
     case managedWorkshop
+    case legacyWorkshop
     case imported
 }
 
@@ -127,6 +128,24 @@ final class WallpaperLibrary {
             .appending(path: "Mirage/Wallpapers")
     }
 
+    var managedWorkshopDirectory: URL {
+        let directory = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Mirage/Workshop/content/431960", directoryHint: .isDirectory)
+        if !fm.fileExists(atPath: directory.path) {
+            try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        return directory
+    }
+
+    var legacyWorkshopDirectories: [URL] {
+        let root = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Mirage/steamcmd", directoryHint: .isDirectory)
+        return [
+            root.appending(path: "home/Library/Application Support/Steam/steamapps/workshop/content/431960", directoryHint: .isDirectory),
+            root.appending(path: "steamapps/workshop/content/431960", directoryHint: .isDirectory)
+        ]
+    }
+
     var steamWorkshopDirectory: URL {
         if let path = UserDefaults.standard.string(forKey: workshopKey), !path.isEmpty {
             return URL(fileURLWithPath: path)
@@ -184,7 +203,10 @@ final class WallpaperLibrary {
             append(.steam, L("Steam 创意工坊目录"), L("系统 Steam 的默认内容目录"), defaultSteamWorkshopDirectory, always: true)
         }
 
-        append(.managedWorkshop, L("Mirage 下载目录"), L("Mirage 从 Steam 创意工坊下载和更新壁纸的位置"), SteamServiceManager.shared.contentDirectory, always: true)
+        append(.managedWorkshop, L("Mirage 下载目录"), L("Mirage 从 Steam 创意工坊下载和更新壁纸的位置"), managedWorkshopDirectory, always: true)
+        for directory in legacyWorkshopDirectories where containsWorkshopWallpaper(in: directory) {
+            append(.legacyWorkshop, L("Mirage 旧版下载目录"), L("尚未迁移的 Mirage 创意工坊壁纸"), directory)
+        }
         append(.imported, L("导入壁纸目录"), L("手动导入或由视频创建的本地壁纸"), importedDirectory, always: true)
         return result
     }
@@ -193,9 +215,25 @@ final class WallpaperLibrary {
         librarySources.filter(\.exists).map(\.url)
     }
 
+    private func containsWorkshopWallpaper(in directory: URL) -> Bool {
+        guard let contents = try? fm.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]) else { return false }
+        return contents.contains { url in
+            let id = url.lastPathComponent
+            guard !id.isEmpty, id.allSatisfy(\.isNumber),
+                  (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                return false
+            }
+            return fm.fileExists(atPath: url.appending(path: "project.json").path)
+        }
+    }
+
     func allWallpaperURLs() -> [URL] {
         var result: [URL] = []
-        for dir in sourceDirectories {
+        var seenWorkshopIDs = Set<String>()
+        for source in librarySources where source.exists {
+            let dir = source.url
             guard let contents = try? fm.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]) else { continue }
@@ -203,6 +241,11 @@ final class WallpaperLibrary {
                 let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                 guard isDir else { continue }
                 if fm.fileExists(atPath: url.appending(path: "project.json").path) {
+                    let id = url.lastPathComponent
+                    if source.role != .imported, !id.isEmpty, id.allSatisfy(\.isNumber) {
+                        if source.role == .legacyWorkshop, seenWorkshopIDs.contains(id) { continue }
+                        seenWorkshopIDs.insert(id)
+                    }
                     result.append(url)
                 }
             }

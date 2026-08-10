@@ -38,6 +38,32 @@ final class PlaylistManager: ObservableObject {
         load()
     }
 
+    static func remapPersistedWallpaperIDs(_ mappings: [String: String]) {
+        guard !mappings.isEmpty else { return }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Mirage")
+        let url = base.appending(path: "playlists.json")
+        guard let data = try? Data(contentsOf: url),
+              var persisted = try? JSONDecoder().decode(Persisted.self, from: data) else { return }
+        let remapper = WallpaperPathRemapper(mappings)
+        for key in persisted.currents.keys {
+            guard var playlist = persisted.currents[key] else { continue }
+            playlist.items = playlist.items.map {
+                PlaylistItem(wallpaperID: remapper.path($0.wallpaperID), addedAt: $0.addedAt)
+            }
+            persisted.currents[key] = playlist
+        }
+        persisted.saved = persisted.saved.map { source in
+            var playlist = source
+            playlist.items = playlist.items.map {
+                PlaylistItem(wallpaperID: remapper.path($0.wallpaperID), addedAt: $0.addedAt)
+            }
+            return playlist
+        }
+        guard let remapped = try? JSONEncoder().encode(persisted) else { return }
+        try? remapped.write(to: url, options: .atomic)
+    }
+
     // MARK: Load / persist
 
     private func load() {

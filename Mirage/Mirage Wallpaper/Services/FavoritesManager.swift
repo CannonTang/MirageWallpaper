@@ -20,6 +20,14 @@ final class FavoritesManager {
         ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
     }
 
+    static func remapPersistedWallpaperIDs(_ mappings: [String: String]) {
+        guard !mappings.isEmpty else { return }
+        let key = "FavoriteWallpapers"
+        guard let values = UserDefaults.standard.stringArray(forKey: key) else { return }
+        let remapper = WallpaperPathRemapper(mappings)
+        UserDefaults.standard.set(Array(Set(values.map(remapper.path))), forKey: key)
+    }
+
     private func persist() {
         UserDefaults.standard.set(Array(ids), forKey: key)
     }

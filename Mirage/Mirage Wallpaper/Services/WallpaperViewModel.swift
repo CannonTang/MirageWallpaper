@@ -794,6 +794,67 @@ class WallpaperViewModel: ObservableObject {
 
     private static func runtimeKey(for w: WEWallpaper) -> String { "\(runtimeKeyPrefix)\(w.id)" }
 
+    static func remapPersistedPaths(_ mappings: [String: String]) {
+        guard !mappings.isEmpty else { return }
+        let remapper = WallpaperPathRemapper(mappings)
+        let defaults = UserDefaults.standard
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+
+        func remapRuntime(_ value: WallpaperRuntimeState) -> WallpaperRuntimeState {
+            var result = value
+            for (key, property) in result.propertyOverrides {
+                guard case .string(let path) = property else { continue }
+                let remapped = remapper.path(path)
+                if remapped != path { result.propertyOverrides[key] = .string(remapped) }
+            }
+            return result
+        }
+
+        func remapWallpaper(_ value: WEWallpaper) -> WEWallpaper {
+            var result = value
+            result.wallpaperDirectory = remapper.url(result.wallpaperDirectory)
+            result.renderDirectory = remapper.url(result.renderDirectory)
+            result.assetOverlayDirectories = result.assetOverlayDirectories.map(remapper.url)
+            return result
+        }
+
+        if let data = defaults.data(forKey: assignmentsDefaultsKey),
+           var states = try? decoder.decode([String: DisplayWallpaperState].self, from: data) {
+            for key in states.keys {
+                guard var state = states[key] else { continue }
+                state.wallpaper = remapWallpaper(state.wallpaper)
+                state.runtime = remapRuntime(state.runtime)
+                states[key] = state
+            }
+            if let remapped = try? encoder.encode(states) {
+                defaults.set(remapped, forKey: assignmentsDefaultsKey)
+            }
+        }
+
+        if let data = defaults.data(forKey: legacyWallpaperDefaultsKey),
+           let wallpaper = try? decoder.decode(WEWallpaper.self, from: data),
+           let remapped = try? encoder.encode(remapWallpaper(wallpaper)) {
+            defaults.set(remapped, forKey: legacyWallpaperDefaultsKey)
+        }
+
+        let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(runtimeKeyPrefix) }
+        for key in keys {
+            let id = String(key.dropFirst(runtimeKeyPrefix.count))
+            let remappedID = remapper.path(id)
+            guard let data = defaults.data(forKey: key),
+                  let runtime = try? decoder.decode(WallpaperRuntimeState.self, from: data),
+                  let remappedData = try? encoder.encode(remapRuntime(runtime)) else { continue }
+            let remappedKey = runtimeKeyPrefix + remappedID
+            defaults.set(remappedData, forKey: remappedKey)
+            if remappedKey != key { defaults.removeObject(forKey: key) }
+        }
+
+        if let trusted = defaults.stringArray(forKey: "TrustedWallpapers") {
+            defaults.set(Array(Set(trusted.map(remapper.path))), forKey: "TrustedWallpapers")
+        }
+    }
+
     private static func repairRuntimesZeroedByLegacyPause() -> Bool {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: sessionPauseRepairDefaultsKey) else { return false }

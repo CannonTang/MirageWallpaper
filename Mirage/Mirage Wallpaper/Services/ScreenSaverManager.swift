@@ -229,6 +229,26 @@ final class ScreenSaverManager {
         return object["wallpaperID"] as? String
     }
 
+    func remapPersistedPaths(_ mappings: [String: String]) {
+        guard !mappings.isEmpty,
+              let data = try? Data(contentsOf: configurationURL),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return }
+        let remapper = WallpaperPathRemapper(mappings)
+        func remap(_ value: Any) -> Any {
+            if let string = value as? String { return remapper.path(string) }
+            if let array = value as? [Any] { return array.map(remap) }
+            if let dictionary = value as? [String: Any] {
+                return dictionary.mapValues(remap)
+            }
+            return value
+        }
+        let remapped = remap(object)
+        guard JSONSerialization.isValidJSONObject(remapped),
+              let encoded = try? JSONSerialization.data(
+                withJSONObject: remapped, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? encoded.write(to: configurationURL, options: .atomic)
+    }
+
     private func playableVideoCacheURL(for source: URL) -> URL {
         let path = source.resolvingSymlinksInPath().path
         let digest = SHA256.hash(data: Data(path.utf8))

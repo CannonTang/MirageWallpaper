@@ -345,6 +345,18 @@ final class WallpaperShortcutManager: ObservableObject {
         installMonitors()
     }
 
+    static func remapPersistedWallpaperIDs(_ mappings: [String: String]) {
+        guard !mappings.isEmpty else { return }
+        let key = "WallpaperShortcutsV1"
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let shortcuts = try? JSONDecoder().decode([String: WallpaperShortcut].self, from: data) else { return }
+        let remapper = WallpaperPathRemapper(mappings)
+        let remapped = Dictionary(shortcuts.map { (remapper.path($0.key), $0.value) },
+                                  uniquingKeysWith: { _, latest in latest })
+        guard let encoded = try? JSONEncoder().encode(remapped) else { return }
+        UserDefaults.standard.set(encoded, forKey: key)
+    }
+
     deinit {
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
