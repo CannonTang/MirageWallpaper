@@ -14,6 +14,8 @@ namespace MirageSteamService;
 
 internal sealed class WorkshopDownloader
 {
+    internal sealed record DownloadResult(long TotalBytes, string OutputPath);
+
     private static readonly SemaphoreSlim GlobalChunkSlots = new(8, 8);
     private readonly SteamSession session;
     private readonly ProtocolWriter writer;
@@ -24,7 +26,7 @@ internal sealed class WorkshopDownloader
         this.writer = writer;
     }
 
-    public async Task DownloadAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
+    public async Task<DownloadResult> DownloadAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException();
         writer.DownloadState(taskId, "resolving");
@@ -127,7 +129,7 @@ internal sealed class WorkshopDownloader
         var project = Path.Combine(staging, "project.json");
         if (!File.Exists(project)) throw new ServiceException("PROJECT_JSON_MISSING", "Downloaded content does not contain project.json.");
         Install(staging, final, cancellationToken);
-        writer.DownloadState(taskId, "completed", totalCompressed, totalCompressed, outputPath: final);
+        return new DownloadResult(totalCompressed, final);
     }
 
     private async Task RunWorkerAsync(int workerIndex, uint depotId, byte[] depotKey, ConcurrentQueue<(DepotManifest.FileData File, DepotManifest.ChunkData Chunk, string Path)> queue, DownloadProgressTracker progress, CancellationToken cancellationToken)

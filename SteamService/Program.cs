@@ -163,9 +163,13 @@ static async Task RunAuthenticationAsync(Func<Task> action, ProtocolWriter write
     {
         await action().ConfigureAwait(false);
     }
-    catch (OperationCanceledException)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
         writer.AuthState("loggedOut", message: "Authentication was cancelled.", errorCode: "AUTH_CANCELLED");
+    }
+    catch (OperationCanceledException error)
+    {
+        writer.AuthState("failed", message: UserMessage(error), errorCode: "AUTH_SERVICE_TEMPORARY");
     }
     catch (AsyncJobFailedException)
     {
@@ -185,11 +189,16 @@ static async Task RunDownloadAsync(string taskId, ulong workshopId, string outpu
 {
     try
     {
-        await downloader.DownloadAsync(taskId, workshopId, outputRoot, operation.Token).ConfigureAwait(false);
+        var result = await downloader.DownloadAsync(taskId, workshopId, outputRoot, operation.Token).ConfigureAwait(false);
+        writer.DownloadState(taskId, "completed", result.TotalBytes, result.TotalBytes, outputPath: result.OutputPath);
     }
-    catch (OperationCanceledException)
+    catch (OperationCanceledException) when (operation.Token.IsCancellationRequested)
     {
         writer.DownloadState(taskId, "cancelled", message: "Download was cancelled.", errorCode: "DOWNLOAD_CANCELLED");
+    }
+    catch (OperationCanceledException error)
+    {
+        writer.DownloadState(taskId, "failed", message: UserMessage(error), errorCode: "DOWNLOAD_INTERRUPTED");
     }
     catch (Exception error)
     {
