@@ -291,7 +291,7 @@ jobs:
                 -e '/^<details>$/d' \
                 -e '/^<summary>.*<\/summary>$/d' \
                 -e '/^<\/details>$/d' \
-                "$release_notes_source" > "$appcast_dir/${archive_name}.txt"
+                "$release_notes_source" > "$appcast_dir/${archive_name}.md"
             else
               {
                 echo "Commit: ${GITHUB_SHA}"
