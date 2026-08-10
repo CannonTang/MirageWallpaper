@@ -260,7 +260,7 @@ void ParticleSubSystem::Tick(double frame_time, bool update_mesh) {
         if (reset && update_mesh && m_mesh_has_geometry) {
             m_mesh->SetDirty();
             m_sys.gener->GenGLData(
-                m_instances, *m_mesh, m_genSpecOp, m_rope_sequence_count);
+                m_instances, *m_mesh, m_genSpecOp, m_rope_sequence_count, m_rope_subdivision);
             m_mesh_has_geometry = false;
         }
         for (auto& child : m_children) child->Tick(0.0, update_mesh);
@@ -641,7 +641,7 @@ void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
         if (node_visible && (has_live_geometry || m_mesh_has_geometry)) {
             m_mesh->SetDirty();
             m_sys.gener->GenGLData(
-                m_instances, *m_mesh, m_genSpecOp, m_rope_sequence_count);
+                m_instances, *m_mesh, m_genSpecOp, m_rope_sequence_count, m_rope_subdivision);
             m_mesh_has_geometry = has_live_geometry;
         }
     }

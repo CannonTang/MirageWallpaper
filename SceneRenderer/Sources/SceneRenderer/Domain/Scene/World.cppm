@@ -2270,6 +2270,7 @@ public:
     }
     void SetRopeSequenceCount(u32 value) { m_rope_sequence_count = std::max(value, 2u); }
     std::optional<u32> RopeSequenceCount() const { return m_rope_sequence_count; }
+    void SetRopeSubdivision(u32 value) { m_rope_subdivision = value; }
     void SetRateSource(std::function<double()> source) { m_rate_source = std::move(source); }
     void SetParentControlpointStartIndex(i32 value) {
         m_parent_controlpoint_start_index = value;
@@ -2339,6 +2340,7 @@ private:
     double    m_trail_sample_interval { 0.0 };
     double    m_trail_sample_accumulator { 0.0 };
     std::optional<u32> m_rope_sequence_count;
+    u32       m_rope_subdivision { 0 };
     std::optional<i32> m_parent_controlpoint_start_index;
     u32       m_next_particle_slot_id { 0 };
     u64       m_next_spawn_sequence { 0 };
@@ -2361,7 +2363,8 @@ public:
     virtual ~IParticleRawGener() = default;
 
     virtual void GenGLData(std::span<const std::unique_ptr<ParticleInstance>>, SceneMesh&,
-                           ParticleRawGenSpecOp&, std::optional<u32> rope_sequence_count) = 0;
+                           ParticleRawGenSpecOp&, std::optional<u32> rope_sequence_count,
+                           u32 rope_subdivision) = 0;
 };
 
 class Scene;
@@ -2388,7 +2391,8 @@ public:
     virtual ~WPParticleRawGener() {};
 
     virtual void GenGLData(std::span<const std::unique_ptr<ParticleInstance>>, SceneMesh&,
-                           ParticleRawGenSpecOp&, std::optional<u32> rope_sequence_count);
+                           ParticleRawGenSpecOp&, std::optional<u32> rope_sequence_count,
+                           u32 rope_subdivision);
 };
 
 // ============================================================================

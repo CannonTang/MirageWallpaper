@@ -1250,6 +1250,43 @@ attribute vec2 a_TexCoordC2;
     return source;
 }
 
+std::optional<std::string> MakeCpuRopeParticleVertexSource(std::string source) {
+    source.erase(std::remove(source.begin(), source.end(), '\r'), source.end());
+
+    static constexpr std::string_view kVaryingAndMain = R"(varying vec2 v_TexCoord;
+
+void main() {)";
+    static constexpr std::string_view kVaryingAndHelper = R"(varying vec2 v_TexCoord;
+
+vec3 cubicBezier(vec3 A, vec3 B, vec3 C, vec3 D, float t)
+{
+    float oneMinusT = 1.0 - t;
+    float b0 = oneMinusT * oneMinusT * oneMinusT;
+    float b1 = 3.0 * t * oneMinusT * oneMinusT;
+    float b2 = 3.0 * t * t * oneMinusT;
+    float b3 = t * t * t;
+    return b0 * A + b1 * B + b2 * C + b3 * D;
+}
+
+void main() {)";
+    static constexpr std::string_view kLinearPosition = R"(vec3 position = mix(startPosition, endPosition, uvs.y);
+	vec3 right = mix(trailRightStart, trailRightEnd, uvs.y);
+	position += right * uvs.x * 2.0 - 1.0;)";
+    static constexpr std::string_view kBezierPosition = R"(vec3 curveControlStart = startPosition + (trailDelta + CPStart) * 0.15;
+	vec3 curveControlEnd = endPosition - (trailDelta - CPEnd) * 0.15;
+	vec3 position = cubicBezier(startPosition, curveControlStart, curveControlEnd, endPosition, uvs.y);
+	vec3 right = mix(trailRightStart, trailRightEnd, uvs.y);
+	position += right * (uvs.x * 2.0 - 1.0);)";
+
+    auto main_pos = source.find(kVaryingAndMain);
+    if (main_pos == std::string::npos) return std::nullopt;
+    source.replace(main_pos, kVaryingAndMain.size(), kVaryingAndHelper);
+    auto linear_pos = source.find(kLinearPosition);
+    if (linear_pos == std::string::npos) return std::nullopt;
+    source.replace(linear_pos, kLinearPosition.size(), kBezierPosition);
+    return source;
+}
+
 void SetParticleMesh(SceneMesh& mesh, const wpscene::Particle& particle, uint32_t count,
                      bool thick_format, bool geometry_shader, bool instanced) {
     (void)particle;
@@ -1854,6 +1891,16 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
         }
     }
     add_shader_unit(ShaderType::FRAGMENT, shaderPath + ".frag");
+
+    if (wpmat.shader == "genericropeparticle" && ! geometry_shader_enabled) {
+        auto rope_source = MakeCpuRopeParticleVertexSource(sd_units.front().src);
+        if (! rope_source) {
+            rstd_error("genericropeparticle vertex source changed; cannot enable CPU rope path");
+            return false;
+        }
+        sd_units.front().src        = *rope_source;
+        sd_original_sources.front() = std::move(*rope_source);
+    }
 
     if (wpmat.shader == "genericparticle" &&
         pWPShaderInfo->combos.contains("PARTICLEINSTANCED") &&
@@ -3999,14 +4046,15 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         if (! render_rope_trail)
             shaderInfo.combos[std::string(WE_CB_THICK_FORMAT)] = "1";
     }
-    if (rope_shader) {
-        // genericropeparticle.geom branches on TRAILSUBDIVISION when present;
-        // 0 = no subdivision (straight quad per segment), positive = cubic
-        // Bezier subdivided into N+1 quads.
-        i32 subdiv = (i32)std::round(wppartRenderer.subdivision);
-        if (subdiv < 0) subdiv = 0;
-        shaderInfo.combos["TRAILSUBDIVISION"] = std::to_string(subdiv);
+    u32 rope_subdivision = 0;
+    if (rope_shader && std::isfinite(wppartRenderer.subdivision) &&
+        wppartRenderer.subdivision > 0.0f) {
+        const double rounded = std::round(static_cast<double>(wppartRenderer.subdivision));
+        rope_subdivision = static_cast<u32>(
+            std::min(rounded, static_cast<double>(kMaxParticleMeshCount - 1u)));
     }
+    if (rope_shader)
+        shaderInfo.combos["TRAILSUBDIVISION"] = std::to_string(rope_subdivision);
 
     auto animationmode = ToAnimMode(particle_obj.animationmode);
     if (animationmode == ParticleAnimationMode::SEQUENCE &&
@@ -4072,6 +4120,9 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
             if (render_rope_trail)
                 mesh_maxcount = MulParticleCountClamped(
                     mesh_maxcount, trail_length, kMaxParticleMeshCount);
+            if (! use_geometry_shader)
+                mesh_maxcount = MulParticleCountClamped(
+                    mesh_maxcount, rope_subdivision + 1u, kMaxParticleMeshCount);
             SetRopeParticleMesh(mesh,
                                 particle_obj,
                                 mesh_maxcount,
@@ -4119,6 +4170,7 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
 
     particleSub->SetOwnerNode(spNode.as_ptr());
     particleSub->SetPlaybackState(playback_state);
+    particleSub->SetRopeSubdivision(rope_subdivision);
     for (const auto& emitter : particle_obj.emitters) {
         if (emitter.audioprocessingmode != 0) {
             context.scene->uses_audio_spectrum = true;

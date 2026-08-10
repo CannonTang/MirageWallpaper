@@ -431,15 +431,29 @@ struct RopeQuadAttrSlots {
     AttrSlot color;
 };
 
-// CPU rope-quad expansion. Metal/MoltenVK has no geometry-shader stage, so on
-// macOS the rope segment fan-out the .geom would do is done here instead: each
-// trail segment becomes four vertices (a quad) with per-corner UVs, matching
-// the non-GS vertex-shader path selected by SetRopeParticleMesh.
+inline float RopeCurveBoundary(u32 boundary, u32 subdivision) noexcept {
+    const u32 count = subdivision + 1u;
+    if (boundary == 0u) return 0.0f;
+    if (boundary >= count) return 1.0f;
+    const float value = static_cast<float>(boundary) / static_cast<float>(count);
+    return value * value * (3.0f - 2.0f * value);
+}
+
+inline std::array<std::array<float, 2>, 4> RopeQuadUVs(float begin, float end) noexcept {
+    return {
+        std::array { 0.0f, begin },
+        std::array { 0.0f, end },
+        std::array { 1.0f, end },
+        std::array { 1.0f, begin },
+    };
+}
+
 inline size_t GenRopeTrailQuadSegments(const ParticleInstance& instance, const Particle& p,
                                           const ParticleTrail& trail,
                                           const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                           const RopeQuadAttrSlots& slots, SceneVertexArray& sv,
-                                          std::span<float> dst, size_t base_index) {
+                                          std::span<float> dst, size_t base_index,
+                                          u32 rope_subdivision) {
     const auto            one_size = sv.OneSize();
     std::array<float, 64> v {};
 
@@ -464,13 +478,6 @@ inline size_t GenRopeTrailQuadSegments(const ParticleInstance& instance, const P
     specOp(p, { &lifetime });
 
     const float in_ParticleTrailLength = (float)trail.sample_count;
-    const std::array<std::array<float, 2>, 4> uvs {
-        std::array { 0.0f, 0.0f },
-        std::array { 0.0f, 1.0f },
-        std::array { 1.0f, 1.0f },
-        std::array { 1.0f, 0.0f },
-    };
-
     const Vector3f base = instance.PositionsInWorldSpace()
                               ? Vector3f::Zero()
                               : instance.GetBoundedData().pos;
@@ -480,6 +487,7 @@ inline size_t GenRopeTrailQuadSegments(const ParticleInstance& instance, const P
     };
 
     size_t emitted = 0;
+    const u32 subsegment_count = rope_subdivision + 1u;
     for (uint16_t sample = 0; sample < trail.len; ++sample) {
         Vector3f pre_pos = point(sample);
         Vector3f cur_pos = point(static_cast<uint16_t>(sample + 1));
@@ -487,33 +495,38 @@ inline size_t GenRopeTrailQuadSegments(const ParticleInstance& instance, const P
         Vector3f ecp = point(std::min<uint16_t>(static_cast<uint16_t>(sample + 2), trail.len));
 
         const float in_ParticleTrailPosition = (float)sample;
-        for (usize q = 0; q < uvs.size(); ++q) {
-            std::fill(v.begin(), v.begin() + (isize)one_size, 0.0f);
-            write4(slots.position, pre_pos[0], pre_pos[1], pre_pos[2], size);
-            write4(slots.endpoint, cur_pos[0], cur_pos[1], cur_pos[2], in_ParticleTrailLength);
-            write4(slots.cp_start, scp[0], scp[1], scp[2], in_ParticleTrailPosition);
-            if (opt.thick_format) {
-                write4(slots.cp_end4, ecp[0], ecp[1], ecp[2], size);
-                write4(slots.color2, p.color[0], p.color[1], p.color[2], p.alpha);
-                write2(slots.uv4, uvs[q][0], uvs[q][1]);
-            } else {
-                write4(slots.cp_end3, ecp[0], ecp[1], ecp[2], 0.0f);
-                write2(slots.uv3, uvs[q][0], uvs[q][1]);
+        for (u32 subsegment = 0; subsegment < subsegment_count; ++subsegment) {
+            const auto uvs = RopeQuadUVs(
+                RopeCurveBoundary(subsegment, rope_subdivision),
+                RopeCurveBoundary(subsegment + 1u, rope_subdivision));
+            for (usize q = 0; q < uvs.size(); ++q) {
+                std::fill(v.begin(), v.begin() + (isize)one_size, 0.0f);
+                write4(slots.position, pre_pos[0], pre_pos[1], pre_pos[2], size);
+                write4(slots.endpoint, cur_pos[0], cur_pos[1], cur_pos[2], in_ParticleTrailLength);
+                write4(slots.cp_start, scp[0], scp[1], scp[2], in_ParticleTrailPosition);
+                if (opt.thick_format) {
+                    write4(slots.cp_end4, ecp[0], ecp[1], ecp[2], size);
+                    write4(slots.color2, p.color[0], p.color[1], p.color[2], p.alpha);
+                    write2(slots.uv4, uvs[q][0], uvs[q][1]);
+                } else {
+                    write4(slots.cp_end3, ecp[0], ecp[1], ecp[2], 0.0f);
+                    write2(slots.uv3, uvs[q][0], uvs[q][1]);
+                }
+                write4(slots.color, p.color[0], p.color[1], p.color[2], p.alpha);
+                const size_t out_offset = ((base_index + emitted) * 4 + q) * one_size;
+                rstd_assert(out_offset + one_size <= dst.size());
+                if (out_offset + one_size > dst.size()) return emitted;
+                std::copy_n(v.data(), one_size, dst.data() + out_offset);
             }
-            write4(slots.color, p.color[0], p.color[1], p.color[2], p.alpha);
-            const size_t out_offset = ((base_index + emitted) * 4 + q) * one_size;
-            rstd_assert(out_offset + one_size <= dst.size());
-            if (out_offset + one_size > dst.size()) return emitted;
-            std::copy_n(v.data(), one_size, dst.data() + out_offset);
+            emitted++;
         }
-        emitted++;
     }
     return emitted;
 }
 
 inline size_t GenRopeTrailQuadData(std::span<const std::unique_ptr<ParticleInstance>> instances,
                                       const ParticleRawGenSpecOp& specOp, WPGOption opt,
-                                      SceneVertexArray& sv) {
+                                      SceneVertexArray& sv, u32 rope_subdivision) {
     const auto attrs = sv.GetAttrOffsetMap();
     const RopeQuadAttrSlots slots {
         .position = FindAttrSlot(attrs, WE_IN_POSITIONVEC4),
@@ -537,7 +550,7 @@ inline size_t GenRopeTrailQuadData(std::span<const std::unique_ptr<ParticleInsta
             if (! ParticleModify::LifetimeOk(particles[si])) continue;
             total +=
                 GenRopeTrailQuadSegments(*inst, particles[si], trails[si], specOp, opt, slots, sv, dst,
-                                            total);
+                                            total, rope_subdivision);
         }
     }
     sv.CommitDynamicVertexCount(total * 4);
@@ -547,7 +560,7 @@ inline size_t GenRopeTrailQuadData(std::span<const std::unique_ptr<ParticleInsta
 inline size_t GenAuthoredRopeQuadData(
     std::span<const std::unique_ptr<ParticleInstance>> instances,
     const ParticleRawGenSpecOp& specOp, WPGOption opt, SceneVertexArray& sv,
-    std::optional<u32> sequence_count) {
+    std::optional<u32> sequence_count, u32 rope_subdivision) {
     const auto attrs = sv.GetAttrOffsetMap();
     const RopeQuadAttrSlots slots {
         .position = FindAttrSlot(attrs, WE_IN_POSITIONVEC4),
@@ -559,10 +572,6 @@ inline size_t GenAuthoredRopeQuadData(
         .uv4      = FindAttrSlot(attrs, WE_IN_TEXCOORDC4),
         .uv3      = FindAttrSlot(attrs, WE_IN_TEXCOORDC3),
         .color    = FindAttrSlot(attrs, WE_IN_COLOR),
-    };
-    const std::array<std::array<float, 2>, 4> uvs {
-        std::array { 0.0f, 0.0f }, std::array { 0.0f, 1.0f },
-        std::array { 1.0f, 1.0f }, std::array { 1.0f, 0.0f },
     };
     auto   dst      = sv.DynamicWriteData();
     const auto one_size = sv.OneSize();
@@ -591,6 +600,7 @@ inline size_t GenAuthoredRopeQuadData(
             if (emit_period > 1e-6f)
                 sequence_offset = -std::clamp(newest_age / emit_period, 0.0f, 1.0f);
             const size_t segment_count = end - begin - 1;
+            const u32 subsegment_count = rope_subdivision + 1u;
             for (size_t index = begin; index < end - 1; ++index) {
                 const auto& current = *particles[index];
                 const auto& previous = *particles[index == begin ? begin : index - 1];
@@ -598,39 +608,44 @@ inline size_t GenAuthoredRopeQuadData(
                 const auto& after = *particles[std::min(index + 2, end - 1)];
                 float lifetime = current.lifetime;
                 specOp(current, { &lifetime });
-                for (usize corner = 0; corner < uvs.size(); ++corner) {
-                    std::array<float, 64> value {};
-                    auto write2 = [&](AttrSlot slot, float x, float y) {
-                        if (! slot.enabled) return;
-                        value[slot.offset] = x;
-                        value[slot.offset + 1] = y;
-                    };
-                    auto write4 = [&](AttrSlot slot, const Vector3f& source, float w) {
-                        if (! slot.enabled) return;
-                        value[slot.offset] = source.x();
-                        value[slot.offset + 1] = source.y();
-                        value[slot.offset + 2] = source.z();
-                        value[slot.offset + 3] = w;
-                    };
-                    write4(slots.position, base + current.position, current.size * 0.5f);
-                    write4(slots.endpoint, base + next.position, static_cast<float>(segment_count));
-                    write4(slots.cp_start,
-                           base + previous.position,
-                           static_cast<float>(index - begin) + sequence_offset);
-                    if (opt.thick_format) {
-                        write4(slots.cp_end4, base + after.position, next.size * 0.5f);
-                        write4(slots.color2, next.color, next.alpha);
-                        write2(slots.uv4, uvs[corner][0], uvs[corner][1]);
-                    } else {
-                        write4(slots.cp_end3, base + after.position, 0.0f);
-                        write2(slots.uv3, uvs[corner][0], uvs[corner][1]);
+                for (u32 subsegment = 0; subsegment < subsegment_count; ++subsegment) {
+                    const auto uvs = RopeQuadUVs(
+                        RopeCurveBoundary(subsegment, rope_subdivision),
+                        RopeCurveBoundary(subsegment + 1u, rope_subdivision));
+                    for (usize corner = 0; corner < uvs.size(); ++corner) {
+                        std::array<float, 64> value {};
+                        auto write2 = [&](AttrSlot slot, float x, float y) {
+                            if (! slot.enabled) return;
+                            value[slot.offset] = x;
+                            value[slot.offset + 1] = y;
+                        };
+                        auto write4 = [&](AttrSlot slot, const Vector3f& source, float w) {
+                            if (! slot.enabled) return;
+                            value[slot.offset] = source.x();
+                            value[slot.offset + 1] = source.y();
+                            value[slot.offset + 2] = source.z();
+                            value[slot.offset + 3] = w;
+                        };
+                        write4(slots.position, base + current.position, current.size * 0.5f);
+                        write4(slots.endpoint, base + next.position, static_cast<float>(segment_count));
+                        write4(slots.cp_start,
+                               base + previous.position,
+                               static_cast<float>(index - begin) + sequence_offset);
+                        if (opt.thick_format) {
+                            write4(slots.cp_end4, base + after.position, next.size * 0.5f);
+                            write4(slots.color2, next.color, next.alpha);
+                            write2(slots.uv4, uvs[corner][0], uvs[corner][1]);
+                        } else {
+                            write4(slots.cp_end3, base + after.position, 0.0f);
+                            write2(slots.uv3, uvs[corner][0], uvs[corner][1]);
+                        }
+                        write4(slots.color, current.color, current.alpha);
+                        const size_t out_offset = (total * 4 + corner) * one_size;
+                        if (out_offset + one_size > dst.size()) return false;
+                        std::copy_n(value.data(), one_size, dst.data() + out_offset);
                     }
-                    write4(slots.color, current.color, current.alpha);
-                    const size_t out_offset = (total * 4 + corner) * one_size;
-                    if (out_offset + one_size > dst.size()) return false;
-                    std::copy_n(value.data(), one_size, dst.data() + out_offset);
+                    ++total;
                 }
-                ++total;
             }
             return true;
         };
@@ -678,7 +693,8 @@ inline void updateIndexArray(uint32_t index, size_t count, SceneIndexArray& iarr
 
 void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInstance>> instances,
                                    SceneMesh& mesh, ParticleRawGenSpecOp& specOp,
-                                   std::optional<u32> rope_sequence_count) {
+                                   std::optional<u32> rope_sequence_count,
+                                   u32 rope_subdivision) {
     if (mesh.ParticleInstanced()) {
         auto& instance_sv = mesh.GetVertexArray(1);
         WPGOption opt;
@@ -713,8 +729,10 @@ void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInsta
         } else {
             segment_num = authored_rope
                               ? GenAuthoredRopeQuadData(
-                                    instances, specOp, opt, sv, rope_sequence_count)
-                              : GenRopeTrailQuadData(instances, specOp, opt, sv);
+                                    instances, specOp, opt, sv, rope_sequence_count,
+                                    rope_subdivision)
+                              : GenRopeTrailQuadData(
+                                    instances, specOp, opt, sv, rope_subdivision);
             auto& si        = mesh.GetIndexArray(0);
             u32   index_num = (u32)(si.DataCount() / 6);
             if (segment_num > index_num) {
