@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.5</title>
+            <pubDate>Mon, 10 Aug 2026 15:47:28 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>294</sparkle:version>
+            <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 740e5232e98469b0ec6077321f981e3193bef408
+Channel: beta
+
+fix(localization): add migration and recovery strings
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-294-740e5232e984-macOS-x86_64.zip" length="236528229" type="application/octet-stream" sparkle:edSignature="YHexPbmD+MU/VDzqv/CDfrlADBGgq1uq+RNbLV831TEj8Mx8ocR4WbsAfXwh9CUHCYfwuEGyQ5pNLOzQTudhBA=="/>
+        </item>
+        <item>
+            <title>1.0.5</title>
             <pubDate>Sun, 09 Aug 2026 14:43:47 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:version>287</sparkle:version>
@@ -276,6 +293,6 @@ docs(workshop): fix docs url to mirage.simplehac.cn
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: s5K5DYGZ7b62IN6rbi59WNGXrCEK2ekPSqsN+0cPNG9/TCD5tRZg/OOR/vyjsfQlx7osoUCe9yMi5978u7eUAA==
-length: 19622
+edSignature: J8MBSP67XTr7f2PUjDsT7/L7/+Vd6SjHiQURZ1OljDltaRv4pme12owsOQyTDV/ViWF5gXckyuUpwQaJsU6NAA==
+length: 20581
 -->
