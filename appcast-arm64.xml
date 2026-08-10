@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.5</title>
+            <pubDate>Mon, 10 Aug 2026 16:16:01 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>295</sparkle:version>
+            <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 35287ed7c5dea20f61f5015f6e8f3254cdbe135d
+Channel: beta
+
+feat(renderer): send subdivision to the geometric generator as a clear particle subsystem state
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-295-35287ed7c5de-macOS-arm64.zip" length="229232005" type="application/octet-stream" sparkle:edSignature="9qz3iNi3bT11ma+3Q6pfN95F+klEPQ65yNdvQWDzJeoN/UkzzYX1cm3Zkv8ldZDl5QRDIiQ7UostzEdrjKF9Dg=="/>
+        </item>
+        <item>
+            <title>1.0.5</title>
             <pubDate>Mon, 10 Aug 2026 15:47:42 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -301,6 +319,6 @@ docs(workshop): fix docs url to mirage.simplehac.cn
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 6IJ0B+aMp3V4g6X53p1kuBHV48AtGn73IIYM6jcRNeAz8yxfKTk+y6siJ8agK7xTYaeRvlDOEQOtW8dIANTGCw==
-length: 21205
+edSignature: qiNWHOIlC6uepG1j35Qls0yVZgj4TehtUsYSJXzTsGMAfqVkLFaK6yIaeEsbxlx6yNH3CqiNUBhF6czjFfd0Bg==
+length: 22284
 -->
