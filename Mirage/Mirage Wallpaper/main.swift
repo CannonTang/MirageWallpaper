@@ -7,14 +7,17 @@
 import Cocoa
 
 let mirageOpenWindowNotification = Notification.Name("cn.laobamac.Mirage.openMainWindow")
+let mirageLaunchAtLogin = ProcessInfo.processInfo.arguments.contains("--launch-at-login")
 
 if let bundleID = Bundle.main.bundleIdentifier,
    NSWorkspace.shared.runningApplications.contains(where: {
        $0.bundleIdentifier == bundleID &&
        $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
    }) {
-    DistributedNotificationCenter.default().postNotificationName(
-        mirageOpenWindowNotification, object: nil, userInfo: nil, deliverImmediately: true)
+    if !mirageLaunchAtLogin {
+        DistributedNotificationCenter.default().postNotificationName(
+            mirageOpenWindowNotification, object: nil, userInfo: nil, deliverImmediately: true)
+    }
     exit(0)
 }
 

@@ -202,6 +202,12 @@ struct GlobalSettings: Codable, Equatable {
 }
 
 class GlobalSettingsViewModel: ObservableObject {
+    private static let loginItemIdentifier = "cn.laobamac.Mirage.LoginItem"
+
+    private static var loginItemService: SMAppService {
+        SMAppService.loginItem(identifier: loginItemIdentifier)
+    }
+
     @Published var settings: GlobalSettings 
     {
         didSet {
@@ -235,6 +241,7 @@ class GlobalSettingsViewModel: ObservableObject {
     private var isUpdatingLoginItem = false
 
     init() {
+        let loginItemMigrationError = Self.migrateMainAppLoginItem()
         var initial: GlobalSettings
         if let data = UserDefaults.standard.data(forKey: "GlobalSettings"),
            let settings = try? JSONDecoder().decode(GlobalSettings.self, from: data) {
@@ -250,7 +257,7 @@ class GlobalSettingsViewModel: ObservableObject {
         if initial.shouldPauseWhenWindowCoverageExceeds {
             initial.otherApplicationFocused = .keepRunning
         }
-        let loginStatus = SMAppService.mainApp.status
+        let loginStatus = Self.loginItemService.status
         switch loginStatus {
         case .enabled, .requiresApproval:
             initial.autoStart = true
@@ -262,7 +269,7 @@ class GlobalSettingsViewModel: ObservableObject {
         self.settings = initial
         self.savedSettings = initial
         self.loginItemStatus = loginStatus
-        self.loginItemError = nil
+        self.loginItemError = loginItemMigrationError
         MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)
@@ -571,19 +578,24 @@ class GlobalSettingsViewModel: ObservableObject {
         guard !isUpdatingLoginItem else { return }
         isUpdatingLoginItem = true
         defer { isUpdatingLoginItem = false }
-        let appService = SMAppService.mainApp
+        let appService = Self.loginItemService
+        let legacyService = SMAppService.mainApp
         loginItemError = nil
         do {
             if added {
                 try Self.removeLegacyLaunchAgentIfPresent()
-            }
-            switch (added, appService.status) {
-            case (true, .notRegistered), (true, .notFound):
-                try appService.register()
-            case (false, .enabled), (false, .requiresApproval):
-                try appService.unregister()
-            default:
-                break
+                switch appService.status {
+                case .notRegistered, .notFound:
+                    try appService.register()
+                case .enabled, .requiresApproval:
+                    break
+                @unknown default:
+                    break
+                }
+                try Self.unregisterIfNeeded(legacyService)
+            } else {
+                try Self.unregisterIfNeeded(legacyService)
+                try Self.unregisterIfNeeded(appService)
             }
         } catch {
             let nsError = error as NSError
@@ -600,7 +612,7 @@ class GlobalSettingsViewModel: ObservableObject {
     }
 
     func refreshLoginItemStatus(persist: Bool = false) {
-        let status = SMAppService.mainApp.status
+        let status = Self.loginItemService.status
         if loginItemStatus != status {
             loginItemStatus = status
         }
@@ -624,6 +636,47 @@ class GlobalSettingsViewModel: ObservableObject {
 
     func openLoginItemSettings() {
         SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private static func migrateMainAppLoginItem() -> String? {
+        let helper = loginItemService
+        let legacy = SMAppService.mainApp
+        let legacyEnabled: Bool
+        switch legacy.status {
+        case .enabled, .requiresApproval:
+            legacyEnabled = true
+        case .notRegistered, .notFound:
+            legacyEnabled = false
+        @unknown default:
+            legacyEnabled = false
+        }
+        guard legacyEnabled else { return nil }
+        do {
+            switch helper.status {
+            case .notRegistered, .notFound:
+                try helper.register()
+            case .enabled, .requiresApproval:
+                break
+            @unknown default:
+                break
+            }
+            try legacy.unregister()
+            return nil
+        } catch {
+            let nsError = error as NSError
+            return L("无法迁移登录项：%@", nsError.localizedDescription)
+        }
+    }
+
+    private static func unregisterIfNeeded(_ service: SMAppService) throws {
+        switch service.status {
+        case .enabled, .requiresApproval:
+            try service.unregister()
+        case .notRegistered, .notFound:
+            break
+        @unknown default:
+            break
+        }
     }
 
     private static func removeLegacyLaunchAgentIfPresent() throws {

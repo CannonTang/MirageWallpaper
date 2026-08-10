@@ -15,7 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindowController: SettingsWindowController!
 
     var contentViewModel = ContentViewModel()
-    var wallpaperViewModel = WallpaperViewModel()
+    lazy var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
     var navigationModel = MainNavigationModel()
@@ -28,16 +28,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     static var shared = AppDelegate()
 
-    private static var isUserInitiatedLaunch: Bool = {
-        guard let service = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"],
-              service != "0", !service.isEmpty else { return true }
-        let parts = service.split(separator: ".")
-        guard parts.count >= 3, parts[0] == "application" else { return false }
-        return parts.suffix(2).allSatisfy { $0.allSatisfy(\.isNumber) }
-    }()
+    private static let isLoginItemLaunch = ProcessInfo.processInfo.arguments.contains("--launch-at-login")
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        if !globalSettingsViewModel.isFirstLaunch && !Self.isUserInitiatedLaunch {
+        LegacyWorkshopMigration.runIfNeeded()
+        if Self.isLoginItemLaunch {
             enterMenuBarMode()
         }
         setMainMenu()
@@ -108,7 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             wallpaperViewModel.restoreAllDisplays()
         }
 
-        if globalSettingsViewModel.isFirstLaunch || Self.isUserInitiatedLaunch {
+        if !Self.isLoginItemLaunch {
             openMainWindow()
         } else {
             enterMenuBarMode()
