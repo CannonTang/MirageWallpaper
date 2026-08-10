@@ -764,6 +764,7 @@ class WorkshopViewModel: ObservableObject {
 
         let task = DownloadTask(
             workshopItem: item,
+            attemptID: nil,
             state: .queued,
             startedAt: nil,
             completedAt: nil,
@@ -781,8 +782,9 @@ class WorkshopViewModel: ObservableObject {
             processDownloadQueue()
             return
         }
-        cancelledDownloadIDs.insert(item.publishedFileId)
-        SteamServiceManager.shared.cancelDownload(workshopId: item.publishedFileId)
+        guard let attemptID = downloadQueue[index].attemptID else { return }
+        cancelledDownloadIDs.insert(attemptID)
+        SteamServiceManager.shared.cancelDownload(taskId: attemptID)
     }
 
     func retryDownload(_ task: DownloadTask) {
@@ -837,24 +839,32 @@ class WorkshopViewModel: ObservableObject {
                   return false
               }) {
             let workshopId = downloadQueue[nextIndex].workshopItem.publishedFileId
+            let attemptID = UUID().uuidString
+            downloadQueue[nextIndex].attemptID = attemptID
             downloadQueue[nextIndex].state = .resolving
             downloadQueue[nextIndex].startedAt = Date()
             currentActive += 1
 
-            SteamServiceManager.shared.downloadItem(workshopId: workshopId) { [weak self] state in
+            SteamServiceManager.shared.downloadItem(
+                workshopId: workshopId,
+                taskId: attemptID
+            ) { [weak self] state in
                 guard let self else { return }
-                guard let idx = self.downloadQueue.firstIndex(where: { $0.id == workshopId }) else { return }
+                guard let idx = self.downloadQueue.firstIndex(where: {
+                    $0.id == workshopId && $0.attemptID == attemptID
+                }) else { return }
 
                 self.downloadQueue[idx].state = state
 
-                if self.cancelledDownloadIDs.contains(workshopId), case .failed = state {
-                    self.cancelledDownloadIDs.remove(workshopId)
-                    self.downloadQueue.removeAll { $0.id == workshopId }
+                if self.cancelledDownloadIDs.contains(attemptID), case .failed = state {
+                    self.cancelledDownloadIDs.remove(attemptID)
+                    self.downloadQueue.removeAll { $0.id == workshopId && $0.attemptID == attemptID }
                     self.processDownloadQueue()
                     return
                 }
 
                 if case .completed = state {
+                    self.cancelledDownloadIDs.remove(attemptID)
                     if let directory = SteamServiceManager.shared.downloadedItemDirectory(workshopId: workshopId) {
                         WallpaperLibrary.shared.recordAdded(at: directory, workshopID: workshopId)
                     }

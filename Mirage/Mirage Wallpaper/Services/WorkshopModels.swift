@@ -462,13 +462,14 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
 struct DownloadTask: Identifiable, Equatable {
     var id: String { workshopItem.publishedFileId }
     var workshopItem: WorkshopItem
+    var attemptID: String?
     var state: DownloadState
     var startedAt: Date?
     var completedAt: Date?
     var purpose: DownloadPurpose
 
     static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
-        lhs.id == rhs.id && lhs.state == rhs.state
+        lhs.id == rhs.id && lhs.attemptID == rhs.attemptID && lhs.state == rhs.state
     }
 }
 

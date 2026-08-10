@@ -22,8 +22,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     var contentDirectory: URL {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Mirage/Workshop/content/431960", directoryHint: .isDirectory)
+        let root = WallpaperLibrary.shared.managedWorkshopDirectory
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
@@ -37,6 +36,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private var requestHandlers: [String: (Bool, String?, String?) -> Void] = [:]
     private var downloadHandlers: [String: (DownloadState) -> Void] = [:]
     private var restoringSession = false
+    private var restoreRetryCount = 0
+    private var restoreRetryWorkItem: DispatchWorkItem?
     private var explicitShutdown = false
 
     private init() {}
@@ -60,6 +61,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
         ioQueue.async { [weak self] in
             guard let self else { return }
+            self.cancelRestoreRetry()
             self.restoringSession = false
             self.sendCommandOnQueue("loginQr") { success, message, errorCode in
                 if !success { self.failAuthenticationRequest(code: errorCode, detail: message) }
@@ -74,6 +76,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
         ioQueue.async { [weak self] in
             guard let self else { return }
+            self.cancelRestoreRetry()
             self.restoringSession = false
             var fields: [String: Any] = [
                 "username": username,
@@ -98,6 +101,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     func cancelLogin() {
         ioQueue.async { [weak self] in
             guard let self else { return }
+            self.cancelRestoreRetry()
             self.restoringSession = false
             self.sendCommandOnQueue("cancelLogin")
             self.updateOnMain {
@@ -114,8 +118,11 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
         sendCommand("logout") { [weak self] _, _, _ in
             guard let self else { return }
-            self.deleteKeychainValue(account: self.refreshTokenAccount(username))
-            self.deleteKeychainValue(account: self.guardDataAccount(username))
+            self.cancelRestoreRetry()
+            let statuses = [
+                self.deleteKeychainValue(account: self.refreshTokenAccount(username)),
+                self.deleteKeychainValue(account: self.guardDataAccount(username))
+            ].filter { $0 != errSecSuccess && $0 != errSecItemNotFound }
             self.savedUsername = ""
             self.restoringSession = false
             self.updateOnMain {
@@ -123,22 +130,27 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                 self.accountName = ""
                 self.loginState = .idle
                 self.authenticationState = .needsAction(L("需要登录 Steam"))
-                completion(.success(()))
+                if let status = statuses.first {
+                    completion(.failure(self.keychainError(status)))
+                } else {
+                    completion(.success(()))
+                }
             }
         }
     }
 
-    func downloadItem(workshopId: String, onProgress: @escaping (DownloadState) -> Void) {
+    func downloadItem(workshopId: String, taskId: String,
+                      onProgress: @escaping (DownloadState) -> Void) {
         ioQueue.async { [weak self] in
             guard let self else { return }
-            self.downloadHandlers[workshopId] = onProgress
+            self.downloadHandlers[taskId] = onProgress
             self.sendCommandOnQueue("download", fields: [
-                "taskId": workshopId,
+                "taskId": taskId,
                 "workshopId": workshopId,
                 "outputRoot": self.contentDirectory.path
             ]) { success, message, errorCode in
                 if !success {
-                    let handler = self.downloadHandlers.removeValue(forKey: workshopId)
+                    let handler = self.downloadHandlers.removeValue(forKey: taskId)
                     let localized = self.localizedError(code: errorCode, detail: message)
                     self.updateOnMain { handler?(.failed(localized)) }
                 }
@@ -146,8 +158,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func cancelDownload(workshopId: String) {
-        sendCommand("cancelDownload", fields: ["taskId": workshopId])
+    func cancelDownload(taskId: String) {
+        sendCommand("cancelDownload", fields: ["taskId": taskId])
     }
 
     func downloadedItemDirectory(workshopId: String) -> URL? {
@@ -243,10 +255,28 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
 
     private func restoreSessionOnQueue() {
         let username = savedUsername
-        guard !username.isEmpty, let token = keychainValue(account: refreshTokenAccount(username)) else {
+        guard !username.isEmpty else {
             updateOnMain {
                 self.authenticationState = .needsAction(L("需要登录 Steam"))
                 self.loginState = .idle
+            }
+            return
+        }
+        let token: String
+        switch keychainRead(account: refreshTokenAccount(username)) {
+        case .value(let value):
+            token = value
+        case .notFound:
+            updateOnMain {
+                self.authenticationState = .needsAction(L("需要登录 Steam"))
+                self.loginState = .idle
+            }
+            return
+        case .failure(let status):
+            let message = L("无法读取保存的 Steam 会话：%@", keychainError(status).localizedDescription)
+            updateOnMain {
+                self.loginState = .failed(message)
+                self.authenticationState = .unavailable(message)
             }
             return
         }
@@ -257,8 +287,36 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         ]) { [weak self] success, message, errorCode in
             guard let self, !success else { return }
             self.restoringSession = false
+            if self.scheduleRestoreRetryIfNeeded(code: errorCode) { return }
             self.failAuthenticationRequest(code: errorCode, detail: message)
         }
+    }
+
+    private func scheduleRestoreRetryIfNeeded(code: String?) -> Bool {
+        guard code == "AUTH_SERVICE_TEMPORARY" || code == "CONNECTION_LOST",
+              restoreRetryCount < 3 else { return false }
+        let delays: [TimeInterval] = [1, 3, 8]
+        let delay = delays[restoreRetryCount]
+        restoreRetryCount += 1
+        restoreRetryWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.restoreRetryWorkItem = nil
+            self.restoreSessionOnQueue()
+        }
+        restoreRetryWorkItem = work
+        ioQueue.asyncAfter(deadline: .now() + delay, execute: work)
+        updateOnMain {
+            self.loginState = .loggingIn
+            self.authenticationState = .checking
+        }
+        return true
+    }
+
+    private func cancelRestoreRetry() {
+        restoreRetryWorkItem?.cancel()
+        restoreRetryWorkItem = nil
+        restoreRetryCount = 0
     }
 
     private func sendCommand(_ command: String, fields: [String: Any] = [:], completion: ((Bool, String?, String?) -> Void)? = nil) {
@@ -345,26 +403,45 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             updateOnMain { self.loginState = .waitingForGuard(.email) }
         case "loggedIn":
             let resolvedUsername = username ?? savedUsername
+            let wasRestoring = restoringSession
+            let refreshTokenStatus: OSStatus
             if let token = event["refreshToken"] as? String, !token.isEmpty {
-                setKeychainValue(token, account: refreshTokenAccount(resolvedUsername))
+                refreshTokenStatus = setKeychainValue(
+                    token, account: refreshTokenAccount(resolvedUsername))
+            } else {
+                refreshTokenStatus = wasRestoring ? errSecSuccess : errSecDecode
             }
+            var auxiliaryStatus = errSecSuccess
             if let guardData = event["guardData"] as? String, !guardData.isEmpty {
-                setKeychainValue(guardData, account: guardDataAccount(resolvedUsername))
+                auxiliaryStatus = setKeychainValue(
+                    guardData, account: guardDataAccount(resolvedUsername))
             }
-            savedUsername = resolvedUsername
+            if refreshTokenStatus == errSecSuccess {
+                savedUsername = resolvedUsername
+            } else if !wasRestoring {
+                savedUsername = ""
+            }
+            let persistenceStatus = refreshTokenStatus == errSecSuccess
+                ? auxiliaryStatus
+                : refreshTokenStatus
             restoringSession = false
+            cancelRestoreRetry()
             updateOnMain {
                 self.isLoggedIn = true
                 self.accountName = resolvedUsername
                 self.loginState = .success
-                self.authenticationState = .available(L("会话已验证"))
+                if persistenceStatus == errSecSuccess {
+                    self.authenticationState = .available(L("会话已验证"))
+                } else {
+                    self.authenticationState = .unavailable(
+                        L("Steam 已登录，但无法保存会话：%@", self.keychainError(persistenceStatus).localizedDescription))
+                }
             }
         case "failed":
             var message = localizedError(code: errorCode, detail: detail)
             if restoringSession {
-                let username = savedUsername
-                deleteKeychainValue(account: refreshTokenAccount(username))
                 restoringSession = false
+                if scheduleRestoreRetryIfNeeded(code: errorCode) { return }
                 if errorCode == "AUTH_FAILED" {
                     message = L("保存的 Steam 会话已失效，请重新登录")
                 }
@@ -465,6 +542,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "NOT_AUTHENTICATED": return L("Steam 会话不可用，请重新登录")
         case "AUTH_CANCELLED": return L("登录已取消")
         case "DOWNLOAD_CANCELLED": return L("下载已取消")
+        case "DOWNLOAD_INTERRUPTED": return L("下载意外中断，请重试")
         default:
             if let detail, !detail.isEmpty { return L("Steam 服务错误：%@", detail) }
             return L("Steam 服务操作失败")
@@ -483,7 +561,18 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private func refreshTokenAccount(_ username: String) -> String { "refresh-token:\(username.lowercased())" }
     private func guardDataAccount(_ username: String) -> String { "guard-data:\(username.lowercased())" }
 
+    private enum KeychainRead {
+        case value(String)
+        case notFound
+        case failure(OSStatus)
+    }
+
     private func keychainValue(account: String) -> String? {
+        guard case .value(let value) = keychainRead(account: account) else { return nil }
+        return value
+    }
+
+    private func keychainRead(account: String) -> KeychainRead {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -492,12 +581,17 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return .notFound }
+        guard status == errSecSuccess else { return .failure(status) }
+        guard let data = result as? Data,
+              let value = String(data: data, encoding: .utf8), !value.isEmpty else {
+            return .failure(errSecDecode)
+        }
+        return .value(value)
     }
 
-    private func setKeychainValue(_ value: String, account: String) {
+    private func setKeychainValue(_ value: String, account: String) -> OSStatus {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -508,19 +602,28 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecItemNotFound {
             var item = query
             item.merge(attributes) { _, new in new }
-            SecItemAdd(item as CFDictionary, nil)
+            return SecItemAdd(item as CFDictionary, nil)
         }
+        return updateStatus
     }
 
-    private func deleteKeychainValue(account: String) {
+    private func deleteKeychainValue(account: String) -> OSStatus {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
+        return SecItemDelete(query as CFDictionary)
+    }
+
+    private func keychainError(_ status: OSStatus) -> NSError {
+        let message = SecCopyErrorMessageString(status, nil) as String? ?? L("钥匙串错误 %@", String(status))
+        return NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
+            NSLocalizedDescriptionKey: message
+        ])
     }
 }
