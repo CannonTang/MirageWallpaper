@@ -2,6 +2,12 @@
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
+
+@interface VRMemoryAssetLoader ()
+- (void)serveLoadingRequest:(AVAssetResourceLoadingRequest *)loadingRequest;
+@end
+
 @implementation VRMemoryAssetLoader {
     NSData *_data;
     dispatch_data_t _backing;
@@ -61,34 +67,74 @@
     AVAssetResourceLoadingContentInformationRequest *content =
         loadingRequest.contentInformationRequest;
     if (content != nil) {
-        content.contentType = _contentType;
+        NSArray<NSString *> *allowed = content.allowedContentTypes;
+        content.contentType = allowed.count == 0 || [allowed containsObject:_contentType]
+            ? _contentType : allowed.firstObject;
         content.contentLength = (long long)_data.length;
         content.byteRangeAccessSupported = YES;
     }
 
-    AVAssetResourceLoadingDataRequest *request = loadingRequest.dataRequest;
-    if (request != nil) {
-        long long requestedOffset = request.currentOffset != 0
-                                        ? request.currentOffset
-                                        : request.requestedOffset;
-        if (requestedOffset < 0 || (unsigned long long)requestedOffset > _data.length) {
-            [loadingRequest finishLoadingWithError:[NSError
-                errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse userInfo:nil]];
-            return YES;
-        }
-
-        NSUInteger offset = (NSUInteger)requestedOffset;
-        NSUInteger available = _data.length - offset;
-        NSUInteger length = request.requestsAllDataToEndOfResource
-                                ? available
-                                : MIN((NSUInteger)request.requestedLength, available);
-        if (length > 0) {
-            dispatch_data_t slice = dispatch_data_create_subrange(_backing, offset, length);
-            if (slice != nil) [request respondWithData:(NSData *)(id)slice];
-        }
+    if (loadingRequest.dataRequest == nil) {
+        [loadingRequest finishLoading];
+        return YES;
     }
-    [loadingRequest finishLoading];
+
+    dispatch_async(_loaderQueue, ^{
+        [self serveLoadingRequest:loadingRequest];
+    });
     return YES;
+}
+
+- (void)serveLoadingRequest:(AVAssetResourceLoadingRequest *)loadingRequest {
+    if (loadingRequest.cancelled || loadingRequest.finished) return;
+
+    AVAssetResourceLoadingDataRequest *request = loadingRequest.dataRequest;
+    if (request == nil) {
+        [loadingRequest finishLoading];
+        return;
+    }
+
+    long long currentOffset = request.currentOffset;
+    if (currentOffset < request.requestedOffset) currentOffset = request.requestedOffset;
+    if (currentOffset < 0 || (unsigned long long)currentOffset > _data.length) {
+        [loadingRequest finishLoadingWithError:[NSError
+            errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse userInfo:nil]];
+        return;
+    }
+
+    NSUInteger offset = (NSUInteger)currentOffset;
+    NSUInteger end = _data.length;
+    if (!request.requestsAllDataToEndOfResource) {
+        unsigned long long start = (unsigned long long)MAX(request.requestedOffset, 0);
+        unsigned long long length = (unsigned long long)MAX(request.requestedLength, 0);
+        unsigned long long requestedEnd = length > ULLONG_MAX - start
+            ? ULLONG_MAX : start + length;
+        end = (NSUInteger)MIN(requestedEnd, (unsigned long long)_data.length);
+    }
+
+    if (offset >= end) {
+        [loadingRequest finishLoading];
+        return;
+    }
+
+    NSUInteger length = MIN(kVRMemoryAssetChunkSize, end - offset);
+    dispatch_data_t slice = dispatch_data_create_subrange(_backing, offset, length);
+    if (slice == nil) {
+        [loadingRequest finishLoadingWithError:[NSError
+            errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotDecodeContentData userInfo:nil]];
+        return;
+    }
+
+    [request respondWithData:(NSData *)(id)slice];
+    if (loadingRequest.cancelled || loadingRequest.finished) return;
+    if (offset + length >= end) {
+        [loadingRequest finishLoading];
+        return;
+    }
+
+    dispatch_async(_loaderQueue, ^{
+        [self serveLoadingRequest:loadingRequest];
+    });
 }
 
 @end
