@@ -15,6 +15,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var loginState: SteamLoginState = .idle
     @Published private(set) var authenticationState: SteamServiceState = .unknown
     @Published private(set) var accountName = ""
+    @Published private(set) var steamId = ""
 
     var savedUsername: String {
         get { UserDefaults.standard.string(forKey: usernameKey) ?? "" }
@@ -33,7 +34,19 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private var process: Process?
     private var input: FileHandle?
     private var outputBuffer = Data()
-    private var requestHandlers: [String: (Bool, String?, String?) -> Void] = [:]
+    private enum RequestHandler {
+        case basic((Bool, String?, String?) -> Void)
+        case data((Bool, [String: Any]?, String?, String?) -> Void)
+
+        func finish(success: Bool, data: [String: Any]?, message: String?, errorCode: String?) {
+            switch self {
+            case .basic(let handler): handler(success, message, errorCode)
+            case .data(let handler): handler(success, data, message, errorCode)
+            }
+        }
+    }
+
+    private var requestHandlers: [String: RequestHandler] = [:]
     private var downloadHandlers: [String: (DownloadState) -> Void] = [:]
     private var restoringSession = false
     private var restoreRetryCount = 0
@@ -44,6 +57,46 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         let executableURL: URL
         let arguments: [String]
         let environment: [String: String]?
+    }
+
+    private struct SubscriptionPagePayload: Decodable {
+        struct Item: Decodable {
+            let workshopId: String
+            let subscribedAt: TimeInterval
+            let updatedAt: TimeInterval
+            let contentHash: String
+            let fileSize: Int64
+        }
+
+        let total: Int
+        let startIndex: Int
+        let items: [Item]
+    }
+
+    private struct SubscriptionStatesPayload: Decodable {
+        struct Item: Decodable {
+            let workshopId: String
+            let subscribed: Bool
+        }
+
+        let items: [Item]
+    }
+
+    private struct CommentPagePayload: Decodable {
+        struct Item: Decodable {
+            let commentId: String
+            let authorSteamId: String
+            let timestamp: TimeInterval
+            let text: String
+            let upvotes: Int
+            let hidden: Bool
+        }
+
+        let total: Int
+        let canPost: Bool
+        let startIndex: Int
+        let nextStartIndex: Int
+        let items: [Item]
     }
 
     private init() {}
@@ -120,6 +173,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         let username = savedUsername
         updateOnMain {
             self.isLoggedIn = false
+            self.steamId = ""
             self.loginState = .idle
         }
         sendCommand("logout") { [weak self] _, _, _ in
@@ -134,6 +188,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             self.updateOnMain {
                 self.isLoggedIn = false
                 self.accountName = ""
+                self.steamId = ""
                 self.loginState = .idle
                 self.authenticationState = .needsAction(L("需要登录 Steam"))
                 if let status = statuses.first {
@@ -171,6 +226,113 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     func downloadedItemDirectory(workshopId: String) -> URL? {
         let url = contentDirectory.appending(path: workshopId, directoryHint: .isDirectory)
         return FileManager.default.fileExists(atPath: url.appending(path: "project.json").path) ? url : nil
+    }
+
+    func fetchSubscriptions(startIndex: Int, completion: @escaping (Result<WorkshopSubscriptionPage, Error>) -> Void) {
+        sendDecodableCommand(
+            "listSubscriptions",
+            fields: ["startIndex": max(0, startIndex)],
+            as: SubscriptionPagePayload.self
+        ) { result in
+            completion(result.map { payload in
+                WorkshopSubscriptionPage(
+                    total: payload.total,
+                    startIndex: payload.startIndex,
+                    subscriptions: payload.items.map { item in
+                        WorkshopSubscription(
+                            publishedFileId: item.workshopId,
+                            subscribedAt: Date(timeIntervalSince1970: item.subscribedAt),
+                            updatedAt: Date(timeIntervalSince1970: item.updatedAt),
+                            contentHash: item.contentHash,
+                            fileSize: item.fileSize
+                        )
+                    }
+                )
+            })
+        }
+    }
+
+    func fetchSubscriptionStates(workshopIds: [String], completion: @escaping (Result<[String: Bool], Error>) -> Void) {
+        let ids = Array(Set(workshopIds)).filter { !$0.isEmpty }
+        guard !ids.isEmpty else {
+            completion(.success([:]))
+            return
+        }
+        sendDecodableCommand(
+            "checkSubscriptionStates",
+            fields: ["workshopIds": ids],
+            as: SubscriptionStatesPayload.self
+        ) { result in
+            completion(result.map { payload in
+                Dictionary(uniqueKeysWithValues: payload.items.map { ($0.workshopId, $0.subscribed) })
+            })
+        }
+    }
+
+    func subscribe(workshopId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        sendCommand("subscribe", fields: ["workshopId": workshopId]) { [weak self] success, message, errorCode in
+            guard let self else { return }
+            let result: Result<Void, Error> = success
+                ? .success(())
+                : .failure(self.requestError(code: errorCode, detail: message))
+            self.updateOnMain { completion(result) }
+        }
+    }
+
+    func unsubscribe(workshopId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        sendCommand("unsubscribe", fields: ["workshopId": workshopId]) { [weak self] success, message, errorCode in
+            guard let self else { return }
+            let result: Result<Void, Error> = success
+                ? .success(())
+                : .failure(self.requestError(code: errorCode, detail: message))
+            self.updateOnMain { completion(result) }
+        }
+    }
+
+    func fetchComments(item: WorkshopItem, startIndex: Int, count: Int = 30, completion: @escaping (Result<WorkshopCommentPage, Error>) -> Void) {
+        sendDecodableCommand(
+            "getComments",
+            fields: [
+                "workshopId": item.publishedFileId,
+                "creatorSteamId": item.creatorSteamId,
+                "startIndex": max(0, startIndex),
+                "count": min(50, max(1, count))
+            ],
+            as: CommentPagePayload.self
+        ) { result in
+            completion(result.map { payload in
+                WorkshopCommentPage(
+                    total: payload.total,
+                    canPost: payload.canPost,
+                    startIndex: payload.startIndex,
+                    nextStartIndex: payload.nextStartIndex,
+                    comments: payload.items.map { item in
+                        WorkshopComment(
+                            id: item.commentId,
+                            authorSteamId: item.authorSteamId,
+                            createdAt: Date(timeIntervalSince1970: item.timestamp),
+                            text: item.text,
+                            upvotes: item.upvotes,
+                            isHidden: item.hidden
+                        )
+                    }
+                )
+            })
+        }
+    }
+
+    func postComment(item: WorkshopItem, text: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        sendCommand("postComment", fields: [
+            "workshopId": item.publishedFileId,
+            "creatorSteamId": item.creatorSteamId,
+            "text": text
+        ]) { [weak self] success, message, errorCode in
+            guard let self else { return }
+            let result: Result<Void, Error> = success
+                ? .success(())
+                : .failure(self.requestError(code: errorCode, detail: message))
+            self.updateOnMain { completion(result) }
+        }
     }
 
     func shutdown() {
@@ -355,7 +517,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         var payload = fields.filter { !($0.value is NSNull) }
         payload["command"] = command
         payload["requestId"] = requestId
-        if let completion { requestHandlers[requestId] = completion }
+        if let completion { requestHandlers[requestId] = .basic(completion) }
         guard JSONSerialization.isValidJSONObject(payload),
               let data = try? JSONSerialization.data(withJSONObject: payload),
               var line = String(data: data, encoding: .utf8) else {
@@ -370,6 +532,60 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             requestHandlers.removeValue(forKey: requestId)
             completion?(false, error.localizedDescription, nil)
         }
+    }
+
+    private func sendDataCommand(_ command: String, fields: [String: Any] = [:], completion: @escaping (Bool, [String: Any]?, String?, String?) -> Void) {
+        ioQueue.async { [weak self] in
+            self?.sendDataCommandOnQueue(command, fields: fields, completion: completion)
+        }
+    }
+
+    private func sendDataCommandOnQueue(_ command: String, fields: [String: Any] = [:], completion: @escaping (Bool, [String: Any]?, String?, String?) -> Void) {
+        guard process?.isRunning == true, let input else {
+            completion(false, nil, L("Steam 服务组件不可用"), nil)
+            return
+        }
+        let requestId = UUID().uuidString
+        var payload = fields.filter { !($0.value is NSNull) }
+        payload["command"] = command
+        payload["requestId"] = requestId
+        requestHandlers[requestId] = .data(completion)
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              var line = String(data: data, encoding: .utf8) else {
+            requestHandlers.removeValue(forKey: requestId)
+            completion(false, nil, L("Steam 服务请求无法编码"), nil)
+            return
+        }
+        line.append("\n")
+        do {
+            try input.write(contentsOf: Data(line.utf8))
+        } catch {
+            requestHandlers.removeValue(forKey: requestId)
+            completion(false, nil, error.localizedDescription, nil)
+        }
+    }
+
+    private func sendDecodableCommand<T: Decodable>(_ command: String, fields: [String: Any], as type: T.Type, completion: @escaping (Result<T, Error>) -> Void) {
+        sendDataCommand(command, fields: fields) { [weak self] success, payload, message, errorCode in
+            guard let self else { return }
+            let result: Result<T, Error>
+            if success {
+                result = Result { try self.decodePayload(payload, as: type) }
+            } else {
+                result = .failure(self.requestError(code: errorCode, detail: message))
+            }
+            self.updateOnMain { completion(result) }
+        }
+    }
+
+    private func decodePayload<T: Decodable>(_ payload: [String: Any]?, as type: T.Type) throws -> T {
+        guard let payload,
+              JSONSerialization.isValidJSONObject(payload) else {
+            throw SteamServiceRequestError(code: "MALFORMED_RESPONSE", message: L("Steam 服务返回了无效数据"))
+        }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     private func consumeOutput(_ data: Data) {
@@ -391,7 +607,12 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "response":
             guard let requestId = event["requestId"] as? String,
                   let handler = requestHandlers.removeValue(forKey: requestId) else { return }
-            handler(event["success"] as? Bool == true, event["message"] as? String, event["errorCode"] as? String)
+            handler.finish(
+                success: event["success"] as? Bool == true,
+                data: event["data"] as? [String: Any],
+                message: event["message"] as? String,
+                errorCode: event["errorCode"] as? String
+            )
         case "authState":
             handleAuthEvent(event)
         case "downloadState":
@@ -404,6 +625,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private func handleAuthEvent(_ event: [String: Any]) {
         guard let state = event["state"] as? String else { return }
         let username = event["accountName"] as? String
+        let steamId = event["steamId"] as? String ?? ""
         let detail = event["message"] as? String
         let errorCode = event["errorCode"] as? String
         switch state {
@@ -450,6 +672,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             updateOnMain {
                 self.isLoggedIn = true
                 self.accountName = resolvedUsername
+                self.steamId = steamId
                 self.loginState = .success
                 if persistenceStatus == errSecSuccess {
                     self.authenticationState = .available(L("会话已验证"))
@@ -469,6 +692,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             }
             updateOnMain {
                 self.isLoggedIn = false
+                self.steamId = ""
                 self.loginState = .failed(message)
                 self.authenticationState = .unavailable(message)
             }
@@ -479,6 +703,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                 : localizedError(code: errorCode, detail: detail)
             updateOnMain {
                 self.isLoggedIn = false
+                self.steamId = ""
                 self.loginState = .idle
                 self.authenticationState = .needsAction(message)
             }
@@ -545,10 +770,13 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             "Steam service terminated: reason=\(reasonText) status=\(status)",
             source: "steam-service"
         )
-        for request in requests { request(false, L("Steam 服务连接已中断"), "CONNECTION_LOST") }
+        for request in requests {
+            request.finish(success: false, data: nil, message: L("Steam 服务连接已中断"), errorCode: "CONNECTION_LOST")
+        }
         updateOnMain {
             self.isAvailable = false
             self.isLoggedIn = false
+            self.steamId = ""
             self.loginState = .failed(message)
             self.authenticationState = .unavailable(L("Steam 服务组件不可用"))
             for handler in handlers { handler(.failed(L("Steam 服务连接已中断"))) }
@@ -559,6 +787,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         let message = localizedError(code: code, detail: detail)
         updateOnMain {
             self.isLoggedIn = false
+            self.steamId = ""
             self.loginState = .failed(message)
             self.authenticationState = .unavailable(message)
         }
@@ -581,10 +810,22 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "AUTH_CANCELLED": return L("登录已取消")
         case "DOWNLOAD_CANCELLED": return L("下载已取消")
         case "DOWNLOAD_INTERRUPTED": return L("下载意外中断，请重试")
+        case "SUBSCRIPTIONS_UNAVAILABLE": return L("无法获取 Steam 已订阅作品")
+        case "SUBSCRIPTION_STATUS_UNAVAILABLE": return L("无法确认 Steam 订阅状态")
+        case "SUBSCRIBE_FAILED": return L("订阅失败，请稍后重试")
+        case "UNSUBSCRIBE_FAILED": return L("取消订阅失败，请稍后重试")
+        case "COMMENTS_UNAVAILABLE": return L("无法加载 Steam 评论")
+        case "COMMENT_POST_FAILED": return L("评论发布失败，请稍后重试")
+        case "INVALID_WORKSHOP_ID", "INVALID_COMMENT_REQUEST": return L("创意工坊作品信息无效")
+        case "STEAM_REQUEST_FAILED": return L("Steam 未完成该请求，请稍后重试")
         default:
             if let detail, !detail.isEmpty { return L("Steam 服务错误：%@", detail) }
             return L("Steam 服务操作失败")
         }
+    }
+
+    private func requestError(code: String?, detail: String?) -> SteamServiceRequestError {
+        SteamServiceRequestError(code: code, message: localizedError(code: code, detail: detail))
     }
 
     private func int64(_ value: Any?) -> Int64 {

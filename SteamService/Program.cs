@@ -95,8 +95,144 @@ while (running)
             await StopAuthenticationAsync(session, authenticationCancellation, authenticationTask).ConfigureAwait(false);
             authenticationCancellation = null;
             authenticationTask = null;
-            writer.AuthState(session.IsLoggedIn ? "loggedIn" : "loggedOut", session.IsLoggedIn ? session.AccountName : null);
+            writer.AuthState(session.IsLoggedIn ? "loggedIn" : "loggedOut", session.IsLoggedIn ? session.AccountName : null, steamId: session.IsLoggedIn ? session.SteamId : null);
             writer.Response(command.RequestId, true);
+            break;
+        case "listSubscriptions":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            var subscriptionStart = Math.Max(0, command.StartIndex ?? 0);
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                var page = await session.GetSubscriptionsAsync(subscriptionStart, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new
+                {
+                    total = page.TotalResults,
+                    startIndex = page.StartIndex,
+                    items = page.Files.Select(file => new
+                    {
+                        workshopId = file.PublishedFileId.ToString(),
+                        subscribedAt = file.SubscribedAt,
+                        updatedAt = file.UpdatedAt,
+                        contentHash = file.ContentHash.ToString(),
+                        fileSize = file.FileSize,
+                        appId = file.AppId
+                    })
+                });
+            }).ConfigureAwait(false);
+            break;
+        case "checkSubscriptionStates":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            var subscriptionIds = ParseWorkshopIds(command.WorkshopIds);
+            if (subscriptionIds.Count == 0 && command.WorkshopIds?.Count > 0)
+            {
+                writer.Response(command.RequestId, false, "Subscription identifiers are invalid.", "INVALID_WORKSHOP_ID");
+                break;
+            }
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                var states = await session.GetSubscriptionStatesAsync(subscriptionIds, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new
+                {
+                    items = subscriptionIds.Select(workshopId => new
+                    {
+                        workshopId = workshopId.ToString(),
+                        subscribed = states.TryGetValue(workshopId, out var subscribed) && subscribed
+                    })
+                });
+            }).ConfigureAwait(false);
+            break;
+        case "subscribe":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            if (!TryWorkshopId(command.WorkshopId, out var subscribeId))
+            {
+                writer.Response(command.RequestId, false, "The workshop identifier is invalid.", "INVALID_WORKSHOP_ID");
+                break;
+            }
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                await session.SubscribeAsync(subscribeId, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new { workshopId = subscribeId.ToString(), subscribed = true });
+            }).ConfigureAwait(false);
+            break;
+        case "unsubscribe":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            if (!TryWorkshopId(command.WorkshopId, out var unsubscribeId))
+            {
+                writer.Response(command.RequestId, false, "The workshop identifier is invalid.", "INVALID_WORKSHOP_ID");
+                break;
+            }
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                await session.UnsubscribeAsync(unsubscribeId, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new { workshopId = unsubscribeId.ToString(), subscribed = false });
+            }).ConfigureAwait(false);
+            break;
+        case "getComments":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            if (!TryWorkshopId(command.WorkshopId, out var commentWorkshopId) || !TryWorkshopId(command.CreatorSteamId, out var commentCreatorSteamId))
+            {
+                writer.Response(command.RequestId, false, "Comment parameters are invalid.", "INVALID_COMMENT_REQUEST");
+                break;
+            }
+            var commentStart = Math.Max(0, command.StartIndex ?? 0);
+            var commentCount = Math.Clamp(command.Count ?? 30, 1, 50);
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                var page = await session.GetCommentsAsync(commentWorkshopId, commentCreatorSteamId, commentStart, commentCount, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new
+                {
+                    total = page.TotalCount,
+                    canPost = page.CanPost,
+                    startIndex = commentStart,
+                    nextStartIndex = page.NextStartIndex,
+                    items = page.Comments.Select(comment => new
+                    {
+                        commentId = comment.CommentId.ToString(),
+                        authorSteamId = comment.AuthorSteamId.ToString(),
+                        timestamp = comment.Timestamp,
+                        text = comment.Text,
+                        upvotes = comment.Upvotes,
+                        hidden = comment.Hidden
+                    })
+                });
+            }).ConfigureAwait(false);
+            break;
+        case "postComment":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            if (!TryWorkshopId(command.WorkshopId, out var postWorkshopId) || !TryWorkshopId(command.CreatorSteamId, out var postCreatorSteamId) || string.IsNullOrWhiteSpace(command.Text))
+            {
+                writer.Response(command.RequestId, false, "Comment parameters are invalid.", "INVALID_COMMENT_REQUEST");
+                break;
+            }
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                var commentId = await session.PostCommentAsync(postWorkshopId, postCreatorSteamId, command.Text, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new { commentId = commentId.ToString() });
+            }).ConfigureAwait(false);
             break;
         case "download":
             if (!session.IsLoggedIn)
@@ -233,6 +369,37 @@ static async Task StopDownloadsAsync(ConcurrentDictionary<string, DownloadOperat
     foreach (var operation in active) operation.Cancel();
     if (active.Length == 0) return;
     try { await Task.WhenAll(active.Select(operation => operation.Task)).ConfigureAwait(false); } catch { }
+}
+
+static async Task RunRequestAsync(string? requestId, ProtocolWriter writer, Func<Task> action)
+{
+    try
+    {
+        await action().ConfigureAwait(false);
+    }
+    catch (AsyncJobFailedException)
+    {
+        writer.Response(requestId, false, "Steam did not complete the request.", "STEAM_REQUEST_FAILED");
+    }
+    catch (Exception error)
+    {
+        writer.Response(requestId, false, UserMessage(error), ErrorCode(error));
+    }
+}
+
+static bool TryWorkshopId(string? value, out ulong workshopId)
+{
+    return ulong.TryParse(value, out workshopId) && workshopId > 0;
+}
+
+static List<ulong> ParseWorkshopIds(IEnumerable<string>? values)
+{
+    if (values == null) return [];
+    return values
+        .Select(value => ulong.TryParse(value, out var workshopId) ? workshopId : 0)
+        .Where(workshopId => workshopId > 0)
+        .Distinct()
+        .ToList();
 }
 
 static string UserMessage(Exception error)

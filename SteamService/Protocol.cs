@@ -21,6 +21,11 @@ internal sealed class ServiceCommand
     public string? GuardData { get; set; }
     public string? Code { get; set; }
     public string? OutputRoot { get; set; }
+    public List<string>? WorkshopIds { get; set; }
+    public string? CreatorSteamId { get; set; }
+    public string? Text { get; set; }
+    public int? StartIndex { get; set; }
+    public int? Count { get; set; }
 }
 
 internal sealed class ProtocolWriter
@@ -42,14 +47,14 @@ internal sealed class ProtocolWriter
         }
     }
 
-    public void Response(string? requestId, bool success, string? message = null, string? errorCode = null)
+    public void Response(string? requestId, bool success, string? message = null, string? errorCode = null, object? data = null)
     {
-        Send(new { type = "response", requestId, success, message, errorCode });
+        Send(new { type = "response", requestId, success, message, errorCode, data });
     }
 
-    public void AuthState(string state, string? accountName = null, string? message = null, string? challengeUrl = null, string? refreshToken = null, string? guardData = null, string? errorCode = null)
+    public void AuthState(string state, string? accountName = null, string? message = null, string? challengeUrl = null, string? refreshToken = null, string? guardData = null, string? errorCode = null, string? steamId = null)
     {
-        Send(new { type = "authState", state, accountName, message, challengeUrl, refreshToken, guardData, errorCode });
+        Send(new { type = "authState", state, accountName, message, challengeUrl, refreshToken, guardData, errorCode, steamId });
     }
 
     public void DownloadState(string taskId, string state, long receivedBytes = 0, long totalBytes = 0, double bytesPerSecond = 0, double? etaSeconds = null, string? outputPath = null, string? message = null, string? errorCode = null)

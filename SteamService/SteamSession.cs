@@ -9,12 +9,14 @@ using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
 using SteamKit2.Internal;
+using SteamKit2.WebUI.Internal;
 
 namespace MirageSteamService;
 
 internal sealed class SteamSession : IAsyncDisposable
 {
     public const uint AppId = 431960;
+    private const uint WorkshopSubscriptionListType = 1;
 
     private readonly ProtocolWriter writer;
     private readonly SteamClient client;
@@ -23,6 +25,7 @@ internal sealed class SteamSession : IAsyncDisposable
     private readonly SteamApps apps;
     private readonly SteamContent content;
     private readonly PublishedFile publishedFiles;
+    private readonly Community community;
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim authGate = new(1, 1);
     private readonly SemaphoreSlim appInfoGate = new(1, 1);
@@ -38,6 +41,7 @@ internal sealed class SteamSession : IAsyncDisposable
 
     public bool IsLoggedIn { get; private set; }
     public string AccountName { get; private set; } = "";
+    public string SteamId { get; private set; } = "";
     public SteamClient Client => client;
     public SteamApps Apps => apps;
     public SteamContent Content => content;
@@ -66,7 +70,9 @@ internal sealed class SteamSession : IAsyncDisposable
         user = client.GetHandler<SteamUser>()!;
         apps = client.GetHandler<SteamApps>()!;
         content = client.GetHandler<SteamContent>()!;
-        publishedFiles = client.GetHandler<SteamUnifiedMessages>()!.CreateService<PublishedFile>();
+        var unifiedMessages = client.GetHandler<SteamUnifiedMessages>()!;
+        publishedFiles = unifiedMessages.CreateService<PublishedFile>();
+        community = unifiedMessages.CreateService<Community>();
         callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
         callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
         callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
@@ -83,7 +89,7 @@ internal sealed class SteamSession : IAsyncDisposable
             await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
             await LogOnAsync(username, refreshToken, cancellationToken).ConfigureAwait(false);
             AccountName = username;
-            writer.AuthState("loggedIn", username);
+            writer.AuthState("loggedIn", username, steamId: SteamId);
         }
         finally
         {
@@ -117,7 +123,7 @@ internal sealed class SteamSession : IAsyncDisposable
             var result = await PollCredentialsResultAsync(session, loginAuthenticator, authCancellation.Token).ConfigureAwait(false);
             await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
             AccountName = result.AccountName;
-            writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData ?? guardData);
+            writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData ?? guardData, steamId: SteamId);
         }
         finally
         {
@@ -150,7 +156,7 @@ internal sealed class SteamSession : IAsyncDisposable
             writer.AuthState("authenticating", result.AccountName);
             await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
             AccountName = result.AccountName;
-            writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData);
+            writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData, steamId: SteamId);
         }
         finally
         {
@@ -270,11 +276,155 @@ internal sealed class SteamSession : IAsyncDisposable
         return (selected, auth.Token);
     }
 
+    public async Task<SubscriptionPage> GetSubscriptionsAsync(int startIndex, CancellationToken cancellationToken)
+    {
+        const int pageSize = 50;
+        if (!ulong.TryParse(SteamId, out var steamId))
+        {
+            throw new ServiceException("NOT_AUTHENTICATED", "The Steam session has no valid Steam ID.");
+        }
+        var normalizedStart = Math.Max(0, startIndex);
+        var request = new CPublishedFile_GetUserFiles_Request
+        {
+            steamid = steamId,
+            appid = AppId,
+            page = checked((uint)(normalizedStart / pageSize + 1)),
+            numperpage = pageSize,
+            type = "mysubscriptions"
+        };
+        var response = await publishedFiles.GetUserFiles(request)
+            .ToTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccess(response.Result, "SUBSCRIPTIONS_UNAVAILABLE");
+        var files = response.Body.publishedfiledetails
+            .Where(file => file.consumer_appid == AppId)
+            .Select(file => new SubscribedFile(
+                file.publishedfileid,
+                file.time_subscribed,
+                file.time_updated,
+                file.hcontent_file,
+                file.file_size,
+                file.consumer_appid))
+            .ToArray();
+        return new SubscriptionPage(
+            checked((int)response.Body.total),
+            normalizedStart,
+            files);
+    }
+
+    public async Task<IReadOnlyDictionary<ulong, bool>> GetSubscriptionStatesAsync(IEnumerable<ulong> workshopIds, CancellationToken cancellationToken)
+    {
+        var states = new Dictionary<ulong, bool>();
+        foreach (var chunk in workshopIds.Distinct().Chunk(100))
+        {
+            var request = new CPublishedFile_AreFilesInSubscriptionList_Request { appid = AppId, listtype = WorkshopSubscriptionListType };
+            request.publishedfileids.AddRange(chunk);
+            var response = await publishedFiles.AreFilesInSubscriptionList(request)
+                .ToTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            EnsureSuccess(response.Result, "SUBSCRIPTION_STATUS_UNAVAILABLE");
+            foreach (var item in response.Body.files)
+            {
+                states[item.publishedfileid] = item.inlist;
+            }
+        }
+        return states;
+    }
+
+    public async Task SubscribeAsync(ulong workshopId, CancellationToken cancellationToken)
+    {
+        var request = new CPublishedFile_Subscribe_Request
+        {
+            publishedfileid = workshopId,
+            list_type = WorkshopSubscriptionListType,
+            appid = checked((int)AppId),
+            notify_client = true,
+            include_dependencies = true
+        };
+        var response = await publishedFiles.Subscribe(request)
+            .ToTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccess(response.Result, "SUBSCRIBE_FAILED");
+    }
+
+    public async Task UnsubscribeAsync(ulong workshopId, CancellationToken cancellationToken)
+    {
+        var request = new CPublishedFile_Unsubscribe_Request
+        {
+            publishedfileid = workshopId,
+            list_type = WorkshopSubscriptionListType,
+            appid = checked((int)AppId),
+            notify_client = true
+        };
+        var response = await publishedFiles.Unsubscribe(request)
+            .ToTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccess(response.Result, "UNSUBSCRIBE_FAILED");
+    }
+
+    public async Task<CommentPage> GetCommentsAsync(ulong workshopId, ulong creatorSteamId, int startIndex, int count, CancellationToken cancellationToken)
+    {
+        var request = new CCommunity_GetCommentThread_Request
+        {
+            steamid = creatorSteamId,
+            comment_thread_type = (int)ECommentThreadType.k_ECommentThreadTypePublishedFile_Public,
+            gidfeature = workshopId,
+            start = Math.Max(0, startIndex),
+            count = Math.Clamp(count, 1, 50),
+            upvoters = 3,
+            oldest_first = false
+        };
+        var response = await community.GetCommentThread(request)
+            .ToTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccess(response.Result, "COMMENTS_UNAVAILABLE");
+        var receivedComments = response.Body.comments;
+        var comments = receivedComments
+            .Where(comment => !comment.deleted)
+            .Select(comment => new SteamComment(
+                comment.gidcomment,
+                comment.steamid,
+                comment.timestamp,
+                comment.text,
+                comment.upvotes,
+                comment.hidden || comment.hidden_by_user))
+            .ToArray();
+        return new CommentPage(
+            response.Body.total_count,
+            response.Body.can_post,
+            startIndex + receivedComments.Count,
+            comments);
+    }
+
+    public async Task<ulong> PostCommentAsync(ulong workshopId, ulong creatorSteamId, string text, CancellationToken cancellationToken)
+    {
+        var request = new CCommunity_PostCommentToThread_Request
+        {
+            steamid = creatorSteamId,
+            comment_thread_type = (int)ECommentThreadType.k_ECommentThreadTypePublishedFile_Public,
+            gidfeature = workshopId,
+            text = text,
+            suppress_notifications = false
+        };
+        var response = await community.PostCommentToThread(request)
+            .ToTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccess(response.Result, "COMMENT_POST_FAILED");
+        return response.Body.gidcomment;
+    }
+
     public void Logout()
     {
         CancelAuthentication();
         IsLoggedIn = false;
         AccountName = "";
+        SteamId = "";
         appInfo = null;
         cdnTokens.Clear();
         if (client.IsConnected) user.LogOff();
@@ -322,7 +472,16 @@ internal sealed class SteamSession : IAsyncDisposable
         });
         var result = await loggedOnSource.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         if (result.Result != EResult.OK) throw new ServiceException("AUTH_FAILED", result.Result.ToString());
+        SteamId = result.ClientSteamID?.ConvertToUInt64().ToString() ?? "";
         IsLoggedIn = true;
+    }
+
+    private static void EnsureSuccess(EResult result, string code)
+    {
+        if (result != EResult.OK)
+        {
+            throw new ServiceException(code, result.ToString());
+        }
     }
 
     private async Task RunCallbacksAsync()
@@ -358,6 +517,8 @@ internal sealed class SteamSession : IAsyncDisposable
         if (IsLoggedIn && !shuttingDown)
         {
             IsLoggedIn = false;
+            AccountName = "";
+            SteamId = "";
             writer.AuthState("loggedOut", message: "Steam connection closed.", errorCode: "CONNECTION_LOST");
         }
     }
@@ -371,6 +532,8 @@ internal sealed class SteamSession : IAsyncDisposable
     {
         if (shuttingDown || !IsLoggedIn) return;
         IsLoggedIn = false;
+        AccountName = "";
+        SteamId = "";
         writer.AuthState("loggedOut", message: callback.Result.ToString());
     }
 
@@ -390,3 +553,30 @@ internal sealed class SteamSession : IAsyncDisposable
         appInfoGate.Dispose();
     }
 }
+
+internal sealed record SubscriptionPage(
+    int TotalResults,
+    int StartIndex,
+    IReadOnlyList<SubscribedFile> Files);
+
+internal sealed record SubscribedFile(
+    ulong PublishedFileId,
+    uint SubscribedAt,
+    uint UpdatedAt,
+    ulong ContentHash,
+    ulong FileSize,
+    uint AppId);
+
+internal sealed record SteamComment(
+    ulong CommentId,
+    ulong AuthorSteamId,
+    uint Timestamp,
+    string Text,
+    int Upvotes,
+    bool Hidden);
+
+internal sealed record CommentPage(
+    int TotalCount,
+    bool CanPost,
+    int NextStartIndex,
+    IReadOnlyList<SteamComment> Comments);

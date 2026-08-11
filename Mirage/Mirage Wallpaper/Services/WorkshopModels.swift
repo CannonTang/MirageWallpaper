@@ -123,6 +123,25 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
             ageRating: nil
         )
     }
+
+    static func unavailableSubscription(id: String) -> WorkshopItem {
+        WorkshopItem(
+            publishedFileId: id,
+            title: L("不可用的创意工坊作品 %@", id),
+            itemDescription: L("Steam 未返回该订阅作品的可用详情。"),
+            previewImageURL: nil,
+            tags: [],
+            subscriptions: 0,
+            favorited: 0,
+            views: 0,
+            fileSize: 0,
+            timeCreated: .distantPast,
+            timeUpdated: .distantPast,
+            creatorSteamId: "",
+            wallpaperType: "unsupported",
+            ageRating: nil
+        )
+    }
 }
 
 // MARK: - Age Rating
@@ -475,6 +494,7 @@ struct DownloadTask: Identifiable, Equatable {
 
 enum DownloadPurpose: Equatable {
     case wallpaper
+    case subscription
     case presetDependency
 }
 
@@ -511,6 +531,52 @@ struct DownloadProgress: Equatable {
         guard totalBytes > 0 else { return 0 }
         return min(1, max(0, Double(receivedBytes) / Double(totalBytes)))
     }
+}
+
+struct WorkshopSubscription: Identifiable, Equatable {
+    let publishedFileId: String
+    let subscribedAt: Date
+    let updatedAt: Date
+    let contentHash: String
+    let fileSize: Int64
+
+    var id: String { publishedFileId }
+}
+
+struct WorkshopSubscriptionPage: Equatable {
+    let total: Int
+    let startIndex: Int
+    let subscriptions: [WorkshopSubscription]
+}
+
+enum WorkshopSubscriptionState: Equatable {
+    case unknown
+    case subscribed
+    case unsubscribed
+}
+
+struct WorkshopComment: Identifiable, Equatable {
+    let id: String
+    let authorSteamId: String
+    let createdAt: Date
+    let text: String
+    let upvotes: Int
+    let isHidden: Bool
+}
+
+struct WorkshopCommentPage: Equatable {
+    let total: Int
+    let canPost: Bool
+    let startIndex: Int
+    let nextStartIndex: Int
+    let comments: [WorkshopComment]
+}
+
+struct SteamServiceRequestError: LocalizedError, Equatable {
+    let code: String?
+    let message: String
+
+    var errorDescription: String? { message }
 }
 
 // MARK: - Steam Setup State
