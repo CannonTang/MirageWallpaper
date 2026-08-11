@@ -186,13 +186,11 @@ final class WallpaperLibrary {
 
     var librarySources: [WallpaperLibrarySource] {
         var result: [WallpaperLibrarySource] = []
-        var paths = Set<String>()
 
         func append(_ role: WallpaperLibrarySourceRole, _ title: String, _ detail: String, _ url: URL, always: Bool = false) {
             let normalized = url.standardizedFileURL
             let exists = fm.fileExists(atPath: normalized.path)
             guard always || exists else { return }
-            guard paths.insert(normalized.path).inserted else { return }
             result.append(WallpaperLibrarySource(role: role, title: title, detail: detail, url: normalized, exists: exists))
         }
 
@@ -211,8 +209,15 @@ final class WallpaperLibrary {
         return result
     }
 
+    private var scanSources: [WallpaperLibrarySource] {
+        var paths = Set<String>()
+        return librarySources.filter { source in
+            source.exists && paths.insert(source.url.path).inserted
+        }
+    }
+
     private var sourceDirectories: [URL] {
-        librarySources.filter(\.exists).map(\.url)
+        scanSources.map(\.url)
     }
 
     private func containsWorkshopWallpaper(in directory: URL) -> Bool {
@@ -232,7 +237,7 @@ final class WallpaperLibrary {
     func allWallpaperURLs() -> [URL] {
         var result: [URL] = []
         var seenWorkshopIDs = Set<String>()
-        for source in librarySources where source.exists {
+        for source in scanSources {
             let dir = source.url
             guard let contents = try? fm.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: [.isDirectoryKey],

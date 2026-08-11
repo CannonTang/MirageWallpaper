@@ -760,6 +760,7 @@
 "Steam 服务启动失败：%@" = "Failed to start the Steam service: %@";
 "Steam 服务请求无法编码" = "The Steam service request could not be encoded";
 "Steam 服务意外退出（状态 %@）" = "The Steam service exited unexpectedly (status %@)";
+"Steam 服务被信号终止（信号 %@）" = "The Steam service was terminated by a signal (signal %@)";
 "Steam 服务连接已中断" = "The Steam service connection was interrupted";
 "Steam 登录失败，请检查账户信息或重新扫码" = "Steam sign-in failed. Check the account details or scan a new QR code.";
 "Steam 认证服务暂时未响应，请稍后重试" = "Steam authentication is temporarily unavailable. Try again later.";

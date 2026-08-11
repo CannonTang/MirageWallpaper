@@ -40,6 +40,12 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private var restoreRetryWorkItem: DispatchWorkItem?
     private var explicitShutdown = false
 
+    private struct LaunchConfiguration {
+        let executableURL: URL
+        let arguments: [String]
+        let environment: [String: String]?
+    }
+
     private init() {}
 
     func start() {
@@ -185,7 +191,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
 
     private func startOnQueue() {
         guard process?.isRunning != true else { return }
-        guard let executable = serviceExecutableURL() else {
+        guard let launch = serviceLaunchConfiguration() else {
             updateOnMain {
                 self.isAvailable = false
                 self.authenticationState = .unavailable(L("Steam 服务组件不可用"))
@@ -196,13 +202,17 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.executableURL = executable
+        process.executableURL = launch.executableURL
+        process.arguments = launch.arguments
+        process.environment = launch.environment
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         process.terminationHandler = { [weak self] process in
+            let status = process.terminationStatus
+            let reason = process.terminationReason
             self?.ioQueue.async {
-                self?.handleTermination(status: process.terminationStatus)
+                self?.handleTermination(status: status, reason: reason)
             }
         }
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -234,10 +244,12 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func serviceExecutableURL() -> URL? {
+    private func serviceLaunchConfiguration() -> LaunchConfiguration? {
         if let configured = ProcessInfo.processInfo.environment["MIRAGE_STEAM_SERVICE_PATH"], !configured.isEmpty {
             let url = URL(fileURLWithPath: configured)
-            if FileManager.default.isExecutableFile(atPath: url.path) { return url }
+            if FileManager.default.isExecutableFile(atPath: url.path) {
+                return LaunchConfiguration(executableURL: url, arguments: [], environment: nil)
+            }
         }
         #if arch(arm64)
         let architecture = "arm64"
@@ -246,10 +258,19 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         #else
         return nil
         #endif
-        return Bundle.main.url(
-            forResource: "MirageSteamService",
-            withExtension: nil,
-            subdirectory: "SteamService/\(architecture)"
+        guard let root = Bundle.main.resourceURL?
+            .appending(path: "SteamService/\(architecture)", directoryHint: .isDirectory) else { return nil }
+        let runtime = root.appending(path: "runtime", directoryHint: .isDirectory)
+        let executable = runtime.appending(path: "dotnet")
+        let assembly = root.appending(path: "app/MirageSteamService.dll")
+        guard FileManager.default.isExecutableFile(atPath: executable.path),
+              FileManager.default.fileExists(atPath: assembly.path) else { return nil }
+        var environment = ProcessInfo.processInfo.environment
+        environment["DOTNET_ROOT"] = runtime.path
+        return LaunchConfiguration(
+            executableURL: executable,
+            arguments: [assembly.path],
+            environment: environment
         )
     }
 
@@ -498,7 +519,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         updateOnMain { handler(next) }
     }
 
-    private func handleTermination(status: Int32) {
+    private func handleTermination(status: Int32, reason: Process.TerminationReason) {
         process = nil
         input = nil
         outputBuffer.removeAll(keepingCapacity: true)
@@ -507,11 +528,28 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         downloadHandlers.removeAll()
         requestHandlers.removeAll()
         guard !explicitShutdown else { return }
+        let reasonText: String
+        let message: String
+        switch reason {
+        case .exit:
+            reasonText = "exit"
+            message = L("Steam 服务意外退出（状态 %@）", String(status))
+        case .uncaughtSignal:
+            reasonText = "uncaughtSignal"
+            message = L("Steam 服务被信号终止（信号 %@）", String(status))
+        @unknown default:
+            reasonText = "unknown"
+            message = L("Steam 服务意外退出（状态 %@）", String(status))
+        }
+        MirageLogService.shared.append(
+            "Steam service terminated: reason=\(reasonText) status=\(status)",
+            source: "steam-service"
+        )
         for request in requests { request(false, L("Steam 服务连接已中断"), "CONNECTION_LOST") }
         updateOnMain {
             self.isAvailable = false
             self.isLoggedIn = false
-            self.loginState = .failed(L("Steam 服务意外退出（状态 %@）", String(status)))
+            self.loginState = .failed(message)
             self.authenticationState = .unavailable(L("Steam 服务组件不可用"))
             for handler in handlers { handler(.failed(L("Steam 服务连接已中断"))) }
         }

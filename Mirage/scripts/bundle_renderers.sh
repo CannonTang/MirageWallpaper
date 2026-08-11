@@ -6,8 +6,10 @@ ROOT="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SIGN_IDENTITY="${3:--}"
 
 SIGN_ARGS=(--timestamp=none)
+RUNTIME_SIGN_ARGS=(--timestamp=none --options runtime)
 if [ "$SIGN_IDENTITY" != "-" ]; then
     SIGN_ARGS=(--timestamp --options runtime)
+    RUNTIME_SIGN_ARGS=(--timestamp --options runtime)
 fi
 
 sign_item() {
@@ -15,7 +17,11 @@ sign_item() {
 }
 
 sign_bundle() {
-    codesign --force --deep "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$1"
+    codesign --force "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$1"
+}
+
+sign_runtime_item() {
+    codesign --force "${RUNTIME_SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$1"
 }
 
 # 共享的 CMake preset 命名约定。
@@ -227,11 +233,14 @@ done
 for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
     sign_item "$bin"
 done
-while IFS= read -r item; do
-    if file "$item" | grep -q 'Mach-O'; then
-        sign_item "$item"
-    fi
-done < <(find "$RESOURCES/SteamService" -type f)
+SPARKLE="$FRAMEWORKS/Sparkle.framework/Versions/B"
+if [ -d "$SPARKLE" ]; then
+    codesign --force "${RUNTIME_SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/scripts/SparkleAutoupdate.entitlements" --sign "$SIGN_IDENTITY" "$SPARKLE/Autoupdate"
+    sign_runtime_item "$SPARKLE/Updater.app"
+    sign_runtime_item "$SPARKLE/XPCServices/Downloader.xpc"
+    sign_runtime_item "$SPARKLE/XPCServices/Installer.xpc"
+    sign_runtime_item "$FRAMEWORKS/Sparkle.framework"
+fi
 if [ -d "${SAVER:-}" ]; then
     for lib in "$SAVER_FRAMEWORKS"/*.dylib; do
         [ -f "$lib" ] || continue
@@ -239,6 +248,6 @@ if [ -d "${SAVER:-}" ]; then
     done
     sign_bundle "$SAVER"
 fi
-sign_bundle "$APP"
+codesign --force "${SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements" --sign "$SIGN_IDENTITY" "$APP"
 
 echo "[bundle] 完成"
