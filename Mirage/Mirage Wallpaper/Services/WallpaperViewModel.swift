@@ -255,9 +255,13 @@ class WallpaperViewModel: ObservableObject {
     private static let sessionTrustLock = NSLock()
     nonisolated(unsafe) private static var sessionTrusted: Set<String> = []
 
+    private static func trustID(for wallpaper: WEWallpaper) -> String {
+        wallpaper.wallpaperDirectory.standardizedFileURL.path
+    }
+
     static func trustForSession(_ w: WEWallpaper) {
         sessionTrustLock.lock()
-        sessionTrusted.insert(w.id)
+        sessionTrusted.insert(trustID(for: w))
         sessionTrustLock.unlock()
     }
 
@@ -269,10 +273,11 @@ class WallpaperViewModel: ObservableObject {
 
     static func isWallpaperTrusted(_ w: WEWallpaper) -> Bool {
         let list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
-        if list.contains(w.id) { return true }
+        let id = trustID(for: w)
+        if list.contains(id) || list.contains(w.id) { return true }
         sessionTrustLock.lock()
         defer { sessionTrustLock.unlock() }
-        return sessionTrusted.contains(w.id)
+        return sessionTrusted.contains(id)
     }
 
     func isTrusted(_ w: WEWallpaper) -> Bool {
@@ -280,9 +285,10 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func trust(_ w: WEWallpaper) {
-        var list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
-        if !list.contains(w.id) { list.append(w.id) }
-        UserDefaults.standard.set(list, forKey: "TrustedWallpapers")
+        let existing = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
+        var list = Set(existing.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        list.insert(Self.trustID(for: w))
+        UserDefaults.standard.set(list.sorted(), forKey: "TrustedWallpapers")
     }
 
     func trustAndApply(_ w: WEWallpaper) {
@@ -851,7 +857,10 @@ class WallpaperViewModel: ObservableObject {
         }
 
         if let trusted = defaults.stringArray(forKey: "TrustedWallpapers") {
-            defaults.set(Array(Set(trusted.map(remapper.path))), forKey: "TrustedWallpapers")
+            let remapped = trusted.map(remapper.path).map {
+                URL(fileURLWithPath: $0).standardizedFileURL.path
+            }
+            defaults.set(Array(Set(remapped)).sorted(), forKey: "TrustedWallpapers")
         }
     }
 

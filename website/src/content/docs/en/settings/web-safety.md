@@ -14,11 +14,11 @@ A web wallpaper from an unknown source could, in theory, contain scripts you don
 
 ## The trust mechanism
 
-- The first time you apply a given web wallpaper, if it's not on the trust list, Mirage shows a prompt and asks you to confirm.
-- Once you confirm trust, Mirage adds the wallpaper to the trust list and applies it immediately.
-- Applying the same wallpaper again won't prompt you repeatedly.
+- The first time you apply a given web wallpaper, if it's not on the trust list, Mirage shows a prompt.
+- **Trust and Continue** adds the wallpaper to the trust list, which remains effective across future launches.
+- **Continue This Time** is valid only for the current Mirage session and asks again after the next launch.
 
-Trust is recorded **per wallpaper**, applying only to the specific web wallpaper you confirmed, and won't let through any other unconfirmed web wallpapers.
+Persistent trust is recorded **per wallpaper**, applying only to the specific web wallpaper for which you chose **Trust and Continue**, and won't let through any other unconfirmed web wallpapers.
 
 ## Recommendations
 
