@@ -9,6 +9,14 @@ import Combine
 import AppKit
 
 class WorkshopViewModel: ObservableObject {
+    struct SubscriptionDownloadPlan {
+        let subscriptionCount: Int
+        let remainingCount: Int
+        let items: [WorkshopItem]
+
+        var downloadCount: Int { items.count }
+    }
+
     // MARK: - Browse State
 
     @Published var items: [WorkshopItem] = []
@@ -89,6 +97,32 @@ class WorkshopViewModel: ObservableObject {
     @Published var downloadHistory: [DownloadTask] = []
     @Published var presetDependencyPrompt: PresetDependencyPrompt?
 
+    @Published private(set) var subscriptionRecords: [WorkshopSubscription] = []
+    @Published private(set) var subscriptionItems: [WorkshopItem] = []
+    @Published private(set) var subscriptionTotal = 0
+    @Published private(set) var subscriptionStartIndex = 0
+    @Published private(set) var isLoadingSubscriptions = false
+    @Published private(set) var subscriptionsError: String?
+    @Published private(set) var subscriptionStates: [String: WorkshopSubscriptionState] = [:]
+    @Published private(set) var checkingSubscriptionIDs: Set<String> = []
+    @Published private(set) var changingSubscriptionIDs: Set<String> = []
+    @Published private(set) var subscriptionActionError: String?
+    @Published private(set) var subscriptionActionErrorItemID: String?
+    @Published private(set) var isPreparingSubscriptionDownloads = false
+    @Published private(set) var subscriptionDownloadPlan: SubscriptionDownloadPlan?
+
+    @Published private(set) var comments: [WorkshopComment] = []
+    @Published private(set) var commentsTotal = 0
+    @Published private(set) var commentsStartIndex = 0
+    @Published private(set) var commentsNextStartIndex = 0
+    @Published private(set) var commentsCanPost = false
+    @Published private(set) var commentsItemID: String?
+    @Published private(set) var isLoadingComments = false
+    @Published private(set) var commentsError: String?
+    @Published private(set) var commentAuthors: [String: WorkshopCreator] = [:]
+    @Published var commentDraft = ""
+    @Published private(set) var isPostingComment = false
+
     // MARK: - Sync State
     // MARK: - Steam service state
 
@@ -110,6 +144,23 @@ class WorkshopViewModel: ObservableObject {
         }.count
     }
 
+    var canLoadPreviousSubscriptions: Bool {
+        subscriptionStartIndex > 0 && !isLoadingSubscriptions
+    }
+
+    var canLoadNextSubscriptions: Bool {
+        !isLoadingSubscriptions && !subscriptionRecords.isEmpty &&
+            subscriptionStartIndex + subscriptionRecords.count < subscriptionTotal
+    }
+
+    var subscriptionPageCount: Int {
+        max(1, (subscriptionTotal + subscriptionPageSize - 1) / subscriptionPageSize)
+    }
+
+    var subscriptionCurrentPage: Int {
+        min(subscriptionPageCount, subscriptionStartIndex / subscriptionPageSize + 1)
+    }
+
     var isTextRelevanceSearch: Bool {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return !query.isEmpty && !Self.isPublishedFileId(query) && !Self.isSteamUserId(query)
@@ -127,8 +178,18 @@ class WorkshopViewModel: ObservableObject {
     private var discoverTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var discoverGeneration = 0
+    private var subscriptionGeneration = 0
+    private var commentGeneration = 0
+    private var commentAuthorTask: Task<Void, Never>?
     private var selectionGeneration = 0
     private var loadedPage = 1
+    private let commentsPageSize = 20
+    private let steamSubscriptionPageSize = 50
+
+    private var subscriptionPageSize: Int {
+        let value = UserDefaults.standard.integer(forKey: "WallpapersPerPage")
+        return [10, 25, 50].contains(value) ? value : 50
+    }
 
     init() {
         if let stored = UserDefaults.standard.object(forKey: Self.ageRatingStorageKey) as? Int {
@@ -164,8 +225,17 @@ class WorkshopViewModel: ObservableObject {
         SteamServiceManager.shared.$isLoggedIn
             .receive(on: RunLoop.main)
             .sink { [weak self] isLoggedIn in
-                self?.refreshSetupState()
-                if isLoggedIn { self?.processDownloadQueue() }
+                guard let self else { return }
+                self.refreshSetupState()
+                guard isLoggedIn else { return }
+                self.processDownloadQueue()
+                if self.subscriptionItems.isEmpty {
+                    self.refreshSubscriptions(startIndex: 0)
+                }
+                if let item = self.selectedItem {
+                    self.refreshSubscriptionStates(for: [item])
+                    self.loadComments(for: item, startIndex: 0)
+                }
             }
             .store(in: &serviceStateCancellables)
 
@@ -313,6 +383,7 @@ class WorkshopViewModel: ObservableObject {
             let details = (try? await SteamWebAPI.shared.getFileDetails(workshopIds: [id])) ?? []
             for item in details where item.consumerAppId == 431960 {
                 self.installedWorkshopItems[item.publishedFileId] = item
+                self.refreshSubscriptionStates(for: [item])
             }
             // A transient API error must be retryable on the next selection.
             if details.contains(where: {
@@ -435,6 +506,7 @@ class WorkshopViewModel: ObservableObject {
                 self.totalItems = result.total
                 self.loadedPage = requestPage
                 self.rememberCreators(in: result.items)
+                self.refreshSubscriptionStates(for: result.items)
                 if let matchedCreator {
                     self.rememberCreator(matchedCreator)
                 }
@@ -516,6 +588,8 @@ class WorkshopViewModel: ObservableObject {
                 )
                 self.creatorItems = result.items
                 self.creatorItemsTotal = result.total
+                self.rememberCreators(in: result.items)
+                self.refreshSubscriptionStates(for: result.items)
             } catch {
                 self.creatorItemsError = error.localizedDescription
             }
@@ -708,6 +782,7 @@ class WorkshopViewModel: ObservableObject {
                 items.map { byID[$0.id] ?? $0 }
             }
             self.rememberCreators(in: enriched)
+            self.refreshSubscriptionStates(for: enriched)
             if generation == self.discoverGeneration {
                 self.isDiscoverLoading = false
             }
@@ -747,9 +822,418 @@ class WorkshopViewModel: ObservableObject {
         return number > 0
     }
 
+    func refreshSubscriptions(startIndex: Int? = nil) {
+        guard SteamServiceManager.shared.isLoggedIn else {
+            subscriptionRecords = []
+            subscriptionItems = []
+            subscriptionTotal = 0
+            subscriptionStartIndex = 0
+            subscriptionsError = L("需要登录 Steam")
+            isLoadingSubscriptions = false
+            return
+        }
+        subscriptionGeneration += 1
+        let generation = subscriptionGeneration
+        let requestedStart = max(0, startIndex ?? subscriptionStartIndex)
+        let requestedPageSize = subscriptionPageSize
+        let serviceStart = requestedStart / steamSubscriptionPageSize * steamSubscriptionPageSize
+        let pageOffset = requestedStart - serviceStart
+        isLoadingSubscriptions = true
+        subscriptionsError = nil
+        SteamServiceManager.shared.fetchSubscriptions(startIndex: serviceStart) { [weak self] result in
+            guard let self, generation == self.subscriptionGeneration else { return }
+            switch result {
+            case .success(let page):
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.subscriptionGeneration else { return }
+                    let visibleRecords = Array(page.subscriptions.dropFirst(pageOffset).prefix(requestedPageSize))
+                    do {
+                        let loaded = try await self.loadSubscriptionItems(for: visibleRecords)
+                        guard generation == self.subscriptionGeneration else { return }
+                        self.subscriptionRecords = visibleRecords
+                        self.subscriptionItems = loaded
+                        self.subscriptionTotal = page.total
+                        self.subscriptionStartIndex = requestedStart
+                        for record in visibleRecords {
+                            self.subscriptionStates[record.publishedFileId] = .subscribed
+                        }
+                        self.rememberCreators(in: loaded)
+                        self.isLoadingSubscriptions = false
+                    } catch {
+                        guard generation == self.subscriptionGeneration else { return }
+                        self.subscriptionRecords = visibleRecords
+                        self.subscriptionItems = visibleRecords.map {
+                            WorkshopItem.unavailableSubscription(id: $0.publishedFileId)
+                        }
+                        self.subscriptionTotal = page.total
+                        self.subscriptionStartIndex = requestedStart
+                        for record in visibleRecords {
+                            self.subscriptionStates[record.publishedFileId] = .subscribed
+                        }
+                        self.subscriptionsError = error.localizedDescription
+                        self.isLoadingSubscriptions = false
+                    }
+                }
+            case .failure(let error):
+                self.subscriptionsError = error.localizedDescription
+                self.isLoadingSubscriptions = false
+            }
+        }
+    }
+
+    func loadPreviousSubscriptions() {
+        guard canLoadPreviousSubscriptions else { return }
+        goToSubscriptionPage(subscriptionCurrentPage - 1)
+    }
+
+    func loadNextSubscriptions() {
+        guard canLoadNextSubscriptions else { return }
+        goToSubscriptionPage(subscriptionCurrentPage + 1)
+    }
+
+    func goToSubscriptionPage(_ page: Int) {
+        let target = min(max(page, 1), subscriptionPageCount)
+        guard !isLoadingSubscriptions, target != subscriptionCurrentPage else { return }
+        refreshSubscriptions(startIndex: (target - 1) * subscriptionPageSize)
+    }
+
+    func downloadAllSubscriptions() {
+        guard SteamServiceManager.shared.isLoggedIn, !isPreparingSubscriptionDownloads else {
+            if !SteamServiceManager.shared.isLoggedIn { AppDelegate.shared.openSteamSetup() }
+            return
+        }
+        isPreparingSubscriptionDownloads = true
+        subscriptionDownloadPlan = nil
+        subscriptionsError = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isPreparingSubscriptionDownloads = false }
+            do {
+                var allRecords: [WorkshopSubscription] = []
+                var startIndex = 0
+                var total = Int.max
+                while startIndex < total {
+                    let page = try await self.subscriptionPage(startIndex: startIndex)
+                    total = page.total
+                    allRecords.append(contentsOf: page.subscriptions)
+                    guard !page.subscriptions.isEmpty else { break }
+                    startIndex = page.startIndex + page.subscriptions.count
+                }
+                let loaded = try await self.loadSubscriptionItems(for: allRecords)
+                let activeIDs = Set(self.downloadQueue.compactMap { task -> String? in
+                    switch task.state {
+                    case .queued, .resolving, .downloading, .validating:
+                        return task.id
+                    case .completed, .failed:
+                        return nil
+                    }
+                })
+                var seen = Set<String>()
+                let remaining = loaded.filter {
+                    seen.insert($0.publishedFileId).inserted &&
+                        $0.kind != .unsupported &&
+                        !self.isWorkshopItemInstalled($0.publishedFileId)
+                }
+                let pending = remaining.filter { !activeIDs.contains($0.publishedFileId) }
+                self.subscriptionDownloadPlan = SubscriptionDownloadPlan(
+                    subscriptionCount: total == Int.max ? allRecords.count : total,
+                    remainingCount: remaining.count,
+                    items: pending
+                )
+            } catch {
+                self.subscriptionsError = error.localizedDescription
+            }
+        }
+    }
+
+    func confirmSubscriptionDownloads() {
+        guard let plan = subscriptionDownloadPlan else { return }
+        subscriptionDownloadPlan = nil
+        for item in plan.items {
+            downloadItem(item, purpose: .subscription)
+        }
+    }
+
+    func dismissSubscriptionDownloadPlan() {
+        subscriptionDownloadPlan = nil
+    }
+
+    func subscriptionState(for workshopId: String) -> WorkshopSubscriptionState {
+        subscriptionStates[workshopId] ?? .unknown
+    }
+
+    func subscriptionActionError(for workshopId: String) -> String? {
+        subscriptionActionErrorItemID == workshopId ? subscriptionActionError : nil
+    }
+
+    func refreshSubscriptionStates(for items: [WorkshopItem]) {
+        guard SteamServiceManager.shared.isLoggedIn else { return }
+        let ids = Set(items.map(\.publishedFileId)).filter {
+            !$0.isEmpty && !checkingSubscriptionIDs.contains($0) && !changingSubscriptionIDs.contains($0)
+        }
+        guard !ids.isEmpty else { return }
+        if let selectedID = selectedItem?.publishedFileId, ids.contains(selectedID) {
+            subscriptionActionError = nil
+            subscriptionActionErrorItemID = selectedID
+        }
+        checkingSubscriptionIDs.formUnion(ids)
+        SteamServiceManager.shared.fetchSubscriptionStates(workshopIds: Array(ids)) { [weak self] result in
+            guard let self else { return }
+            self.checkingSubscriptionIDs.subtract(ids)
+            switch result {
+            case .success(let states):
+                for id in ids {
+                    self.subscriptionStates[id] = states[id] == true ? .subscribed : .unsubscribed
+                }
+                if let errorID = self.subscriptionActionErrorItemID, ids.contains(errorID) {
+                    self.subscriptionActionError = nil
+                }
+            case .failure(let error):
+                if ids.contains(self.selectedItem?.publishedFileId ?? "") {
+                    self.subscriptionActionError = error.localizedDescription
+                    self.subscriptionActionErrorItemID = self.selectedItem?.publishedFileId
+                }
+            }
+        }
+    }
+
+    func subscribe(_ item: WorkshopItem) {
+        guard steamSetupState == .ready else {
+            AppDelegate.shared.openSteamSetup()
+            return
+        }
+        let id = item.publishedFileId
+        guard !changingSubscriptionIDs.contains(id) else { return }
+        changingSubscriptionIDs.insert(id)
+        subscriptionActionError = nil
+        subscriptionActionErrorItemID = id
+        SteamServiceManager.shared.subscribe(workshopId: id) { [weak self] result in
+            guard let self else { return }
+            self.changingSubscriptionIDs.remove(id)
+            switch result {
+            case .success:
+                self.subscriptionStates[id] = .subscribed
+                if !self.isInstalled(id) {
+                    self.downloadItem(item, purpose: .subscription)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self.refreshSubscriptions(startIndex: 0)
+                }
+            case .failure(let error):
+                self.subscriptionActionError = error.localizedDescription
+                self.subscriptionActionErrorItemID = id
+            }
+        }
+    }
+
+    func unsubscribe(_ item: WorkshopItem) {
+        let id = item.publishedFileId
+        guard steamSetupState == .ready, !changingSubscriptionIDs.contains(id) else {
+            if steamSetupState != .ready { AppDelegate.shared.openSteamSetup() }
+            return
+        }
+        changingSubscriptionIDs.insert(id)
+        subscriptionActionError = nil
+        subscriptionActionErrorItemID = id
+        SteamServiceManager.shared.unsubscribe(workshopId: id) { [weak self] result in
+            guard let self else { return }
+            self.changingSubscriptionIDs.remove(id)
+            switch result {
+            case .success:
+                self.subscriptionStates[id] = .unsubscribed
+                self.cancelDownloadForUnsubscribe(workshopId: id)
+                self.subscriptionRecords.removeAll { $0.publishedFileId == id }
+                self.subscriptionItems.removeAll { $0.publishedFileId == id }
+                self.subscriptionTotal = max(0, self.subscriptionTotal - 1)
+                do {
+                    try WallpaperLibrary.shared.removeManagedWorkshopItem(workshopId: id)
+                    self.refreshInstalledState(reconcileDownloads: true)
+                } catch {
+                    self.subscriptionActionError = L("已取消订阅，但无法删除 Mirage 下载副本：%@", error.localizedDescription)
+                    self.subscriptionActionErrorItemID = id
+                }
+            case .failure(let error):
+                self.subscriptionActionError = error.localizedDescription
+                self.subscriptionActionErrorItemID = id
+            }
+        }
+    }
+
+    func prepareWorkshopInteractions(for item: WorkshopItem) {
+        refreshSubscriptionStates(for: [item])
+        if commentsItemID != item.publishedFileId {
+            loadComments(for: item, startIndex: 0)
+        }
+    }
+
+    func loadComments(for item: WorkshopItem, startIndex: Int = 0) {
+        commentAuthorTask?.cancel()
+        commentGeneration += 1
+        guard SteamServiceManager.shared.isLoggedIn else {
+            comments = []
+            commentsTotal = 0
+            commentsStartIndex = 0
+            commentsNextStartIndex = 0
+            commentsCanPost = false
+            commentsItemID = item.publishedFileId
+            commentsError = L("需要登录 Steam")
+            commentAuthors = [:]
+            isLoadingComments = false
+            return
+        }
+        guard !item.creatorSteamId.isEmpty else {
+            comments = []
+            commentsTotal = 0
+            commentsStartIndex = 0
+            commentsNextStartIndex = 0
+            commentsCanPost = false
+            commentsItemID = item.publishedFileId
+            commentsError = L("该作品缺少可用的作者信息，无法加载评论")
+            commentAuthors = [:]
+            isLoadingComments = false
+            return
+        }
+        let generation = commentGeneration
+        let requestedStart = max(0, startIndex)
+        if commentsItemID != item.publishedFileId {
+            comments = []
+            commentsTotal = 0
+            commentsStartIndex = 0
+            commentsNextStartIndex = 0
+            commentDraft = ""
+            commentsCanPost = false
+            commentAuthors = [:]
+        }
+        commentsItemID = item.publishedFileId
+        commentsError = nil
+        isLoadingComments = true
+        SteamServiceManager.shared.fetchComments(
+            item: item,
+            startIndex: requestedStart,
+            count: commentsPageSize
+        ) { [weak self] result in
+            guard let self,
+                  generation == self.commentGeneration,
+                  self.commentsItemID == item.publishedFileId else { return }
+            switch result {
+            case .success(let page):
+                self.comments = page.comments
+                self.commentsTotal = page.total
+                self.commentsStartIndex = page.startIndex
+                self.commentsNextStartIndex = page.nextStartIndex
+                self.commentsCanPost = page.canPost
+                self.loadCommentAuthors(
+                    for: page.comments,
+                    itemID: item.publishedFileId,
+                    generation: generation
+                )
+            case .failure(let error):
+                self.commentsError = error.localizedDescription
+            }
+            self.isLoadingComments = false
+        }
+    }
+
+    private func loadCommentAuthors(
+        for comments: [WorkshopComment],
+        itemID: String,
+        generation: Int
+    ) {
+        let ids = Array(Set(comments.map(\.authorSteamId).filter { !$0.isEmpty })).sorted()
+        guard !ids.isEmpty else {
+            commentAuthors = [:]
+            return
+        }
+        commentAuthorTask?.cancel()
+        commentAuthorTask = Task { [weak self] in
+            var profiles: [String: WorkshopCreator] = [:]
+            for id in ids {
+                guard !Task.isCancelled else { return }
+                if let creator = await SteamWebAPI.shared.creatorProfile(steamId: id) {
+                    profiles[id] = creator
+                }
+            }
+            guard !Task.isCancelled else { return }
+            DispatchQueue.main.async {
+                guard let self,
+                      self.commentGeneration == generation,
+                      self.commentsItemID == itemID else { return }
+                self.commentAuthors.merge(profiles) { _, new in new }
+            }
+        }
+    }
+
+    func refreshComments(for item: WorkshopItem) {
+        loadComments(for: item, startIndex: commentsStartIndex)
+    }
+
+    func loadPreviousComments(for item: WorkshopItem) {
+        guard commentsStartIndex > 0, !isLoadingComments else { return }
+        loadComments(for: item, startIndex: max(0, commentsStartIndex - commentsPageSize))
+    }
+
+    func loadNextComments(for item: WorkshopItem) {
+        guard commentsNextStartIndex > commentsStartIndex,
+              commentsNextStartIndex < commentsTotal,
+              !isLoadingComments else { return }
+        loadComments(for: item, startIndex: commentsNextStartIndex)
+    }
+
+    func postComment(for item: WorkshopItem) {
+        let text = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, commentsCanPost, !isPostingComment else { return }
+        isPostingComment = true
+        commentsError = nil
+        SteamServiceManager.shared.postComment(item: item, text: text) { [weak self] result in
+            guard let self else { return }
+            self.isPostingComment = false
+            guard self.commentsItemID == item.publishedFileId else { return }
+            switch result {
+            case .success:
+                self.commentDraft = ""
+                self.loadComments(for: item, startIndex: 0)
+            case .failure(let error):
+                self.commentsError = error.localizedDescription
+            }
+        }
+    }
+
+    private func subscriptionPage(startIndex: Int) async throws -> WorkshopSubscriptionPage {
+        try await withCheckedThrowingContinuation { continuation in
+            SteamServiceManager.shared.fetchSubscriptions(startIndex: startIndex) {
+                continuation.resume(with: $0)
+            }
+        }
+    }
+
+    private func loadSubscriptionItems(for records: [WorkshopSubscription]) async throws -> [WorkshopItem] {
+        var details: [WorkshopItem] = []
+        let ids = records.map(\.publishedFileId)
+        for start in stride(from: 0, to: ids.count, by: 100) {
+            let end = min(start + 100, ids.count)
+            details.append(contentsOf: try await SteamWebAPI.shared.getFileDetails(
+                workshopIds: Array(ids[start..<end])
+            ))
+        }
+        let byID = Dictionary(details.map { ($0.publishedFileId, $0) }, uniquingKeysWith: { first, _ in first })
+        return records.map { byID[$0.publishedFileId] ?? .unavailableSubscription(id: $0.publishedFileId) }
+    }
+
+    private func cancelDownloadForUnsubscribe(workshopId: String) {
+        guard let task = downloadQueue.first(where: { $0.id == workshopId }) else { return }
+        if let attemptID = task.attemptID {
+            cancelledDownloadIDs.insert(attemptID)
+            SteamServiceManager.shared.cancelDownload(taskId: attemptID)
+        }
+        backgroundAutoApplyIDs.remove(workshopId)
+        downloadQueue.removeAll { $0.id == workshopId }
+        processDownloadQueue()
+    }
+
     // MARK: - Download
 
     func downloadItem(_ item: WorkshopItem, purpose: DownloadPurpose = .wallpaper) {
+        guard !isWorkshopItemInstalled(item.publishedFileId) else { return }
         if let existingIndex = downloadQueue.firstIndex(where: { $0.id == item.publishedFileId }) {
             switch downloadQueue[existingIndex].state {
             case .failed, .completed:
@@ -821,6 +1305,7 @@ class WorkshopViewModel: ObservableObject {
             showCustomization = false
             selectedItem = item
         }
+        prepareWorkshopInteractions(for: item)
     }
 
     private func processDownloadQueue() {
@@ -893,6 +1378,11 @@ class WorkshopViewModel: ObservableObject {
         }
     }
 
+    private func isWorkshopItemInstalled(_ workshopId: String) -> Bool {
+        installedWorkshopIDs.contains(workshopId) ||
+            WallpaperLibrary.shared.workshopItemDirectory(for: workshopId) != nil
+    }
+
     // MARK: - Navigate to Workshop with filter
 
     func navigateToWorkshopWithTag(
@@ -934,6 +1424,25 @@ class WorkshopViewModel: ObservableObject {
             case .success:
                 self.steamServiceStatus.authentication = .needsAction(L("已退出登录"))
                 self.logoutResultMessage = L("已退出 Mirage 的 Steam 会话。")
+                self.subscriptionRecords = []
+                self.subscriptionItems = []
+                self.subscriptionTotal = 0
+                self.subscriptionStartIndex = 0
+                self.subscriptionStates = [:]
+                self.checkingSubscriptionIDs = []
+                self.changingSubscriptionIDs = []
+                self.subscriptionActionError = nil
+                self.subscriptionActionErrorItemID = nil
+                self.isPreparingSubscriptionDownloads = false
+                self.subscriptionDownloadPlan = nil
+                self.comments = []
+                self.commentsTotal = 0
+                self.commentsStartIndex = 0
+                self.commentsNextStartIndex = 0
+                self.commentsCanPost = false
+                self.commentsItemID = nil
+                self.commentAuthors = [:]
+                self.commentDraft = ""
             case .failure(let error):
                 self.steamServiceStatus.authentication = .needsAction(error.localizedDescription)
                 self.logoutResultMessage = error.localizedDescription
@@ -1042,6 +1551,22 @@ class WorkshopViewModel: ObservableObject {
     ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self else { return }
+
+            if purpose == .subscription,
+               let wallpaper = self.installedItem(workshopId: workshopId),
+               wallpaper.needsPresetDependency,
+               let dependencyID = wallpaper.presetDependency?.rawValue {
+                Task { @MainActor in
+                    let dependencyItem = (try? await SteamWebAPI.shared.getFileDetails(
+                        workshopIds: [dependencyID]
+                    ).first(where: { $0.publishedFileId == dependencyID }))
+                        ?? .dependencyPlaceholder(id: dependencyID)
+                    guard dependencyItem.kind != .unsupported,
+                          !self.isInstalled(dependencyID) else { return }
+                    self.downloadItem(dependencyItem, purpose: .subscription)
+                }
+                return
+            }
 
             if purpose == .presetDependency {
                 if let pending = self.pendingCreatorPresetApplication,

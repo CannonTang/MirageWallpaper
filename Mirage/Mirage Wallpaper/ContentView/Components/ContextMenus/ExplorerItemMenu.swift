@@ -212,6 +212,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
             workshopViewModel.selectedItem = item
             workshopViewModel.showCustomization = false
             workshopViewModel.showCreatorProfile = false
+            workshopViewModel.prepareWorkshopInteractions(for: item)
             AppDelegate.shared.navigationModel.selection = .workshop
         }
     }
@@ -268,6 +269,26 @@ struct WorkshopCardContextMenu: View {
     var body: some View {
         Group {
             Section {
+                if workshopViewModel.subscriptionState(for: item.publishedFileId) == .subscribed {
+                    Button(role: .destructive) {
+                        workshopViewModel.unsubscribe(item)
+                    } label: {
+                        Label("取消订阅", systemImage: "xmark.circle.fill")
+                    }
+                    .disabled(workshopViewModel.changingSubscriptionIDs.contains(item.publishedFileId))
+                } else {
+                    Button {
+                        workshopViewModel.subscribe(item)
+                    } label: {
+                        Label("订阅并下载", systemImage: "plus.circle.fill")
+                    }
+                    .disabled(
+                        workshopViewModel.subscriptionState(for: item.publishedFileId) == .unknown ||
+                        workshopViewModel.checkingSubscriptionIDs.contains(item.publishedFileId) ||
+                        workshopViewModel.changingSubscriptionIDs.contains(item.publishedFileId)
+                    )
+                }
+
                 Button {
                     workshopViewModel.downloadItem(item)
                 } label: {

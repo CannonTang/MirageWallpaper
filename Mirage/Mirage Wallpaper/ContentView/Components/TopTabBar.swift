@@ -26,6 +26,7 @@ struct TopTabBar: View {
                 tab(section: .installed, title: "已安装", systemImage: "square.and.arrow.down.fill")
                 tab(section: .discover, title: "发现", systemImage: "sparkle.magnifyingglass")
                 tab(section: .workshop, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
+                tab(section: .subscriptions, title: "已订阅", systemImage: "checkmark.circle.fill")
             }
             .padding(4)
             .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)), interactive: false)

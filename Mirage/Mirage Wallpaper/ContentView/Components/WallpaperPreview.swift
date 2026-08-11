@@ -21,6 +21,7 @@ struct WallpaperPreview: SubviewOfContentView {
     
     @State var hoveredTag: String?
     @State var isTagsHovered = false
+    @State private var isConfirmingUnsubscribe = false
 
     // 目录大小异步计算并缓存，避免每次重绘在主线程遍历整个壁纸目录造成卡顿。
     @State private var sizeText: String = "…"
@@ -191,27 +192,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                 }
                         }
                     }
-                    VStack(spacing: 3) {
-                        Button { } label: {
-                            Label("Unsubscribe", systemImage: "xmark")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
-                        HStack(spacing: 3) {
-                            Button { } label: {
-                                Label("Comment", systemImage: "text.badge.star")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            Button { } label: {
-                                Image(systemName: "doc.on.doc.fill")
-                            }
-                            Button { } label: {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                            }
-                        }
-                    }
-                    .disabled(true)
+                    workshopActions
 
                     sectionHeader("播放控制")
                     VStack(spacing: 16) {
@@ -346,6 +327,121 @@ struct WallpaperPreview: SubviewOfContentView {
             workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
             recomputeSize(for: wallpaperViewModel.currentWallpaper)
         }
+        .confirmationDialog(
+            "取消订阅",
+            isPresented: $isConfirmingUnsubscribe,
+            presenting: workshopViewModel.installedWorkshopItem(for: wallpaperViewModel.currentWallpaper)
+        ) { item in
+            Button("取消订阅", role: .destructive) {
+                workshopViewModel.unsubscribe(item)
+            }
+            Button("取消", role: .cancel) { }
+        } message: { _ in
+            Text("取消订阅后，Mirage 会停止下载并删除 Mirage 下载目录中的副本。Steam 内容目录中的文件不会被删除。")
+        }
+    }
+
+    @ViewBuilder
+    private var workshopActions: some View {
+        if let item = workshopViewModel.installedWorkshopItem(for: wallpaperViewModel.currentWallpaper) {
+            let id = item.publishedFileId
+            let state = workshopViewModel.subscriptionState(for: id)
+            let isChecking = workshopViewModel.checkingSubscriptionIDs.contains(id)
+            let isChanging = workshopViewModel.changingSubscriptionIDs.contains(id)
+
+            VStack(spacing: 3) {
+                if workshopViewModel.steamSetupState != .ready {
+                    Button {
+                        AppDelegate.shared.openSteamSetup()
+                    } label: {
+                        Label("登录 Steam", systemImage: "person.crop.circle.badge.exclamationmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else if isChecking || isChanging {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(LocalizedStringKey(isChanging ? "正在同步订阅状态…" : "正在检查订阅状态…"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                } else if state == .unknown {
+                    Button {
+                        workshopViewModel.refreshSubscriptionStates(for: [item])
+                    } label: {
+                        Label("重新检查订阅状态", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if state == .subscribed {
+                    Button {
+                        isConfirmingUnsubscribe = true
+                    } label: {
+                        Label("取消订阅", systemImage: "xmark.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                } else {
+                    Button {
+                        workshopViewModel.subscribe(item)
+                    } label: {
+                        Label("订阅并下载", systemImage: "plus.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                HStack(spacing: 3) {
+                    Button {
+                        openWorkshopItem(item)
+                    } label: {
+                        Label("评论", systemImage: "text.bubble.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    Button {
+                        copyWorkshopURL(item)
+                    } label: {
+                        Image(systemName: "doc.on.doc.fill")
+                    }
+                    .help(L("复制创意工坊链接"))
+                    Button {
+                        openWorkshopItemInSteam(item)
+                    } label: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
+                    .help(L("在 Steam 中查看或举报"))
+                }
+
+                if let error = workshopViewModel.subscriptionActionError(for: id) {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
+            }
+        }
+    }
+
+    private func openWorkshopItem(_ item: WorkshopItem) {
+        workshopViewModel.selectedItem = item
+        workshopViewModel.showCustomization = false
+        workshopViewModel.showCreatorProfile = false
+        workshopViewModel.prepareWorkshopInteractions(for: item)
+        AppDelegate.shared.navigationModel.selection = .workshop
+    }
+
+    private func copyWorkshopURL(_ item: WorkshopItem) {
+        let value = "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func openWorkshopItemInSteam(_ item: WorkshopItem) {
+        guard let url = URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private var authorSection: some View {

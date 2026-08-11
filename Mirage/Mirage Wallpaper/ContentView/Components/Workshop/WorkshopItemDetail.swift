@@ -13,6 +13,7 @@ struct WorkshopItemDetail: View {
     var isEmbedded: Bool = false
     var embeddedCreatorSteamId: String?
     var isActive: Bool = true
+    @State private var isConfirmingUnsubscribe = false
 
     var body: some View {
         VStack {
@@ -29,6 +30,22 @@ struct WorkshopItemDetail: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .task(id: item?.publishedFileId) {
+            guard let item else { return }
+            workshopViewModel.prepareWorkshopInteractions(for: item)
+        }
+        .confirmationDialog(
+            "取消订阅",
+            isPresented: $isConfirmingUnsubscribe,
+            presenting: item
+        ) { item in
+            Button("取消订阅", role: .destructive) {
+                workshopViewModel.unsubscribe(item)
+            }
+            Button("取消", role: .cancel) { }
+        } message: { _ in
+            Text("取消订阅后，Mirage 会停止下载并删除 Mirage 下载目录中的副本。Steam 内容目录中的文件不会被删除。")
         }
     }
 
@@ -128,6 +145,7 @@ struct WorkshopItemDetail: View {
                 tagList(for: item)
 
                 sectionHeader("操作")
+                subscriptionSection(for: item)
                 downloadSection(for: item)
 
                 Button {
@@ -151,6 +169,9 @@ struct WorkshopItemDetail: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(8)
                 }
+
+                sectionHeader("评论")
+                commentsSection(for: item)
 
                 sectionHeader("信息")
                 VStack(alignment: .leading, spacing: 4) {
@@ -189,6 +210,237 @@ struct WorkshopItemDetail: View {
             }
             .padding()
         }
+    }
+
+    @ViewBuilder
+    func subscriptionSection(for item: WorkshopItem) -> some View {
+        let id = item.publishedFileId
+        let state = workshopViewModel.subscriptionState(for: id)
+        let isChecking = workshopViewModel.checkingSubscriptionIDs.contains(id)
+        let isChanging = workshopViewModel.changingSubscriptionIDs.contains(id)
+
+        VStack(spacing: 6) {
+            if workshopViewModel.steamSetupState != .ready {
+                Button {
+                    AppDelegate.shared.openSteamSetup()
+                } label: {
+                    Label("登录 Steam 以订阅", systemImage: "person.crop.circle.badge.exclamationmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            } else if isChecking || isChanging {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(LocalizedStringKey(isChanging ? "正在同步订阅状态…" : "正在检查订阅状态…"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+            } else if state == .unknown {
+                Button {
+                    workshopViewModel.refreshSubscriptionStates(for: [item])
+                } label: {
+                    Label("重新检查订阅状态", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+            } else if state == .subscribed {
+                Button {
+                    isConfirmingUnsubscribe = true
+                } label: {
+                    Label("取消订阅", systemImage: "xmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            } else {
+                Button {
+                    workshopViewModel.subscribe(item)
+                } label: {
+                    Label("订阅并下载", systemImage: "plus.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            if let error = workshopViewModel.subscriptionActionError(for: id) {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func commentsSection(for item: WorkshopItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L("%d 条评论", workshopViewModel.commentsTotal))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    workshopViewModel.refreshComments(for: item)
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.plain)
+                .disabled(workshopViewModel.isLoadingComments)
+                .help(L("刷新评论"))
+            }
+
+            if workshopViewModel.commentsItemID != item.publishedFileId ||
+                workshopViewModel.isLoadingComments && workshopViewModel.comments.isEmpty {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                        .controlSize(.small)
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+            } else if let error = workshopViewModel.commentsError,
+                      workshopViewModel.comments.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            } else if workshopViewModel.comments.isEmpty {
+                Text("暂无评论")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(workshopViewModel.comments) { comment in
+                        commentRow(comment)
+                    }
+                }
+            }
+
+            if workshopViewModel.commentsStartIndex > 0 ||
+                workshopViewModel.commentsNextStartIndex < workshopViewModel.commentsTotal {
+                HStack {
+                    Button {
+                        workshopViewModel.loadPreviousComments(for: item)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled(workshopViewModel.commentsStartIndex == 0 || workshopViewModel.isLoadingComments)
+
+                    Spacer()
+
+                    Text(L(
+                        "%d–%d / %d",
+                        workshopViewModel.comments.isEmpty ? 0 : workshopViewModel.commentsStartIndex + 1,
+                        workshopViewModel.commentsStartIndex + workshopViewModel.comments.count,
+                        workshopViewModel.commentsTotal
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+
+                    Spacer()
+
+                    Button {
+                        workshopViewModel.loadNextComments(for: item)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled(
+                        workshopViewModel.commentsNextStartIndex <= workshopViewModel.commentsStartIndex ||
+                        workshopViewModel.commentsNextStartIndex >= workshopViewModel.commentsTotal ||
+                        workshopViewModel.isLoadingComments
+                    )
+                }
+            }
+
+            if workshopViewModel.commentsCanPost {
+                TextField("发表评论", text: $workshopViewModel.commentDraft, axis: .vertical)
+                    .lineLimit(2...5)
+                HStack {
+                    Spacer()
+                    Button {
+                        workshopViewModel.postComment(for: item)
+                    } label: {
+                        if workshopViewModel.isPostingComment {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 16, height: 16)
+                        } else {
+                            Label("发布评论", systemImage: "paperplane.fill")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        workshopViewModel.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        workshopViewModel.isPostingComment
+                    )
+                }
+            } else if SteamServiceManager.shared.isLoggedIn && workshopViewModel.commentsError == nil {
+                Text("该作品当前不允许发表评论")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = workshopViewModel.commentsError,
+               !workshopViewModel.comments.isEmpty {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    func commentRow(_ comment: WorkshopComment) -> some View {
+        let creator = workshopViewModel.commentAuthors[comment.authorSteamId]
+        let isCurrentUser = comment.authorSteamId == SteamServiceManager.shared.steamId
+        let creatorName = creator?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = !creatorName.isEmpty
+            ? creatorName
+            : (isCurrentUser ? L("我") : comment.authorSteamId)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                AsyncImage(url: creator?.avatarURL) { phase in
+                    if case .success(let image) = phase {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "person.crop.circle.fill")
+                            .resizable()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .clipShape(Circle())
+                Text(displayName)
+                    .font(.caption.bold())
+                    .lineLimit(1)
+                Spacer()
+                Text(comment.createdAt, format: .dateTime.year().month().day().hour().minute())
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Text(comment.isHidden ? L("该评论已隐藏") : comment.text)
+                .font(.caption)
+                .foregroundStyle(comment.isHidden ? .tertiary : .primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if comment.upvotes > 0 {
+                Label("\(comment.upvotes)", systemImage: "hand.thumbsup.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
     }
 
     @ViewBuilder

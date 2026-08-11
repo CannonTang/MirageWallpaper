@@ -14,6 +14,7 @@ enum MainSection: Int, CaseIterable, Hashable {
     case installed
     case discover
     case workshop
+    case subscriptions
 }
 
 final class MainNavigationModel: ObservableObject {
@@ -140,6 +141,16 @@ struct ContentView: View {
                                     )
                                 })
                                 .sectionVisibility(navigationModel.selection == .workshop)
+                            }
+
+                            if loadedSections.contains(.subscriptions) {
+                                SubscribedWorkshopView(
+                                    workshopViewModel: workshopViewModel,
+                                    viewModel: viewModel,
+                                    wallpaperViewModel: wallpaperViewModel,
+                                    isActive: navigationModel.selection == .subscriptions
+                                )
+                                .sectionVisibility(navigationModel.selection == .subscriptions)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

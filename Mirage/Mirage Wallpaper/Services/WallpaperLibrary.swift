@@ -536,6 +536,16 @@ final class WallpaperLibrary {
         libraryDidChange(at: wallpaper.wallpaperDirectory)
     }
 
+    @discardableResult
+    func removeManagedWorkshopItem(workshopId: String) throws -> URL? {
+        guard !workshopId.isEmpty, workshopId.allSatisfy(\.isNumber) else { return nil }
+        let directory = managedWorkshopDirectory.appending(path: workshopId, directoryHint: .isDirectory)
+        guard fm.fileExists(atPath: directory.path) else { return nil }
+        try fm.removeItem(at: directory)
+        libraryDidChange(at: directory)
+        return directory
+    }
+
     func isImported(_ wallpaper: WEWallpaper) -> Bool {
         wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectory.path)
     }
