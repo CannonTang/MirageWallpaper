@@ -53,6 +53,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private var restoreRetryWorkItem: DispatchWorkItem?
     private var explicitShutdown = false
 
+    private var restoreOperationPending: Bool {
+        restoringSession || restoreRetryWorkItem != nil
+    }
+
     private struct LaunchConfiguration {
         let executableURL: URL
         let arguments: [String]
@@ -114,14 +118,15 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     func loginWithQR() {
-        updateOnMain {
-            self.loginState = .loggingIn
-            self.authenticationState = .checking
-        }
         ioQueue.async { [weak self] in
             guard let self else { return }
+            guard !self.restoreOperationPending else { return }
             self.cancelRestoreRetry()
             self.restoringSession = false
+            self.updateOnMain {
+                self.loginState = .loggingIn
+                self.authenticationState = .checking
+            }
             self.sendCommandOnQueue("loginQr") { success, message, errorCode in
                 if !success { self.failAuthenticationRequest(code: errorCode, detail: message) }
             }
@@ -129,14 +134,15 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     func login(username: String, password: String) {
-        updateOnMain {
-            self.loginState = .loggingIn
-            self.authenticationState = .checking
-        }
         ioQueue.async { [weak self] in
             guard let self else { return }
+            guard !self.restoreOperationPending else { return }
             self.cancelRestoreRetry()
             self.restoringSession = false
+            self.updateOnMain {
+                self.loginState = .loggingIn
+                self.authenticationState = .checking
+            }
             var fields: [String: Any] = [
                 "username": username,
                 "password": password
@@ -160,6 +166,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     func cancelLogin() {
         ioQueue.async { [weak self] in
             guard let self else { return }
+            guard !self.restoreOperationPending else { return }
             self.cancelRestoreRetry()
             self.restoringSession = false
             self.sendCommandOnQueue("cancelLogin")
@@ -464,6 +471,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             return
         }
         restoringSession = true
+        updateOnMain {
+            self.loginState = .loggingIn
+            self.authenticationState = .checking
+        }
         sendCommandOnQueue("restoreSession", fields: [
             "username": username,
             "refreshToken": token
@@ -748,6 +759,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         process = nil
         input = nil
         outputBuffer.removeAll(keepingCapacity: true)
+        cancelRestoreRetry()
+        restoringSession = false
         let handlers = Array(downloadHandlers.values)
         let requests = Array(requestHandlers.values)
         downloadHandlers.removeAll()

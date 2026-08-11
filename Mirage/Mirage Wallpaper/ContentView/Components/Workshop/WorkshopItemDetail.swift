@@ -220,7 +220,17 @@ struct WorkshopItemDetail: View {
         let isChanging = workshopViewModel.changingSubscriptionIDs.contains(id)
 
         VStack(spacing: 6) {
-            if workshopViewModel.steamSetupState != .ready {
+            if workshopViewModel.steamSetupState == .checking {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(workshopViewModel.steamCheckingMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+            } else if workshopViewModel.steamSetupState != .ready {
                 Button {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
@@ -478,6 +488,16 @@ struct WorkshopItemDetail: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
+        } else if workshopViewModel.steamSetupState == .checking {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(workshopViewModel.steamCheckingMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
         } else if workshopViewModel.steamSetupState != .ready {
             VStack(spacing: 6) {
                 Text(workshopViewModel.steamServiceStatus.workshopDownload.summary)

@@ -418,6 +418,8 @@
 "正在解压..." = "Unzipping...";
 "正在转换视频格式" = "Converting video format";
 "正在连接 Steam…" = "Connecting to Steam…";
+"正在恢复 Steam 会话…" = "Restoring the Steam session…";
+"正在确认 Steam 登录状态，请稍候。" = "Checking the Steam sign-in state. Please wait.";
 "正在退出…" = "Exiting...";
 "正在验证下载文件…" = "Verifying download file...";
 "此壁纸使用 macOS 无法直接解码的编码，正在转换为 H.264。转换只需进行一次。" = "This wallpaper uses an encoding that macOS cannot decode directly and is being converted to H.264. The conversion only needs to be done once.";
@@ -591,6 +593,9 @@
 "这一步需要连接 Steam 服务，请勿关闭 Mirage。" = "This step connects to Steam. Do not quit Mirage.";
 "进入全屏" = "Enter Full Screen";
 "连接 Steam 以下载壁纸" = "Connect to Steam to download wallpapers";
+"Steam 服务不可用" = "Steam service unavailable";
+"检查内置 Steam 服务后重试。" = "Check the built-in Steam service and try again.";
+"检查服务" = "Check Service";
 "连接 Steam 创意工坊，浏览并下载数十万 Wallpaper Engine 壁纸。" = "Connect to the Steam Workshop to browse and download hundreds of thousands of Wallpaper Engine wallpapers.";
 "连接中" = "Connecting";
 "退出 Mirage" = "Quit Mirage";

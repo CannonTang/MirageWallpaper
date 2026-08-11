@@ -127,7 +127,15 @@ struct SubscribedWorkshopView: View {
 
             WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
 
-            if steamService.isLoggedIn {
+            if workshopViewModel.steamSetupState == .checking {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(workshopViewModel.steamCheckingMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if steamService.isLoggedIn {
                 Label(steamService.accountName, systemImage: "person.crop.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -145,7 +153,17 @@ struct SubscribedWorkshopView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !steamService.isLoggedIn {
+        if workshopViewModel.steamSetupState == .checking {
+            centered {
+                ProgressView()
+                    .scaleEffect(1.3)
+                Text(workshopViewModel.steamCheckingMessage)
+                    .font(.title3)
+                Text("正在确认 Steam 登录状态，请稍候。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if !steamService.isLoggedIn {
             centered {
                 Image(systemName: "person.crop.circle.badge.exclamationmark")
                     .font(.system(size: 40))

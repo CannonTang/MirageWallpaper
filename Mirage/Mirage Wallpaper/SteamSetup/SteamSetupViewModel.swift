@@ -38,7 +38,7 @@ class SteamSetupViewModel: ObservableObject {
         let manager = SteamServiceManager.shared
         username = manager.savedUsername
         reusableSessionUsername = manager.isLoggedIn ? manager.accountName : nil
-        loginState = manager.isLoggedIn ? .success : .idle
+        loginState = manager.loginState
         manager.$loginState
             .receive(on: RunLoop.main)
             .sink { [weak self] state in
@@ -108,7 +108,7 @@ class SteamSetupViewModel: ObservableObject {
         stopQRRefreshWatchdog()
         password = ""
         guardCode = ""
-        loginState = SteamServiceManager.shared.isLoggedIn ? .success : .idle
+        loginState = SteamServiceManager.shared.loginState
         errorMessage = nil
     }
 
@@ -123,7 +123,7 @@ class SteamSetupViewModel: ObservableObject {
     func reset() {
         cancelPendingWork()
         currentStep = 0
-        loginState = SteamServiceManager.shared.isLoggedIn ? .success : .idle
+        loginState = SteamServiceManager.shared.loginState
         errorMessage = nil
         username = SteamServiceManager.shared.savedUsername
     }

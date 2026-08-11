@@ -126,10 +126,16 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Sync State
     // MARK: - Steam service state
 
-    @Published var steamSetupState: SteamSetupState = .notConfigured
+    @Published var steamSetupState: SteamSetupState = .checking
     @Published var steamServiceStatus = SteamServiceStatus()
     @Published var logoutResultMessage: String?
     @Published var isLoggingOut = false
+
+    var steamCheckingMessage: String {
+        SteamServiceManager.shared.savedUsername.isEmpty
+            ? L("正在连接 Steam…")
+            : L("正在恢复 Steam 会话…")
+    }
 
     var totalPages: Int {
         min(maximumPages, max(1, Int(ceil(Double(totalItems) / Double(itemsPerPage)))))
@@ -406,26 +412,57 @@ class WorkshopViewModel: ObservableObject {
         refreshSetupState()
     }
 
+    static func resolveSteamSetupState(
+        isAvailable: Bool,
+        isLoggedIn: Bool,
+        authenticationState: SteamServiceState
+    ) -> SteamSetupState {
+        if isAvailable && isLoggedIn {
+            return .ready
+        }
+        switch authenticationState {
+        case .unknown, .checking:
+            return .checking
+        case .available, .needsAction, .unavailable:
+            return isAvailable ? .needsLogin : .serviceUnavailable
+        }
+    }
+
     private func refreshSetupState() {
         let manager = SteamServiceManager.shared
-        if !manager.isAvailable {
-            steamSetupState = .serviceUnavailable
+        steamSetupState = Self.resolveSteamSetupState(
+            isAvailable: manager.isAvailable,
+            isLoggedIn: manager.isLoggedIn,
+            authenticationState: manager.authenticationState
+        )
+        steamServiceStatus.authentication = manager.authenticationState
+        switch steamSetupState {
+        case .checking:
+            steamServiceStatus.client = manager.isAvailable
+                ? .available(L("内置 Steam 服务可用"))
+                : .checking
+            steamServiceStatus.workshopDownload = .checking
+        case .serviceUnavailable:
             steamServiceStatus.client = .unavailable(L("Steam 服务组件不可用"))
             steamServiceStatus.workshopDownload = .needsAction(L("Steam 服务尚未就绪"))
-        } else if !manager.isLoggedIn {
+        case .needsLogin:
             steamServiceStatus.client = .available(L("内置 Steam 服务可用"))
-            steamSetupState = .needsLogin
             if manager.savedUsername.isEmpty {
                 steamServiceStatus.authentication = .needsAction(L("需要登录 Steam"))
             }
             steamServiceStatus.workshopDownload = .needsAction(L("需要有效的 Steam 会话"))
-        } else {
+        case .ready:
             steamServiceStatus.client = .available(L("内置 Steam 服务可用"))
-            steamSetupState = .ready
-            steamServiceStatus.authentication = .available(L("会话已验证"))
-            if case .unknown = steamServiceStatus.workshopDownload {
+            if steamServiceStatus.workshopDownload == .unknown ||
+                steamServiceStatus.workshopDownload == .checking {
                 steamServiceStatus.workshopDownload = .needsAction(L("尚未开始下载"))
             }
+        }
+    }
+
+    private func openSteamSetupIfActionable() {
+        if steamSetupState == .needsLogin || steamSetupState == .serviceUnavailable {
+            AppDelegate.shared.openSteamSetup()
         }
     }
 
@@ -899,7 +936,7 @@ class WorkshopViewModel: ObservableObject {
 
     func downloadAllSubscriptions() {
         guard SteamServiceManager.shared.isLoggedIn, !isPreparingSubscriptionDownloads else {
-            if !SteamServiceManager.shared.isLoggedIn { AppDelegate.shared.openSteamSetup() }
+            if !SteamServiceManager.shared.isLoggedIn { openSteamSetupIfActionable() }
             return
         }
         isPreparingSubscriptionDownloads = true
@@ -999,7 +1036,7 @@ class WorkshopViewModel: ObservableObject {
 
     func subscribe(_ item: WorkshopItem) {
         guard steamSetupState == .ready else {
-            AppDelegate.shared.openSteamSetup()
+            openSteamSetupIfActionable()
             return
         }
         let id = item.publishedFileId
@@ -1029,7 +1066,7 @@ class WorkshopViewModel: ObservableObject {
     func unsubscribe(_ item: WorkshopItem) {
         let id = item.publishedFileId
         guard steamSetupState == .ready, !changingSubscriptionIDs.contains(id) else {
-            if steamSetupState != .ready { AppDelegate.shared.openSteamSetup() }
+            if steamSetupState != .ready { openSteamSetupIfActionable() }
             return
         }
         changingSubscriptionIDs.insert(id)
@@ -1519,7 +1556,7 @@ class WorkshopViewModel: ObservableObject {
            pending.dependencyID == prompt.dependencyID {
             downloadItem(prompt.dependencyItem, purpose: .presetDependency)
             if steamSetupState != .ready {
-                AppDelegate.shared.openSteamSetup()
+                openSteamSetupIfActionable()
             }
             return
         }
@@ -1534,7 +1571,7 @@ class WorkshopViewModel: ObservableObject {
 
         downloadItem(prompt.dependencyItem, purpose: .presetDependency)
         if steamSetupState != .ready {
-            AppDelegate.shared.openSteamSetup()
+            openSteamSetupIfActionable()
         }
     }
 

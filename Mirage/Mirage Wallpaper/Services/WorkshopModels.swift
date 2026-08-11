@@ -582,7 +582,7 @@ struct SteamServiceRequestError: LocalizedError, Equatable {
 // MARK: - Steam Setup State
 
 enum SteamSetupState: Equatable {
-    case notConfigured
+    case checking
     case serviceUnavailable
     case needsLogin
     case ready

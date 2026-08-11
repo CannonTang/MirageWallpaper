@@ -350,7 +350,17 @@ struct WallpaperPreview: SubviewOfContentView {
             let isChanging = workshopViewModel.changingSubscriptionIDs.contains(id)
 
             VStack(spacing: 3) {
-                if workshopViewModel.steamSetupState != .ready {
+                if workshopViewModel.steamSetupState == .checking {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(workshopViewModel.steamCheckingMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                } else if workshopViewModel.steamSetupState != .ready {
                     Button {
                         AppDelegate.shared.openSteamSetup()
                     } label: {

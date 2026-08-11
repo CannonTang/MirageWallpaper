@@ -274,7 +274,8 @@ struct WorkshopView: View {
 
     @ViewBuilder
     var steamAccountSection: some View {
-        if workshopViewModel.steamSetupState == .ready {
+        switch workshopViewModel.steamSetupState {
+        case .ready:
             HStack(spacing: 8) {
                 HStack(spacing: 4) {
                     Image(systemName: "person.crop.circle.fill")
@@ -305,7 +306,15 @@ struct WorkshopView: View {
                     .help("退出 Steam")
                 }
             }
-        } else {
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(workshopViewModel.steamCheckingMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .needsLogin, .serviceUnavailable:
             Button {
                 AppDelegate.shared.openSteamSetup()
             } label: {
@@ -316,34 +325,59 @@ struct WorkshopView: View {
         }
     }
 
+    @ViewBuilder
     var steamSetupBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "cloud.fill")
-                .font(.title2)
-                .foregroundStyle(.blue)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("连接 Steam 以下载壁纸")
-                    .font(.callout)
-                    .bold()
-                Text("登录 Steam 后可直接从创意工坊下载壁纸到本地（需拥有 Wallpaper Engine）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        switch workshopViewModel.steamSetupState {
+        case .checking:
+            HStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.regular)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(workshopViewModel.steamCheckingMessage)
+                        .font(.callout)
+                        .bold()
+                    Text("正在确认 Steam 登录状态，请稍候。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
-            Spacer()
-            Button {
-                AppDelegate.shared.openSteamSetup()
-            } label: {
-                Text("立即设置")
+            .padding(12)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        case .needsLogin, .serviceUnavailable:
+            HStack(spacing: 12) {
+                Image(systemName: "cloud.fill")
+                    .font(.title2)
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(workshopViewModel.steamSetupState == .serviceUnavailable ? "Steam 服务不可用" : "连接 Steam 以下载壁纸")
+                        .font(.callout)
+                        .bold()
+                    Text(workshopViewModel.steamSetupState == .serviceUnavailable
+                         ? "检查内置 Steam 服务后重试。"
+                         : "登录 Steam 后可直接从创意工坊下载壁纸到本地（需拥有 Wallpaper Engine）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    AppDelegate.shared.openSteamSetup()
+                } label: {
+                    Text(workshopViewModel.steamSetupState == .serviceUnavailable ? "检查服务" : "立即设置")
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
+            .padding(12)
+            .background(Color.blue.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+            )
+        case .ready:
+            EmptyView()
         }
-        .padding(12)
-        .background(Color.blue.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.blue.opacity(0.2), lineWidth: 1)
-        )
     }
 
     private func presentAPIKeyReminderIfNeeded() {
