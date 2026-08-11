@@ -98,11 +98,22 @@ class WorkshopViewModel: ObservableObject {
     @Published var presetDependencyPrompt: PresetDependencyPrompt?
 
     @Published private(set) var subscriptionRecords: [WorkshopSubscription] = []
+    @Published private(set) var subscriptionCatalogItems: [WorkshopItem] = []
     @Published private(set) var subscriptionItems: [WorkshopItem] = []
     @Published private(set) var subscriptionTotal = 0
     @Published private(set) var subscriptionStartIndex = 0
     @Published private(set) var isLoadingSubscriptions = false
     @Published private(set) var subscriptionsError: String?
+    @Published var subscriptionSearchText = ""
+    @Published var subscriptionSelectedTags: Set<String> = []
+    @Published var subscriptionTypeFilter: WorkshopTypeFilter = .all
+    @Published var subscriptionAgeRatingFilter: WorkshopAgeRatingFilter = .all
+    @Published var subscriptionWidescreenResolution = FRWidescreenResolution.all
+    @Published var subscriptionUltraWidescreenResolution = FRUltraWidescreenResolution.all
+    @Published var subscriptionDualscreenResolution = FRDualscreenResolution.all
+    @Published var subscriptionTriplescreenResolution = FRTriplescreenResolution.all
+    @Published var subscriptionPortraitResolution = FRPortraitScreenResolution.all
+    @Published var subscriptionMiscResolution = FRMiscResolution.all
     @Published private(set) var subscriptionStates: [String: WorkshopSubscriptionState] = [:]
     @Published private(set) var checkingSubscriptionIDs: Set<String> = []
     @Published private(set) var changingSubscriptionIDs: Set<String> = []
@@ -155,8 +166,7 @@ class WorkshopViewModel: ObservableObject {
     }
 
     var canLoadNextSubscriptions: Bool {
-        !isLoadingSubscriptions && !subscriptionRecords.isEmpty &&
-            subscriptionStartIndex + subscriptionRecords.count < subscriptionTotal
+        !isLoadingSubscriptions && subscriptionStartIndex + subscriptionPageSize < subscriptionTotal
     }
 
     var subscriptionPageCount: Int {
@@ -167,6 +177,36 @@ class WorkshopViewModel: ObservableObject {
         min(subscriptionPageCount, subscriptionStartIndex / subscriptionPageSize + 1)
     }
 
+    var allSubscriptionResolutionsSelected: Bool {
+        subscriptionWidescreenResolution == .all &&
+            subscriptionUltraWidescreenResolution == .all &&
+            subscriptionDualscreenResolution == .all &&
+            subscriptionTriplescreenResolution == .all &&
+            subscriptionPortraitResolution == .all &&
+            subscriptionMiscResolution == .all
+    }
+
+    var allSubscriptionResolutionsCleared: Bool {
+        subscriptionWidescreenResolution.isEmpty &&
+            subscriptionUltraWidescreenResolution.isEmpty &&
+            subscriptionDualscreenResolution.isEmpty &&
+            subscriptionTriplescreenResolution.isEmpty &&
+            subscriptionPortraitResolution.isEmpty &&
+            subscriptionMiscResolution.isEmpty
+    }
+
+    var allSubscriptionTagsSelected: Bool {
+        Set(WorkshopTag.allCases.map(\.rawValue)).isSubset(of: subscriptionSelectedTags)
+    }
+
+    var hasActiveSubscriptionFilters: Bool {
+        !subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            (!subscriptionSelectedTags.isEmpty && !allSubscriptionTagsSelected) ||
+            subscriptionTypeFilter != .all ||
+            (!subscriptionAgeRatingFilter.isEmpty && subscriptionAgeRatingFilter != .all) ||
+            !allSubscriptionResolutionsSelected
+    }
+
     var isTextRelevanceSearch: Bool {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return !query.isEmpty && !Self.isPublishedFileId(query) && !Self.isSteamUserId(query)
@@ -175,6 +215,7 @@ class WorkshopViewModel: ObservableObject {
     private static let ageRatingStorageKey = "WorkshopAgeRatingFilter"
 
     private var searchDebounce: AnyCancellable?
+    private var subscriptionSearchDebounce: AnyCancellable?
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
     private var pendingPresetApplication: (presetID: String, dependencyID: String, selectionGeneration: Int)?
@@ -190,8 +231,6 @@ class WorkshopViewModel: ObservableObject {
     private var selectionGeneration = 0
     private var loadedPage = 1
     private let commentsPageSize = 20
-    private let steamSubscriptionPageSize = 50
-
     private var subscriptionPageSize: Int {
         let value = UserDefaults.standard.integer(forKey: "WallpapersPerPage")
         return [10, 25, 50].contains(value) ? value : 50
@@ -228,6 +267,13 @@ class WorkshopViewModel: ObservableObject {
                 self?.search()
             }
 
+        subscriptionSearchDebounce = $subscriptionSearchText
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                self?.refreshSubscriptionFilters()
+            }
+
         SteamServiceManager.shared.$isLoggedIn
             .receive(on: RunLoop.main)
             .sink { [weak self] isLoggedIn in
@@ -235,7 +281,7 @@ class WorkshopViewModel: ObservableObject {
                 self.refreshSetupState()
                 guard isLoggedIn else { return }
                 self.processDownloadQueue()
-                if self.subscriptionItems.isEmpty {
+                if self.subscriptionCatalogItems.isEmpty && !self.isLoadingSubscriptions {
                     self.refreshSubscriptions(startIndex: 0)
                 }
                 if let item = self.selectedItem {
@@ -862,6 +908,7 @@ class WorkshopViewModel: ObservableObject {
     func refreshSubscriptions(startIndex: Int? = nil) {
         guard SteamServiceManager.shared.isLoggedIn else {
             subscriptionRecords = []
+            subscriptionCatalogItems = []
             subscriptionItems = []
             subscriptionTotal = 0
             subscriptionStartIndex = 0
@@ -872,46 +919,51 @@ class WorkshopViewModel: ObservableObject {
         subscriptionGeneration += 1
         let generation = subscriptionGeneration
         let requestedStart = max(0, startIndex ?? subscriptionStartIndex)
-        let requestedPageSize = subscriptionPageSize
-        let serviceStart = requestedStart / steamSubscriptionPageSize * steamSubscriptionPageSize
-        let pageOffset = requestedStart - serviceStart
         isLoadingSubscriptions = true
         subscriptionsError = nil
-        SteamServiceManager.shared.fetchSubscriptions(startIndex: serviceStart) { [weak self] result in
-            guard let self, generation == self.subscriptionGeneration else { return }
-            switch result {
-            case .success(let page):
-                Task { @MainActor [weak self] in
-                    guard let self, generation == self.subscriptionGeneration else { return }
-                    let visibleRecords = Array(page.subscriptions.dropFirst(pageOffset).prefix(requestedPageSize))
-                    do {
-                        let loaded = try await self.loadSubscriptionItems(for: visibleRecords)
-                        guard generation == self.subscriptionGeneration else { return }
-                        self.subscriptionRecords = visibleRecords
-                        self.subscriptionItems = loaded
-                        self.subscriptionTotal = page.total
-                        self.subscriptionStartIndex = requestedStart
-                        for record in visibleRecords {
-                            self.subscriptionStates[record.publishedFileId] = .subscribed
-                        }
-                        self.rememberCreators(in: loaded)
-                        self.isLoadingSubscriptions = false
-                    } catch {
-                        guard generation == self.subscriptionGeneration else { return }
-                        self.subscriptionRecords = visibleRecords
-                        self.subscriptionItems = visibleRecords.map {
-                            WorkshopItem.unavailableSubscription(id: $0.publishedFileId)
-                        }
-                        self.subscriptionTotal = page.total
-                        self.subscriptionStartIndex = requestedStart
-                        for record in visibleRecords {
-                            self.subscriptionStates[record.publishedFileId] = .subscribed
-                        }
-                        self.subscriptionsError = error.localizedDescription
-                        self.isLoadingSubscriptions = false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                var records: [WorkshopSubscription] = []
+                var seen = Set<String>()
+                var serviceStart = 0
+                var total = Int.max
+                while serviceStart < total {
+                    let page = try await self.subscriptionPage(startIndex: serviceStart)
+                    guard generation == self.subscriptionGeneration else { return }
+                    total = page.total
+                    for record in page.subscriptions where seen.insert(record.publishedFileId).inserted {
+                        records.append(record)
                     }
+                    guard !page.subscriptions.isEmpty else { break }
+                    let nextStart = page.startIndex + page.subscriptions.count
+                    guard nextStart > serviceStart else { break }
+                    serviceStart = nextStart
                 }
-            case .failure(let error):
+
+                let loaded: [WorkshopItem]
+                do {
+                    loaded = try await self.loadSubscriptionItems(for: records)
+                } catch {
+                    loaded = records.map { WorkshopItem.unavailableSubscription(id: $0.publishedFileId) }
+                    self.subscriptionsError = error.localizedDescription
+                }
+                guard generation == self.subscriptionGeneration else { return }
+                let subscribedIDs = Set(records.map(\.publishedFileId))
+                let removedIDs = Set(self.subscriptionRecords.map(\.publishedFileId)).subtracting(subscribedIDs)
+                self.subscriptionRecords = records
+                self.subscriptionCatalogItems = loaded
+                for id in removedIDs {
+                    self.subscriptionStates[id] = .unsubscribed
+                }
+                for record in records {
+                    self.subscriptionStates[record.publishedFileId] = .subscribed
+                }
+                self.rememberCreators(in: loaded)
+                self.rebuildSubscriptionPage(startIndex: requestedStart)
+                self.isLoadingSubscriptions = false
+            } catch {
+                guard generation == self.subscriptionGeneration else { return }
                 self.subscriptionsError = error.localizedDescription
                 self.isLoadingSubscriptions = false
             }
@@ -931,7 +983,101 @@ class WorkshopViewModel: ObservableObject {
     func goToSubscriptionPage(_ page: Int) {
         let target = min(max(page, 1), subscriptionPageCount)
         guard !isLoadingSubscriptions, target != subscriptionCurrentPage else { return }
-        refreshSubscriptions(startIndex: (target - 1) * subscriptionPageSize)
+        rebuildSubscriptionPage(startIndex: (target - 1) * subscriptionPageSize)
+    }
+
+    func subscriptionPageSizeDidChange() {
+        rebuildSubscriptionPage(startIndex: 0)
+    }
+
+    func refreshSubscriptionFilters() {
+        rebuildSubscriptionPage(startIndex: 0)
+    }
+
+    func setSubscriptionTypeFilter(_ filter: WorkshopTypeFilter) {
+        subscriptionTypeFilter = filter
+        refreshSubscriptionFilters()
+    }
+
+    func applySubscriptionAgeRatingFilter(_ rating: WorkshopAgeRating, isOn: Bool) {
+        var updated = subscriptionAgeRatingFilter
+        let option = WorkshopAgeRatingFilter.bit(for: rating)
+        if isOn {
+            updated.insert(option)
+        } else {
+            updated.remove(option)
+        }
+        guard updated != subscriptionAgeRatingFilter else { return }
+        subscriptionAgeRatingFilter = updated
+        refreshSubscriptionFilters()
+    }
+
+    func setSubscriptionResolutionOption<Filter: FilterResultsModel>(
+        _ keyPath: ReferenceWritableKeyPath<WorkshopViewModel, Filter>,
+        option: Filter,
+        isOn: Bool
+    ) {
+        var value = self[keyPath: keyPath]
+        if isOn {
+            value.insert(option)
+        } else {
+            value.remove(option)
+        }
+        self[keyPath: keyPath] = value
+        refreshSubscriptionFilters()
+    }
+
+    func selectAllSubscriptionResolutions() {
+        subscriptionWidescreenResolution = .all
+        subscriptionUltraWidescreenResolution = .all
+        subscriptionDualscreenResolution = .all
+        subscriptionTriplescreenResolution = .all
+        subscriptionPortraitResolution = .all
+        subscriptionMiscResolution = .all
+        refreshSubscriptionFilters()
+    }
+
+    func clearSubscriptionResolutions() {
+        subscriptionWidescreenResolution = .none
+        subscriptionUltraWidescreenResolution = .none
+        subscriptionDualscreenResolution = .none
+        subscriptionTriplescreenResolution = .none
+        subscriptionPortraitResolution = .none
+        subscriptionMiscResolution = .none
+        refreshSubscriptionFilters()
+    }
+
+    func selectAllSubscriptionTags() {
+        subscriptionSelectedTags = Set(WorkshopTag.allCases.map(\.rawValue))
+        refreshSubscriptionFilters()
+    }
+
+    func clearSubscriptionTags() {
+        subscriptionSelectedTags.removeAll()
+        refreshSubscriptionFilters()
+    }
+
+    func applySubscriptionTagFilter(_ tag: String) {
+        if subscriptionSelectedTags.contains(tag) {
+            subscriptionSelectedTags.remove(tag)
+        } else {
+            subscriptionSelectedTags.insert(tag)
+        }
+        refreshSubscriptionFilters()
+    }
+
+    func clearSubscriptionFilters() {
+        subscriptionSearchText = ""
+        subscriptionSelectedTags.removeAll()
+        subscriptionTypeFilter = .all
+        subscriptionAgeRatingFilter = .all
+        subscriptionWidescreenResolution = .all
+        subscriptionUltraWidescreenResolution = .all
+        subscriptionDualscreenResolution = .all
+        subscriptionTriplescreenResolution = .all
+        subscriptionPortraitResolution = .all
+        subscriptionMiscResolution = .all
+        refreshSubscriptionFilters()
     }
 
     func downloadAllSubscriptions() {
@@ -946,17 +1092,25 @@ class WorkshopViewModel: ObservableObject {
             guard let self else { return }
             defer { self.isPreparingSubscriptionDownloads = false }
             do {
-                var allRecords: [WorkshopSubscription] = []
-                var startIndex = 0
-                var total = Int.max
-                while startIndex < total {
-                    let page = try await self.subscriptionPage(startIndex: startIndex)
-                    total = page.total
-                    allRecords.append(contentsOf: page.subscriptions)
-                    guard !page.subscriptions.isEmpty else { break }
-                    startIndex = page.startIndex + page.subscriptions.count
+                let loaded: [WorkshopItem]
+                let subscriptionCount: Int
+                if !self.subscriptionCatalogItems.isEmpty {
+                    loaded = self.subscriptionCatalogItems
+                    subscriptionCount = self.subscriptionRecords.count
+                } else {
+                    var allRecords: [WorkshopSubscription] = []
+                    var startIndex = 0
+                    var total = Int.max
+                    while startIndex < total {
+                        let page = try await self.subscriptionPage(startIndex: startIndex)
+                        total = page.total
+                        allRecords.append(contentsOf: page.subscriptions)
+                        guard !page.subscriptions.isEmpty else { break }
+                        startIndex = page.startIndex + page.subscriptions.count
+                    }
+                    loaded = try await self.loadSubscriptionItems(for: allRecords)
+                    subscriptionCount = total == Int.max ? allRecords.count : total
                 }
-                let loaded = try await self.loadSubscriptionItems(for: allRecords)
                 let activeIDs = Set(self.downloadQueue.compactMap { task -> String? in
                     switch task.state {
                     case .queued, .resolving, .downloading, .validating:
@@ -973,7 +1127,7 @@ class WorkshopViewModel: ObservableObject {
                 }
                 let pending = remaining.filter { !activeIDs.contains($0.publishedFileId) }
                 self.subscriptionDownloadPlan = SubscriptionDownloadPlan(
-                    subscriptionCount: total == Int.max ? allRecords.count : total,
+                    subscriptionCount: subscriptionCount,
                     remainingCount: remaining.count,
                     items: pending
                 )
@@ -1080,8 +1234,8 @@ class WorkshopViewModel: ObservableObject {
                 self.subscriptionStates[id] = .unsubscribed
                 self.cancelDownloadForUnsubscribe(workshopId: id)
                 self.subscriptionRecords.removeAll { $0.publishedFileId == id }
-                self.subscriptionItems.removeAll { $0.publishedFileId == id }
-                self.subscriptionTotal = max(0, self.subscriptionTotal - 1)
+                self.subscriptionCatalogItems.removeAll { $0.publishedFileId == id }
+                self.rebuildSubscriptionPage(startIndex: self.subscriptionStartIndex)
                 do {
                     try WallpaperLibrary.shared.removeManagedWorkshopItem(workshopId: id)
                     self.refreshInstalledState(reconcileDownloads: true)
@@ -1254,6 +1408,69 @@ class WorkshopViewModel: ObservableObject {
         }
         let byID = Dictionary(details.map { ($0.publishedFileId, $0) }, uniquingKeysWith: { first, _ in first })
         return records.map { byID[$0.publishedFileId] ?? .unavailableSubscription(id: $0.publishedFileId) }
+    }
+
+    private func rebuildSubscriptionPage(startIndex: Int) {
+        let filtered = subscriptionCatalogItems.filter(matchesSubscriptionFilters)
+        let maximumStart = filtered.isEmpty ? 0 : (filtered.count - 1) / subscriptionPageSize * subscriptionPageSize
+        let clampedStart = min(max(0, startIndex), maximumStart)
+        subscriptionTotal = filtered.count
+        subscriptionStartIndex = clampedStart
+        subscriptionItems = Array(filtered.dropFirst(clampedStart).prefix(subscriptionPageSize))
+    }
+
+    private func matchesSubscriptionFilters(_ item: WorkshopItem) -> Bool {
+        let query = subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            let searchableValues = [
+                item.title,
+                item.itemDescription,
+                item.creatorDisplayName,
+                item.creatorSteamId,
+                item.publishedFileId
+            ] + item.tags
+            guard searchableValues.contains(where: { $0.localizedCaseInsensitiveContains(query) }) else {
+                return false
+            }
+        }
+
+        switch subscriptionTypeFilter {
+        case .all:
+            break
+        case .scene:
+            guard item.kind == .scene else { return false }
+        case .web:
+            guard item.kind == .web else { return false }
+        case .video:
+            guard item.kind == .video else { return false }
+        case .preset:
+            guard item.isPreset else { return false }
+        }
+
+        if !subscriptionAgeRatingFilter.isEmpty,
+           subscriptionAgeRatingFilter != .all,
+           !subscriptionAgeRatingFilter.contains(item.ageRating ?? .everyone) {
+            return false
+        }
+
+        let selectableTags = Set(WorkshopTag.allCases.map(\.rawValue))
+        if !subscriptionSelectedTags.isEmpty,
+           !selectableTags.isSubset(of: subscriptionSelectedTags) {
+            let itemTags = Set(item.tags.map { $0.lowercased() })
+            guard subscriptionSelectedTags.allSatisfy({ itemTags.contains($0.lowercased()) }) else {
+                return false
+            }
+        }
+
+        return FRResolutionFilter.matches(
+            tags: item.tags,
+            widescreen: subscriptionWidescreenResolution,
+            ultraWidescreen: subscriptionUltraWidescreenResolution,
+            dualscreen: subscriptionDualscreenResolution,
+            triplescreen: subscriptionTriplescreenResolution,
+            portrait: subscriptionPortraitResolution,
+            misc: subscriptionMiscResolution
+        )
     }
 
     private func cancelDownloadForUnsubscribe(workshopId: String) {
@@ -1462,9 +1679,20 @@ class WorkshopViewModel: ObservableObject {
                 self.steamServiceStatus.authentication = .needsAction(L("已退出登录"))
                 self.logoutResultMessage = L("已退出 Mirage 的 Steam 会话。")
                 self.subscriptionRecords = []
+                self.subscriptionCatalogItems = []
                 self.subscriptionItems = []
                 self.subscriptionTotal = 0
                 self.subscriptionStartIndex = 0
+                self.subscriptionSearchText = ""
+                self.subscriptionSelectedTags = []
+                self.subscriptionTypeFilter = .all
+                self.subscriptionAgeRatingFilter = .all
+                self.subscriptionWidescreenResolution = .all
+                self.subscriptionUltraWidescreenResolution = .all
+                self.subscriptionDualscreenResolution = .all
+                self.subscriptionTriplescreenResolution = .all
+                self.subscriptionPortraitResolution = .all
+                self.subscriptionMiscResolution = .all
                 self.subscriptionStates = [:]
                 self.checkingSubscriptionIDs = []
                 self.changingSubscriptionIDs = []
