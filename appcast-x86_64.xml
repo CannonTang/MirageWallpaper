@@ -6,6 +6,79 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.0.7</title>
+            <pubDate>Tue, 11 Aug 2026 18:25:52 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>308</sparkle:version>
+            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Mirage 1.0.7
+
+本版本带来创意工坊已订阅壁纸管理的重大升级：Mirage 现在可以直接读取和管理 Steam 订阅、批量补齐未下载壁纸，并在应用内查看与发表评论。同时改进网页壁纸信任控制、视频播放稳定性和分发包签名。
+
+## 重大更新：已订阅壁纸管理
+
+- 新增独立的“已订阅”页面，直接读取当前 Steam 账号的 Wallpaper Engine 创意工坊订阅，并显示作品详情、安装状态和分页结果；可按标题、作者、Workshop ID 或标签搜索，并按壁纸类型、内容分级、分辨率和标签筛选。
+- 创意工坊详情页现在可以直接“订阅并下载”或取消订阅。订阅成功后会自动加入下载队列；取消订阅会停止对应任务并删除 Mirage 下载目录中的副本，但不会删除 Steam 内容目录中的文件。
+- 新增“下载全部”，会先统计全部订阅，只把尚未安装且未在下载队列中的可用作品加入任务，避免重复下载。
+- 作品详情页新增 Steam 评论浏览、分页和发布功能，并显示评论作者、时间、赞数及隐藏状态；已安装壁纸的菜单也可复制创意工坊链接或前往 Steam 查看和举报。
+
+## 安全与稳定性
+
+- 网页壁纸安全确认现在明确区分“信任并继续”和“仅本次继续”。持久信任改为按标准化壁纸目录记录，避免不同目录中同名壁纸错误共享信任，并兼容已有信任记录与目录迁移。
+- 修复 Steam 会话恢复期间仍可发起新的登录或创意工坊操作的问题；界面会等待恢复完成后再开放相关操作，减少重复登录、状态闪烁和会话竞争。
+- 改进视频壁纸的内存映射播放：资源按块提供给 AVFoundation，兼容其内容类型协商，并在播放无进度时进行有界恢复；快照完成后也会及时移除临时视频输出，降低大文件或长时间播放时卡住的概率。
+- 改进正式包的签名链：保留内置 .NET 运行时的 Apple 签名，显式签名 Sparkle 更新组件和应用权限，并在 CI 中验证 Steam 服务、Sparkle 与应用签名。
+
+## 修复
+
+- 修复自定义导入目录与创意工坊目录设置为同一路径时，其中一个来源在设置界面消失的问题；两个来源现在会分别显示，实际扫描仍会去重，避免壁纸重复 (#22)。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 系统要求：macOS 14.2 或更高版本
+
+当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
+
+---
+
+
+# Mirage 1.0.7
+
+This release delivers a major upgrade to Workshop subscription management. Mirage can now read and manage Steam subscriptions directly, download missing subscribed wallpapers in bulk, and browse or post comments in the app. It also improves web-wallpaper trust controls, video playback stability, and package signing.
+
+## Major Update: Subscribed Wallpaper Management
+
+- Added a dedicated Subscribed page that reads Wallpaper Engine Workshop subscriptions from the current Steam account and shows item details, installation state, and paginated results. Subscriptions can be searched by title, creator, Workshop ID, or tag and filtered by wallpaper type, content rating, resolution, and tags.
+- Workshop details now support Subscribe and Download as well as unsubscribe. A successful subscription is added to the download queue automatically. Unsubscribing stops the matching task and removes Mirage's managed download, without deleting files from Steam content directories.
+- Added Download All, which scans the full subscription list and queues only available items that are neither installed nor already downloading.
+- Workshop details now support browsing, paging through, and posting Steam comments, including author, timestamp, upvote, and hidden-state information. Installed-wallpaper menus can also copy the Workshop link or open the item on Steam for viewing or reporting.
+
+## Security and Stability
+
+- Web-wallpaper confirmation now clearly separates Trust and Continue from Continue Once. Persistent trust is keyed by the standardized wallpaper directory, preventing same-named wallpapers in different folders from sharing trust while remaining compatible with existing records and path migration.
+- Fixed new login or Workshop actions being available while a saved Steam session was still restoring. Mirage now waits for restoration to finish before enabling those actions, reducing duplicate login attempts, state flicker, and session races.
+- Improved memory-mapped video wallpaper playback. Resources are delivered to AVFoundation in chunks with content-type negotiation, stalled playback receives bounded recovery, and temporary video outputs are removed after snapshots, reducing stalls with large files or long-running playback.
+- Improved the release package signing chain by preserving Apple's signatures on the bundled .NET runtime, explicitly signing Sparkle update components and app entitlements, and verifying the Steam service, Sparkle, and app signatures in CI.
+
+## Fixes
+
+- Fixed one library source disappearing from Settings when the custom import directory and Workshop directory pointed to the same path. Both sources remain visible while filesystem scanning is still deduplicated to avoid duplicate wallpapers (#22).
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- Requires macOS 14.2 or later
+
+Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.7/Mirage-308-a85684cb8790-macOS-x86_64.zip" length="236908053" type="application/octet-stream" sparkle:edSignature="fmvU/+kcyTF1EIGPUou0QhQf5KneW6LgBWe5kxw3js3GkiZGo9HHzDAHVFuzvMeQ5zfdJQXZkHR3reWTARMTCA=="/>
+        </item>
+        <item>
             <title>1.0.6</title>
             <pubDate>Tue, 11 Aug 2026 17:37:52 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -21,40 +94,6 @@ fix(steam): prevent login during session restore
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-304-687e8a17be71-macOS-x86_64.zip" length="236836554" type="application/octet-stream" sparkle:edSignature="ol4tuIK+8JutLJ87uYKXBKBI+FWQC17d3rMjvzH3c/tS8zwcvhSIgA1AGDFUjEl0LUjB0u3EZadsN8JS3prYCw=="/>
-        </item>
-        <item>
-            <title>1.0.6</title>
-            <pubDate>Tue, 11 Aug 2026 17:25:46 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>303</sparkle:version>
-            <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: ba1e10655a9349858ff0d9efd35940175c86c551
-Channel: beta
-
-fix(localization): add workshop and trust strings
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-303-ba1e10655a93-macOS-x86_64.zip" length="236817318" type="application/octet-stream" sparkle:edSignature="91mAwOSk29FX3KXu8mpv2SspjLNf1lSJq/mhrVgXAJXZ6NxZsfwQEaSZwFme2OUbrmD06/5xE5gUoxPSTKSvCg=="/>
-        </item>
-        <item>
-            <title>1.0.6</title>
-            <pubDate>Tue, 11 Aug 2026 14:47:29 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>299</sparkle:version>
-            <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 3ee9a14e538b92b52b2636ad7404b18bd3d82e58
-Channel: beta
-
-fix(app): preserve runtime signatures and library source rows
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-299-3ee9a14e538b-macOS-x86_64.zip" length="236573236" type="application/octet-stream" sparkle:edSignature="3FLxiJ2a8EdtWvCyJ3SJA9s8Dpitkb/KHMgqhZaea+D4uyXDucxBEBtoZZXMo0Yireg0uw4wlHG9CP6yHrjeBA=="/>
         </item>
         <item>
             <title>1.0.6</title>
@@ -126,23 +165,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.6/Mirage-296-4a05ff65e75c-macOS-x86_64.zip" length="236531469" type="application/octet-stream" sparkle:edSignature="/l9GX7vAmdnmaj0ZQqCJyw34tpHZzfGm/nQGnJiNq+k4drSD6ZkIefUYvQceLzsXM2pw7fL2A8V3/9l99ifyDA=="/>
-        </item>
-        <item>
-            <title>1.0.5</title>
-            <pubDate>Mon, 10 Aug 2026 16:15:44 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>295</sparkle:version>
-            <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 35287ed7c5dea20f61f5015f6e8f3254cdbe135d
-Channel: beta
-
-feat(renderer): send subdivision to the geometric generator as a clear particle subsystem state
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-295-35287ed7c5de-macOS-x86_64.zip" length="236531472" type="application/octet-stream" sparkle:edSignature="2mJLeeIQN6t3syWlRN7xzif8IrUhnRo8DxhtrgNegVY91cniwB/wNEM48wG/kV2QoApNC52dqjiMkifAm+IUBA=="/>
         </item>
         <item>
             <title>1.0.5</title>
@@ -363,25 +385,9 @@ chore(release): bump version to 1.0.2
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.2/Mirage-263-0534449e147f-macOS-x86_64.zip" length="198892777" type="application/octet-stream" sparkle:edSignature="ygAU40tnTfmQprJooqOxxwRTTAYN8voNIfaeZyTjoqReu/JvNsJvMhqOd5w4x7Bvem5TlYiLfWkDQhhm5YMdDg=="/>
         </item>
-        <item>
-            <title>1.0.1</title>
-            <pubDate>Thu, 06 Aug 2026 14:44:13 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:version>260</sparkle:version>
-            <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: f49690e035d0141e287056b31b5bc487fa648f32
-Channel: stable
-
-chore(release): bump version to 1.0.1
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.1/Mirage-260-f49690e035d0-macOS-x86_64.zip" length="198891984" type="application/octet-stream" sparkle:edSignature="SS+waLMQoH47F958F9bIdafVksOvKJ4MEQDfQNlAonQntHLNmtNY0i6GHAYYoXtNr+LLAGBjifKRpI/ojHzfCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: Fpl3UzQC9RVzUPGUcPJTmXwc6fKTBgCV1AXbAb2PwwR8725L/iDcpS6xoJgdKM0b1kJX+wU5CfPtLvqjEIQbAQ==
-length: 27155
+edSignature: Q4VEWy2TpHhz/N6VdJzE/lp+Ew8d4Vw5X5I7AHMLLXEraX/pwN9UUbXHsOG2Y1YqXBTw/dDlgV7VswN4TTjjCw==
+length: 29755
 -->
