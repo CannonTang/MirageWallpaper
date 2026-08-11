@@ -26,6 +26,12 @@ concurrency:
 
 jobs:
   build:
+    # A release commit only updates version metadata and notes on main. The
+    # matching v* tag still performs the authoritative release build.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_type == 'tag' ||
+      !startsWith(github.event.head_commit.message, 'chore(release): bump version')
     name: Build and package (${{ matrix.arch }})
     strategy:
       matrix:
