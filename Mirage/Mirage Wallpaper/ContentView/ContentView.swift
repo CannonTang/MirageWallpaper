@@ -144,12 +144,16 @@ struct ContentView: View {
                             }
 
                             if loadedSections.contains(.subscriptions) {
-                                SubscribedWorkshopView(
-                                    workshopViewModel: workshopViewModel,
-                                    viewModel: viewModel,
-                                    wallpaperViewModel: wallpaperViewModel,
-                                    isActive: navigationModel.selection == .subscriptions
-                                )
+                                FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
+                                    SubscribedWorkshopFilterSidebar(workshopViewModel: workshopViewModel)
+                                }, content: {
+                                    SubscribedWorkshopView(
+                                        workshopViewModel: workshopViewModel,
+                                        viewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        isActive: navigationModel.selection == .subscriptions
+                                    )
+                                })
                                 .sectionVisibility(navigationModel.selection == .subscriptions)
                             }
                         }

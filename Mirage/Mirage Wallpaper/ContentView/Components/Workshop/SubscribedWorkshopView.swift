@@ -29,7 +29,9 @@ struct SubscribedWorkshopView: View {
         }
         .onAppear {
             workshopViewModel.checkSteamSetup()
-            if steamService.isLoggedIn && workshopViewModel.subscriptionItems.isEmpty {
+            if steamService.isLoggedIn &&
+                workshopViewModel.subscriptionCatalogItems.isEmpty &&
+                !workshopViewModel.isLoadingSubscriptions {
                 workshopViewModel.refreshSubscriptions(startIndex: 0)
             }
         }
@@ -39,9 +41,7 @@ struct SubscribedWorkshopView: View {
             }
         }
         .onChange(of: viewModel.wallpapersPerPage) { _, _ in
-            if steamService.isLoggedIn {
-                workshopViewModel.refreshSubscriptions(startIndex: 0)
-            }
+            workshopViewModel.subscriptionPageSizeDidChange()
         }
         .alert(
             "下载全部已订阅壁纸",
@@ -85,14 +85,49 @@ struct SubscribedWorkshopView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
+            Button {
+                viewModel.isFilterReveal.toggle()
+            } label: {
+                Label("筛选", systemImage: "checklist.checked")
+            }
+            .buttonStyle(.borderedProminent)
+
             Label("已订阅", systemImage: "checkmark.circle.fill")
                 .font(.headline)
 
-            if workshopViewModel.subscriptionTotal > 0 {
+            if !workshopViewModel.subscriptionCatalogItems.isEmpty {
                 Text(L("共 %d 项", workshopViewModel.subscriptionTotal))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("搜索已订阅壁纸...", text: $workshopViewModel.subscriptionSearchText)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        workshopViewModel.refreshSubscriptionFilters()
+                    }
+                if !workshopViewModel.subscriptionSearchText.isEmpty {
+                    Button {
+                        workshopViewModel.subscriptionSearchText = ""
+                        workshopViewModel.refreshSubscriptionFilters()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .frame(minWidth: 150, idealWidth: 220, maxWidth: 260)
+            .background(Color(nsColor: NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+            )
 
             Spacer()
 
@@ -113,7 +148,7 @@ struct SubscribedWorkshopView: View {
             .disabled(
                 !steamService.isLoggedIn ||
                 workshopViewModel.isPreparingSubscriptionDownloads ||
-                workshopViewModel.subscriptionTotal == 0
+                workshopViewModel.subscriptionCatalogItems.isEmpty
             )
 
             Button {
@@ -197,7 +232,7 @@ struct SubscribedWorkshopView: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if workshopViewModel.subscriptionItems.isEmpty {
+        } else if workshopViewModel.subscriptionCatalogItems.isEmpty {
             centered {
                 Image(systemName: "rectangle.stack.badge.minus")
                     .font(.system(size: 40))
@@ -208,6 +243,21 @@ struct SubscribedWorkshopView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+            }
+        } else if workshopViewModel.subscriptionItems.isEmpty {
+            centered {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.tertiary)
+                Text("没有符合筛选条件的已订阅壁纸")
+                    .font(.title3)
+                Text("请调整搜索关键词或筛选条件。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("重置筛选") {
+                    workshopViewModel.clearSubscriptionFilters()
+                }
+                .buttonStyle(.borderedProminent)
             }
         } else {
             subscriptionGrid
