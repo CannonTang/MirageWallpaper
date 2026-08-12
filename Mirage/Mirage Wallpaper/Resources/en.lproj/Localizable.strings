@@ -475,7 +475,6 @@
 "科技" = "Technology";
 "移到废纸篓" = "Move to Trash";
 "移动端" = "Mobile";
-"移动端兼容" = "Mobile Compatible";
 "移除壁纸" = "Remove wallpaper";
 "窗口" = "Window";
 "立即删除" = "Delete now";
@@ -863,3 +862,9 @@
 "信任并继续" = "Trust and Continue";
 "仅本次继续" = "Continue This Time";
 "请等待 %d 秒。" = "Please wait %d seconds.";
+"正在同步收藏状态…" = "Syncing favorite status…";
+"登录 Steam 以收藏" = "Sign In to Steam to Favorite";
+"Steam 收藏" = "Steam Favorites";
+"收藏失败，请稍后重试" = "Could not add to favorites. Try again later.";
+"取消收藏失败，请稍后重试" = "Could not remove from favorites. Try again later.";
+"无法建立 Steam 收藏会话，请重新登录" = "Could not start a Steam favorites session. Sign in again.";

@@ -288,6 +288,7 @@ struct SubscribedWorkshopView: View {
                                 isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                 presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                                 downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                                 isActive: isActive,
                                 animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                             )

@@ -13,6 +13,7 @@ struct WorkshopItemCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
+    var isFavorite: Bool = false
     var isActive: Bool = true
     var animatedPreviewMode: GSAnimatedPreviewPlayback = .hover
 
@@ -54,10 +55,17 @@ struct WorkshopItemCard: View {
 
     private var captionStrip: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(item.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .foregroundStyle(.white)
+            HStack(spacing: 5) {
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(.white)
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
 
             HStack(spacing: 10) {
                 Label(item.formattedSubscriptions, systemImage: "arrow.down.circle.fill")

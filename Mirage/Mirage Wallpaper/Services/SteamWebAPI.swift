@@ -80,6 +80,8 @@ final class SteamWebAPI {
         triplescreenResolution: FRTriplescreenResolution = .all,
         portraitResolution: FRPortraitScreenResolution = .all,
         miscResolution: FRMiscResolution = .all,
+        showOnly: FRShowOnly = .none,
+        favoriteIDs: Set<String> = [],
         page: Int = 1,
         perPage: Int = 30,
         trendDays: Int? = nil,
@@ -113,18 +115,16 @@ final class SteamWebAPI {
             ? tags.filter { !selectableTags.contains($0) }
             : tags
         if typeFilter != .all {
-            allTags.append(typeFilter.rawValue.capitalized)
+            allTags.append(typeFilter == .preset ? "Preset" : typeFilter.rawValue.capitalized)
         }
         let selectedRatings = ageRating.selectedRatings
         let hasEveryone = selectedRatings.contains(WorkshopAgeRating.everyone)
-        var useOrForTags = false
+        var filterRatingsLocally = false
 
         if selectedRatings.count == 1 && !hasEveryone {
             allTags.append(selectedRatings[0].steamTag)
-        } else if selectedRatings.count == 2 && !hasEveryone && allTags.isEmpty {
-            allTags.append(WorkshopAgeRating.questionable.steamTag)
-            allTags.append(WorkshopAgeRating.mature.steamTag)
-            useOrForTags = true
+        } else if selectedRatings.count == 2 && !hasEveryone {
+            filterRatingsLocally = true
         } else {
             let excluded = ageRating.excludedRatings
             for (index, rating) in excluded.enumerated() {
@@ -143,32 +143,32 @@ final class SteamWebAPI {
         if resolutionTags?.isEmpty == true {
             return ([], 0)
         }
+        let filterFavoritesLocally = showOnly.contains(.myFavourites)
+        if filterFavoritesLocally && favoriteIDs.isEmpty {
+            return ([], 0)
+        }
         var filterResolutionLocally = false
         if let resolutionTags {
-            if useOrForTags {
-                filterResolutionLocally = true
-            } else if allTags.isEmpty {
-                allTags.append(contentsOf: resolutionTags)
-                useOrForTags = resolutionTags.count > 1
-            } else if resolutionTags.count == 1 {
+            if resolutionTags.count == 1 {
                 allTags.append(resolutionTags[0])
             } else {
                 filterResolutionLocally = true
             }
         }
 
+        for tag in showOnly.requiredSteamTags where !allTags.contains(where: {
+            $0.caseInsensitiveCompare(tag) == .orderedSame
+        }) {
+            allTags.append(tag)
+        }
         for (index, tag) in allTags.enumerated() {
             params["requiredtags[\(index)]"] = tag
         }
-        if useOrForTags {
-            params["match_all_tags"] = "false"
-        }
-
         let requestedPage = max(1, page)
         let requestedPageSize = max(1, perPage)
         let resultItems: [WorkshopItem]
         let resultTotal: Int
-        if filterResolutionLocally {
+        if filterRatingsLocally || filterResolutionLocally || filterFavoritesLocally {
             var cursor = "*"
             var seenCursors = Set<String>()
             var matchingItems: [WorkshopItem] = []
@@ -184,16 +184,18 @@ final class SteamWebAPI {
                 cursorParams["numperpage"] = "100"
                 cursorParams["cursor"] = cursor
                 let batch = try await fetchQueryBatch(params: cursorParams)
-                matchingItems.append(contentsOf: batch.items.filter {
-                    FRResolutionFilter.matches(
-                        tags: $0.tags,
-                        widescreen: widescreenResolution,
-                        ultraWidescreen: ultraWidescreenResolution,
-                        dualscreen: dualscreenResolution,
-                        triplescreen: triplescreenResolution,
-                        portrait: portraitResolution,
-                        misc: miscResolution
-                    )
+                matchingItems.append(contentsOf: batch.items.filter { item in
+                    (!filterRatingsLocally || item.ageRating.map(selectedRatings.contains) == true) &&
+                        (!filterResolutionLocally || FRResolutionFilter.matches(
+                            tags: item.tags,
+                            widescreen: widescreenResolution,
+                            ultraWidescreen: ultraWidescreenResolution,
+                            dualscreen: dualscreenResolution,
+                            triplescreen: triplescreenResolution,
+                            portrait: portraitResolution,
+                            misc: miscResolution
+                        )) &&
+                        (!filterFavoritesLocally || favoriteIDs.contains(item.publishedFileId))
                 })
                 guard let nextCursor = batch.nextCursor,
                       !nextCursor.isEmpty,
@@ -330,13 +332,17 @@ final class SteamWebAPI {
         category: WorkshopDiscoverCategory,
         period: WorkshopTrendPeriod,
         count: Int = 12,
-        ageRating: WorkshopAgeRatingFilter = .all
+        ageRating: WorkshopAgeRatingFilter = .all,
+        showOnly: FRShowOnly = .none,
+        favoriteIDs: Set<String> = []
     ) async throws -> [WorkshopItem] {
         let sortOrder = category.sortOrder ?? .trending
         let result = try await queryFiles(
             tags: category.tag.map { [$0] } ?? [],
             sortOrder: sortOrder,
             ageRating: ageRating,
+            showOnly: showOnly,
+            favoriteIDs: favoriteIDs,
             page: 1,
             perPage: count,
             trendDays: category.usesTrendPeriod ? period.rawValue : nil,

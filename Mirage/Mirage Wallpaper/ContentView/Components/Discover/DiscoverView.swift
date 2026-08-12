@@ -19,6 +19,13 @@ struct DiscoverView: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
+                Button {
+                    viewModel.isFilterReveal.toggle()
+                } label: {
+                    Label("筛选", systemImage: "checklist.checked")
+                }
+                .buttonStyle(.borderedProminent)
+
                 Text("趋势范围")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -70,6 +77,17 @@ struct DiscoverView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.top, 100)
+                } else if workshopViewModel.discoverItems.values.allSatisfy(\.isEmpty) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.tertiary)
+                        Text(discoverEmptyMessage)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 100)
                 } else {
                     LazyVStack(spacing: 24) {
                         ForEach(WorkshopDiscoverCategory.allCases) { category in
@@ -114,6 +132,14 @@ struct DiscoverView: View {
         }
     }
 
+    private var discoverEmptyMessage: LocalizedStringKey {
+        if workshopViewModel.discoverShowOnly.contains(.myFavourites),
+           !SteamServiceManager.shared.isLoggedIn {
+            return "需要登录 Steam"
+        }
+        return "没有符合筛选条件的内容"
+    }
+
     private func showAll(_ category: WorkshopDiscoverCategory) {
         if let tag = category.tag {
             workshopViewModel.navigateToWorkshopWithTag(
@@ -127,6 +153,36 @@ struct DiscoverView: View {
             )
         }
         navigationModel.selection = .workshop
+    }
+}
+
+struct DiscoverFilterSidebar: View {
+    @ObservedObject var workshopViewModel: WorkshopViewModel
+
+    var body: some View {
+        VStack {
+            ScrollView {
+                VStack(spacing: 30) {
+                    Button {
+                        workshopViewModel.clearDiscoverFilters()
+                    } label: {
+                        Label("重置筛选", systemImage: "arrow.triangle.2.circlepath")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(workshopViewModel.discoverShowOnly.isEmpty)
+
+                    ShowOnlyFilterSection(
+                        id: "discover.showOnly",
+                        selection: workshopViewModel.discoverShowOnly,
+                        onChange: workshopViewModel.setDiscoverShowOnly
+                    )
+                }
+                .padding(.trailing)
+            }
+            Divider()
+        }
     }
 }
 

@@ -27,7 +27,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
         didSet { currentPage = 1 }
     }
 
-    @AppStorage("FRShowOnly") public var showOnly = FRShowOnly.all { didSet { currentPage = 1 } }
+    @AppStorage("FRShowOnly") public var showOnly = FRShowOnly.none { didSet { currentPage = 1 } }
     @AppStorage("FRType") public var type = FRType.all { didSet { currentPage = 1 } }
     @AppStorage("FRAgeRating") public var ageRating = FRAgeRating.all { didSet { currentPage = 1 } }
     @AppStorage("FRWidescreenResolution") public var widescreenResolution = FRWidescreenResolution.all { didSet { currentPage = 1 } }
@@ -107,6 +107,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
     private var downloadObserver: AnyCancellable?
     private var favoritesObserver: AnyCancellable?
+    private var workshopFavoritesObserver: AnyCancellable?
     private var refreshWorkItem: DispatchWorkItem?
     private var refreshInFlight = false
     private var refreshAgain = false
@@ -119,6 +120,17 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
 
     init() {
+        let showOnlyMigrationKey = "FRShowOnlyMigrationV2"
+        if !UserDefaults.standard.bool(forKey: showOnlyMigrationKey) {
+            if let legacyRaw = UserDefaults.standard.object(forKey: "FRShowOnly") as? Int {
+                showOnly = FRShowOnly.migratedLegacyRawValue(legacyRaw)
+            } else {
+                showOnly = .none
+            }
+            UserDefaults.standard.set(true, forKey: showOnlyMigrationKey)
+        } else {
+            showOnly = FRShowOnly(rawValue: showOnly.rawValue & FRShowOnly.all.rawValue)
+        }
         switch explorerIconSize {
         case 100:
             explorerIconSize = 140
@@ -158,6 +170,12 @@ class ContentViewModel: ObservableObject, DropDelegate {
             }
 
         favoritesObserver = NotificationCenter.default.publisher(for: .favoritesChanged)
+            .sink { [weak self] _ in
+                self?.scheduleRecomputePage()
+            }
+
+        workshopFavoritesObserver = SteamServiceManager.shared.$workshopFavoriteIDs
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.scheduleRecomputePage()
             }
@@ -227,6 +245,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
         let wallpapersPerPage: Int
         let currentPage: Int
         let favorites: Set<String>
+        let workshopFavorites: Set<String>
         let importedPrefix: String
         let additionDates: [String: Date]
     }
@@ -251,6 +270,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
             wallpapersPerPage: wallpapersPerPage,
             currentPage: currentPage,
             favorites: FavoritesManager.shared.snapshot(),
+            workshopFavorites: SteamServiceManager.shared.workshopFavoriteIDs,
             importedPrefix: WallpaperLibrary.shared.importedDirectory.path,
             additionDates: WallpaperLibrary.shared.additionDates(for: wallpapers))
     }
@@ -314,27 +334,14 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
     private static func filtered(_ wallpapers: [WEWallpaper], _ input: PipelineInput) -> [WEWallpaper] {
         wallpapers.filter { wallpaper in
-            // 仅显示：未选或全选时不筛选；否则按 AND 逻辑要求每项命中
             let activeShowOnly = input.showOnly
-            if !activeShowOnly.isEmpty && activeShowOnly != FRShowOnly.all {
-                if activeShowOnly.contains(.approved) {
-                    guard wallpaper.project.approved == true else { return false }
-                }
-                if activeShowOnly.contains(.myFavourites) {
-                    guard input.favorites.contains(wallpaper.id) else { return false }
-                }
-                if activeShowOnly.contains(.customizable) {
-                    guard let props = wallpaper.project.general?.properties,
-                          !props.items.isEmpty else { return false }
-                }
-                if activeShowOnly.contains(.mobileCompatible) {
-                    let tags = (wallpaper.project.tags ?? []).map { $0.lowercased() }
-                    guard tags.contains(where: { $0.contains("mobile") }) else { return false }
-                }
-                if activeShowOnly.contains(.audioResponsive) {
-                    let tags = (wallpaper.project.tags ?? []).map { $0.lowercased() }
-                    guard tags.contains(where: { $0.contains("audio") }) else { return false }
-                }
+            if !activeShowOnly.isEmpty && !activeShowOnly.matches(
+                wallpaper: wallpaper,
+                localFavoriteIDs: input.favorites,
+                workshopFavoriteIDs: input.workshopFavorites,
+                importedDirectoryPrefix: input.importedPrefix
+            ) {
+                return false
             }
 
             var type = FRType.none

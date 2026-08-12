@@ -16,6 +16,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var authenticationState: SteamServiceState = .unknown
     @Published private(set) var accountName = ""
     @Published private(set) var steamId = ""
+    @Published private(set) var workshopFavoriteIDs: Set<String> = []
 
     var savedUsername: String {
         get { UserDefaults.standard.string(forKey: usernameKey) ?? "" }
@@ -52,6 +53,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private var restoreRetryCount = 0
     private var restoreRetryWorkItem: DispatchWorkItem?
     private var explicitShutdown = false
+    private var favoriteRefreshGeneration = 0
 
     private var restoreOperationPending: Bool {
         restoringSession || restoreRetryWorkItem != nil
@@ -84,6 +86,13 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
 
         let items: [Item]
+    }
+
+    private struct FavoritePagePayload: Decodable {
+        let total: Int
+        let startIndex: Int
+        let nextStartIndex: Int
+        let workshopIds: [String]
     }
 
     private struct CommentPagePayload: Decodable {
@@ -179,8 +188,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     func logout(completion: @escaping (Result<Void, Error>) -> Void) {
         let username = savedUsername
         updateOnMain {
+            self.favoriteRefreshGeneration += 1
             self.isLoggedIn = false
             self.steamId = ""
+            self.workshopFavoriteIDs = []
             self.loginState = .idle
         }
         sendCommand("logout") { [weak self] _, _, _ in
@@ -193,9 +204,11 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             self.savedUsername = ""
             self.restoringSession = false
             self.updateOnMain {
+                self.favoriteRefreshGeneration += 1
                 self.isLoggedIn = false
                 self.accountName = ""
                 self.steamId = ""
+                self.workshopFavoriteIDs = []
                 self.loginState = .idle
                 self.authenticationState = .needsAction(L("需要登录 Steam"))
                 if let status = statuses.first {
@@ -256,6 +269,76 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                     }
                 )
             })
+        }
+    }
+
+    func refreshWorkshopFavorites(completion: ((Result<Set<String>, Error>) -> Void)? = nil) {
+        favoriteRefreshGeneration += 1
+        fetchWorkshopFavorites(
+            startIndex: 0,
+            accumulated: [],
+            generation: favoriteRefreshGeneration,
+            completion: completion
+        )
+    }
+
+    func setWorkshopFavorite(
+        workshopId: String,
+        favorited: Bool,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        sendCommand(
+            favorited ? "favorite" : "unfavorite",
+            fields: ["workshopId": workshopId]
+        ) { [weak self] success, message, errorCode in
+            guard let self else { return }
+            guard success else {
+                let error = self.requestError(code: errorCode, detail: message)
+                self.updateOnMain { completion(.failure(error)) }
+                return
+            }
+            self.updateOnMain {
+                self.favoriteRefreshGeneration += 1
+                if favorited {
+                    self.workshopFavoriteIDs.insert(workshopId)
+                } else {
+                    self.workshopFavoriteIDs.remove(workshopId)
+                }
+                completion(.success(()))
+            }
+        }
+    }
+
+    private func fetchWorkshopFavorites(
+        startIndex: Int,
+        accumulated: Set<String>,
+        generation: Int,
+        completion: ((Result<Set<String>, Error>) -> Void)?
+    ) {
+        sendDecodableCommand(
+            "listFavorites",
+            fields: ["startIndex": max(0, startIndex)],
+            as: FavoritePagePayload.self
+        ) { [weak self] result in
+            guard let self else { return }
+            guard generation == self.favoriteRefreshGeneration else { return }
+            switch result {
+            case .success(let payload):
+                let merged = accumulated.union(payload.workshopIds)
+                if payload.nextStartIndex < payload.total {
+                    self.fetchWorkshopFavorites(
+                        startIndex: payload.nextStartIndex,
+                        accumulated: merged,
+                        generation: generation,
+                        completion: completion
+                    )
+                } else {
+                    self.workshopFavoriteIDs = merged
+                    completion?(.success(merged))
+                }
+            case .failure(let error):
+                completion?(.failure(error))
+            }
         }
     }
 
@@ -691,6 +774,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                     self.authenticationState = .unavailable(
                         L("Steam 已登录，但无法保存会话：%@", self.keychainError(persistenceStatus).localizedDescription))
                 }
+                self.refreshWorkshopFavorites()
             }
         case "failed":
             var message = localizedError(code: errorCode, detail: detail)
@@ -702,8 +786,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                 }
             }
             updateOnMain {
+                self.favoriteRefreshGeneration += 1
                 self.isLoggedIn = false
                 self.steamId = ""
+                self.workshopFavoriteIDs = []
                 self.loginState = .failed(message)
                 self.authenticationState = .unavailable(message)
             }
@@ -713,8 +799,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                 ? L("需要登录 Steam")
                 : localizedError(code: errorCode, detail: detail)
             updateOnMain {
+                self.favoriteRefreshGeneration += 1
                 self.isLoggedIn = false
                 self.steamId = ""
+                self.workshopFavoriteIDs = []
                 self.loginState = .idle
                 self.authenticationState = .needsAction(message)
             }
@@ -787,9 +875,11 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             request.finish(success: false, data: nil, message: L("Steam 服务连接已中断"), errorCode: "CONNECTION_LOST")
         }
         updateOnMain {
+            self.favoriteRefreshGeneration += 1
             self.isAvailable = false
             self.isLoggedIn = false
             self.steamId = ""
+            self.workshopFavoriteIDs = []
             self.loginState = .failed(message)
             self.authenticationState = .unavailable(L("Steam 服务组件不可用"))
             for handler in handlers { handler(.failed(L("Steam 服务连接已中断"))) }
@@ -799,8 +889,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private func failAuthenticationRequest(code: String?, detail: String?) {
         let message = localizedError(code: code, detail: detail)
         updateOnMain {
+            self.favoriteRefreshGeneration += 1
             self.isLoggedIn = false
             self.steamId = ""
+            self.workshopFavoriteIDs = []
             self.loginState = .failed(message)
             self.authenticationState = .unavailable(message)
         }
@@ -828,6 +920,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "SUBSCRIBE_FAILED": return L("订阅失败，请稍后重试")
         case "UNSUBSCRIBE_FAILED": return L("取消订阅失败，请稍后重试")
         case "COMMENTS_UNAVAILABLE": return L("无法加载 Steam 评论")
+        case "FAVORITES_UNAVAILABLE": return L("无法加载 Steam 创意工坊收藏")
+        case "FAVORITE_ADD_FAILED": return L("收藏失败，请稍后重试")
+        case "FAVORITE_REMOVE_FAILED": return L("取消收藏失败，请稍后重试")
+        case "FAVORITE_SESSION_FAILED": return L("无法建立 Steam 收藏会话，请重新登录")
         case "COMMENT_POST_FAILED": return L("评论发布失败，请稍后重试")
         case "INVALID_WORKSHOP_ID", "INVALID_COMMENT_REQUEST": return L("创意工坊作品信息无效")
         case "STEAM_REQUEST_FAILED": return L("Steam 未完成该请求，请稍后重试")

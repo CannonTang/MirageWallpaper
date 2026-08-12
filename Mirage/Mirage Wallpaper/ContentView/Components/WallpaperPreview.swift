@@ -130,12 +130,19 @@ struct WallpaperPreview: SubviewOfContentView {
                         }
                         .font(.caption)
                         Button {
-                            FavoritesManager.shared.toggle(wallpaperViewModel.currentWallpaper.id)
-                            NotificationCenter.default.post(name: .favoritesChanged, object: nil)
+                            toggleCurrentFavorite()
                         } label: {
-                            Image(systemName: FavoritesManager.shared.isFavorite(wallpaperViewModel.currentWallpaper.id) ? "heart.fill" : "heart")
-                                .foregroundStyle(FavoritesManager.shared.isFavorite(wallpaperViewModel.currentWallpaper.id) ? .red : .secondary)
+                            if isChangingCurrentFavorite {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Image(systemName: isCurrentFavorite ? "heart.fill" : "heart")
+                                    .foregroundStyle(isCurrentFavorite ? .red : .secondary)
+                            }
                         }
+                        .disabled(isChangingCurrentFavorite)
+                        .help(L(isCurrentFavorite ? "取消收藏" : "加入收藏"))
                     }
                     HStack {
                         Text(wallpaperViewModel.currentWallpaper.isPreset
@@ -452,6 +459,30 @@ struct WallpaperPreview: SubviewOfContentView {
     private func openWorkshopItemInSteam(_ item: WorkshopItem) {
         guard let url = URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private var currentWorkshopID: String? {
+        wallpaperViewModel.currentWallpaper.steamFavoriteWorkshopID()
+    }
+
+    private var isCurrentFavorite: Bool {
+        if let currentWorkshopID {
+            return workshopViewModel.isWorkshopFavorite(currentWorkshopID)
+        }
+        return FavoritesManager.shared.isFavorite(wallpaperViewModel.currentWallpaper.id)
+    }
+
+    private var isChangingCurrentFavorite: Bool {
+        currentWorkshopID.map { workshopViewModel.changingFavoriteIDs.contains($0) } == true
+    }
+
+    private func toggleCurrentFavorite() {
+        if let currentWorkshopID {
+            workshopViewModel.toggleWorkshopFavorite(workshopId: currentWorkshopID)
+        } else {
+            FavoritesManager.shared.toggle(wallpaperViewModel.currentWallpaper.id)
+            NotificationCenter.default.post(name: .favoritesChanged, object: nil)
+        }
     }
 
     private var authorSection: some View {

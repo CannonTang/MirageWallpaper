@@ -64,19 +64,85 @@ struct FRShowOnly: OptionSet {
     static let allOptions = [
         ("广受好评", "trophy.fill"),
         ("我的收藏", "heart.fill"),
-        ("移动端兼容", "iphone.gen3"),
         ("音频响应", "waveform.path.ecg"),
         ("可自定义", "slider.horizontal.3")
     ]
     
     static let approved             = FRShowOnly(rawValue: 1 << 0)
     static let myFavourites         = FRShowOnly(rawValue: 1 << 1)
-    static let mobileCompatible     = FRShowOnly(rawValue: 1 << 2)
-    static let audioResponsive      = FRShowOnly(rawValue: 1 << 3)
-    static let customizable         = FRShowOnly(rawValue: 1 << 4)
+    static let audioResponsive      = FRShowOnly(rawValue: 1 << 2)
+    static let customizable         = FRShowOnly(rawValue: 1 << 3)
     
-    static let all: FRShowOnly = [.approved, myFavourites, mobileCompatible, .audioResponsive, .customizable]
+    static let all: FRShowOnly = [.approved, myFavourites, .audioResponsive, .customizable]
     static let none: FRShowOnly = []
+
+    static let approvedSteamTag = "Approved"
+    static let audioResponsiveSteamTag = "Audio responsive"
+    static let customizableSteamTag = "Customizable"
+
+    var requiredSteamTags: [String] {
+        var tags: [String] = []
+        if contains(.approved) { tags.append(Self.approvedSteamTag) }
+        if contains(.audioResponsive) { tags.append(Self.audioResponsiveSteamTag) }
+        if contains(.customizable) { tags.append(Self.customizableSteamTag) }
+        return tags
+    }
+
+    static func migratedLegacyRawValue(_ rawValue: Int) -> FRShowOnly {
+        if rawValue == 0b1_1111 { return .none }
+        var migrated = FRShowOnly.none
+        if rawValue & (1 << 0) != 0 { migrated.insert(.approved) }
+        if rawValue & (1 << 1) != 0 { migrated.insert(.myFavourites) }
+        if rawValue & (1 << 3) != 0 { migrated.insert(.audioResponsive) }
+        if rawValue & (1 << 4) != 0 { migrated.insert(.customizable) }
+        return migrated
+    }
+
+    func matches(workshopItem: WorkshopItem, favoriteIDs: Set<String>) -> Bool {
+        if contains(.approved), !workshopItem.isApproved { return false }
+        if contains(.myFavourites), !favoriteIDs.contains(workshopItem.publishedFileId) { return false }
+        if contains(.audioResponsive), !workshopItem.isAudioResponsive { return false }
+        if contains(.customizable), !workshopItem.isCustomizable { return false }
+        return true
+    }
+
+    func matches(
+        wallpaper: WEWallpaper,
+        localFavoriteIDs: Set<String>,
+        workshopFavoriteIDs: Set<String>,
+        importedDirectoryPrefix: String
+    ) -> Bool {
+        if contains(.approved), wallpaper.project.approved != true { return false }
+        if contains(.myFavourites) {
+            if wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectoryPrefix) {
+                if !localFavoriteIDs.contains(wallpaper.id) { return false }
+            } else if let workshopID = wallpaper.verifiedWorkshopID() {
+                if !workshopFavoriteIDs.contains(workshopID) { return false }
+            } else if !localFavoriteIDs.contains(wallpaper.id) {
+                return false
+            }
+        }
+        if contains(.audioResponsive) {
+            let matches = (wallpaper.project.tags ?? []).contains {
+                $0.caseInsensitiveCompare(Self.audioResponsiveSteamTag) == .orderedSame
+            }
+            if !matches { return false }
+        }
+        if contains(.customizable) {
+            let properties = wallpaper.project.general?.properties?.items.values ?? Dictionary<String, WEProjectProperty>().values
+            let editable = properties.contains { property in
+                guard !property.isPresetOnly else { return false }
+                switch property.propertyType {
+                case .text, .group, .unknown:
+                    return false
+                default:
+                    return true
+                }
+            }
+            if !editable { return false }
+        }
+        return true
+    }
 }
 
 struct FRType: FilterResultsModel {

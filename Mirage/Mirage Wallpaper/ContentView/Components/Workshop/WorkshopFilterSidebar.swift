@@ -22,6 +22,12 @@ struct WorkshopFilterSidebar: View {
                     }
                     .buttonStyle(.borderedProminent)
 
+                    ShowOnlyFilterSection(
+                        id: "workshop.showOnly",
+                        selection: workshopViewModel.workshopShowOnly,
+                        onChange: workshopViewModel.setWorkshopShowOnly
+                    )
+
                     FilterSection("类型", id: "workshop.type", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in

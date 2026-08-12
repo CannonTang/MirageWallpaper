@@ -23,6 +23,12 @@ struct SubscribedWorkshopFilterSidebar: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!workshopViewModel.hasActiveSubscriptionFilters)
 
+                    ShowOnlyFilterSection(
+                        id: "subscriptions.showOnly",
+                        selection: workshopViewModel.subscriptionShowOnly,
+                        onChange: workshopViewModel.setSubscriptionShowOnly
+                    )
+
                     FilterSection("类型", id: "subscriptions.type", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in

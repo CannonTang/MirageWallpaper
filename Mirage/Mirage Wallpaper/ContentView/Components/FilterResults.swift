@@ -95,59 +95,14 @@ struct FilterResults: View {
                             .padding(.vertical, 5)
                     }
                     .buttonStyle(.borderedProminent)
-                    VStack(alignment: .leading) {
-                        Group {
-                            ForEach(Array(zip(FRShowOnly.allOptions.indices, FRShowOnly.allOptions)), id: \.0) { (i, option) in
-                                let (option, image) = option
-                                let color: Color = {
-                                    if i == 0 {
-                                        return Color.green
-                                    } else if i == 1 {
-                                        return Color.pink
-                                    } else if i == 2 {
-                                        return Color.orange
-                                    } else {
-                                        return Color.accentColor
-                                    }
-                                }()
-                                Toggle(isOn: Binding<Bool>(get: {
-                                    viewModel.showOnly.contains(FRShowOnly(rawValue: 1 << i))
-                                }, set: {
-                                    if $0 {
-                                        viewModel.showOnly.insert(FRShowOnly(rawValue: 1 << i))
-                                    } else {
-                                        viewModel.showOnly.remove(FRShowOnly(rawValue: 1 << i))
-                                    }
-                                    print(String(describing: viewModel.showOnly))
-                                })) {
-                                    HStack(spacing: 2) {
-                                        Image(systemName: image)
-                                            .foregroundStyle(color)
-                                        Text(LocalizedStringKey(option))
-                                    }
-                                }
-                                .toggleStyle(.checkbox)
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                    }
-                    .padding(.all)
-                    .padding(.top)
-                    .overlay {
-                        ZStack {
-                            Rectangle()
-                                .stroke(lineWidth: 1)
-                                .foregroundStyle(Color(nsColor: NSColor.unemphasizedSelectedTextBackgroundColor))
-                                .padding(.top, 8)
-                            VStack {
-                                HStack {
-                                    Text("仅显示：")
-                                        .background(Color(nsColor: NSColor.windowBackgroundColor))
-                                        .padding(.leading, 5)
-                                    Spacer()
-                                }
-                                Spacer()
-                            }
+                    ShowOnlyFilterSection(
+                        id: "library.showOnly",
+                        selection: viewModel.showOnly
+                    ) { option, isOn in
+                        if isOn {
+                            viewModel.showOnly.insert(option)
+                        } else {
+                            viewModel.showOnly.remove(option)
                         }
                     }
 
@@ -250,6 +205,44 @@ struct FilterResults: View {
                 .padding(.trailing)
             }
             .lineLimit(1)
+        }
+    }
+}
+
+struct ShowOnlyFilterSection: View {
+    let id: String
+    let selection: FRShowOnly
+    let onChange: (FRShowOnly, Bool) -> Void
+
+    var body: some View {
+        FilterSection("仅显示", id: id, alignment: .leading) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(FRShowOnly.allOptions.indices, id: \.self) { index in
+                    let option = FRShowOnly(rawValue: 1 << index)
+                    let metadata = FRShowOnly.allOptions[index]
+                    Toggle(isOn: Binding(
+                        get: { selection.contains(option) },
+                        set: { onChange(option, $0) }
+                    )) {
+                        Label {
+                            Text(LocalizedStringKey(metadata.0))
+                        } icon: {
+                            Image(systemName: metadata.1)
+                                .foregroundStyle(color(at: index))
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                }
+            }
+        }
+    }
+
+    private func color(at index: Int) -> Color {
+        switch index {
+        case 0: return .green
+        case 1: return .pink
+        case 2: return .orange
+        default: return .accentColor
         }
     }
 }

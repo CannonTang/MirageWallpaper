@@ -91,14 +91,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     Label("删除壁纸", systemImage: "xmark")
                 }
                 Button {
-                    FavoritesManager.shared.toggle(hoveredWallpaper.id)
-                    NotificationCenter.default.post(name: .favoritesChanged, object: nil)
+                    toggleFavorite()
                 } label: {
                     Label(
                         LocalizedStringKey(isFavorite ? "取消收藏" : "加入收藏"),
                         systemImage: isFavorite ? "heart.slash.fill" : "heart.fill"
                     )
                 }
+                .disabled(workshopID.map { workshopViewModel.changingFavoriteIDs.contains($0) } == true)
             }
             
             Section {
@@ -173,7 +173,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private var isFavorite: Bool {
-        FavoritesManager.shared.isFavorite(hoveredWallpaper.id)
+        if let workshopID {
+            return workshopViewModel.isWorkshopFavorite(workshopID)
+        }
+        return FavoritesManager.shared.isFavorite(hoveredWallpaper.id)
+    }
+
+    private var workshopID: String? {
+        hoveredWallpaper.steamFavoriteWorkshopID()
     }
 
     private var workshopURL: URL? {
@@ -214,6 +221,15 @@ struct ExplorerItemMenu: SubviewOfContentView {
             workshopViewModel.showCreatorProfile = false
             workshopViewModel.prepareWorkshopInteractions(for: item)
             AppDelegate.shared.navigationModel.selection = .workshop
+        }
+    }
+
+    private func toggleFavorite() {
+        if let workshopID {
+            workshopViewModel.toggleWorkshopFavorite(workshopId: workshopID)
+        } else {
+            FavoritesManager.shared.toggle(hoveredWallpaper.id)
+            NotificationCenter.default.post(name: .favoritesChanged, object: nil)
         }
     }
 
@@ -307,6 +323,19 @@ struct WorkshopCardContextMenu: View {
             }
 
             Section {
+                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
+                    Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
+                } else {
+                    Button {
+                        workshopViewModel.toggleFavorite(item)
+                    } label: {
+                        Label(
+                            LocalizedStringKey(workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "取消收藏" : "加入收藏"),
+                            systemImage: workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "heart.slash.fill" : "heart.fill"
+                        )
+                    }
+                }
+
                 Button {
                     guard let url = URL(
                         string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"

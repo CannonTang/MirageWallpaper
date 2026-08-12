@@ -30,6 +30,9 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     /// Nil for the rare published file that carries no rating tag, matching how
     /// the local library treats a `project.json` without `contentrating`.
     var ageRating: WorkshopAgeRating? = nil
+    var isApproved: Bool = false
+    var isAudioResponsive: Bool = false
+    var isCustomizable: Bool = false
 
     var id: String { publishedFileId }
 
@@ -659,6 +662,10 @@ struct SteamPublishedFile: Codable {
     func toWorkshopItem() -> WorkshopItem {
         let rawTags = tags?.compactMap { $0.tag } ?? []
 
+        func hasTag(_ tag: String) -> Bool {
+            rawTags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+        }
+
         let wallpaperType = rawTags.first(where: {
             let v = $0.lowercased()
             return v == "scene" || v == "web" || v == "video"
@@ -694,7 +701,10 @@ struct SteamPublishedFile: Codable {
             creatorSteamId: creator ?? "",
             consumerAppId: consumer_app_id.map { Int($0.int64Value) },
             wallpaperType: wallpaperType,
-            ageRating: ageRating
+            ageRating: ageRating,
+            isApproved: hasTag(FRShowOnly.approvedSteamTag),
+            isAudioResponsive: hasTag(FRShowOnly.audioResponsiveSteamTag),
+            isCustomizable: hasTag(FRShowOnly.customizableSteamTag)
         )
     }
 }
@@ -753,6 +763,11 @@ extension WEWallpaper {
             if queryID == id { return url }
         }
         return URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)")
+    }
+
+    func steamFavoriteWorkshopID() -> String? {
+        guard WallpaperLibrary.shared.isWorkshopSource(self) else { return nil }
+        return verifiedWorkshopID()
     }
 
     private static func isValidWorkshopID(_ value: String) -> Bool {

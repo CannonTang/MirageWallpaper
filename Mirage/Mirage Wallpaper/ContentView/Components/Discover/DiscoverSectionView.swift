@@ -56,6 +56,7 @@ struct DiscoverSectionView: View {
                                     isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                     presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                                     downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                                     cardWidth: contentViewModel.explorerIconSize,
                                     isActive: isActive,
                                     animatedPreviewMode: animatedPreviewMode
@@ -152,6 +153,7 @@ struct DiscoverCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadState: DownloadState?
+    var isFavorite: Bool
     var cardWidth: CGFloat
     var isActive: Bool
     var animatedPreviewMode: GSAnimatedPreviewPlayback
@@ -192,9 +194,16 @@ struct DiscoverCard: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(item.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    if isFavorite {
+                        Image(systemName: "heart.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
 
                 HStack(spacing: 10) {
                     Label(item.formattedSubscriptions, systemImage: "arrow.down.circle")

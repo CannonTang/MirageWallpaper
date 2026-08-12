@@ -25,6 +25,12 @@ class WorkshopViewModel: ObservableObject {
     @Published var sortOrder: WorkshopSortOrder = .trending
     @Published var trendPeriod: WorkshopTrendPeriod = .week
     @Published var typeFilter: WorkshopTypeFilter = .all
+    @Published var workshopShowOnly: FRShowOnly = .none {
+        didSet {
+            guard workshopShowOnly != oldValue else { return }
+            UserDefaults.standard.set(workshopShowOnly.rawValue, forKey: Self.workshopShowOnlyStorageKey)
+        }
+    }
     /// `@Published` + manual persistence rather than `@AppStorage`: SwiftUI does
     /// not route `@AppStorage` writes inside an `ObservableObject` through
     /// `objectWillChange`, which would leave the sidebar checkboxes stale.
@@ -86,6 +92,12 @@ class WorkshopViewModel: ObservableObject {
     @Published private(set) var discoverItems: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
     @Published var discoverTrendPeriod: WorkshopTrendPeriod = .week
     @Published var isDiscoverLoading: Bool = false
+    @Published var discoverShowOnly: FRShowOnly = .none {
+        didSet {
+            guard discoverShowOnly != oldValue else { return }
+            UserDefaults.standard.set(discoverShowOnly.rawValue, forKey: Self.discoverShowOnlyStorageKey)
+        }
+    }
 
     var bannerItems: [WorkshopItem] {
         Array((discoverItems[.trending] ?? []).prefix(5))
@@ -107,6 +119,12 @@ class WorkshopViewModel: ObservableObject {
     @Published var subscriptionSearchText = ""
     @Published var subscriptionSelectedTags: Set<String> = []
     @Published var subscriptionTypeFilter: WorkshopTypeFilter = .all
+    @Published var subscriptionShowOnly: FRShowOnly = .none {
+        didSet {
+            guard subscriptionShowOnly != oldValue else { return }
+            UserDefaults.standard.set(subscriptionShowOnly.rawValue, forKey: Self.subscriptionShowOnlyStorageKey)
+        }
+    }
     @Published var subscriptionAgeRatingFilter: WorkshopAgeRatingFilter = .all
     @Published var subscriptionWidescreenResolution = FRWidescreenResolution.all
     @Published var subscriptionUltraWidescreenResolution = FRUltraWidescreenResolution.all
@@ -119,6 +137,10 @@ class WorkshopViewModel: ObservableObject {
     @Published private(set) var changingSubscriptionIDs: Set<String> = []
     @Published private(set) var subscriptionActionError: String?
     @Published private(set) var subscriptionActionErrorItemID: String?
+    @Published private(set) var workshopFavoriteIDs: Set<String> = []
+    @Published private(set) var changingFavoriteIDs: Set<String> = []
+    @Published private(set) var favoriteActionError: String?
+    @Published private(set) var favoriteActionErrorItemID: String?
     @Published private(set) var isPreparingSubscriptionDownloads = false
     @Published private(set) var subscriptionDownloadPlan: SubscriptionDownloadPlan?
 
@@ -200,7 +222,8 @@ class WorkshopViewModel: ObservableObject {
     }
 
     var hasActiveSubscriptionFilters: Bool {
-        !subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !subscriptionShowOnly.isEmpty ||
+            !subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             (!subscriptionSelectedTags.isEmpty && !allSubscriptionTagsSelected) ||
             subscriptionTypeFilter != .all ||
             (!subscriptionAgeRatingFilter.isEmpty && subscriptionAgeRatingFilter != .all) ||
@@ -213,6 +236,9 @@ class WorkshopViewModel: ObservableObject {
     }
 
     private static let ageRatingStorageKey = "WorkshopAgeRatingFilter"
+    private static let workshopShowOnlyStorageKey = "WorkshopShowOnlyV2"
+    private static let discoverShowOnlyStorageKey = "DiscoverShowOnlyV2"
+    private static let subscriptionShowOnlyStorageKey = "SubscriptionShowOnlyV2"
 
     private var searchDebounce: AnyCancellable?
     private var subscriptionSearchDebounce: AnyCancellable?
@@ -237,6 +263,9 @@ class WorkshopViewModel: ObservableObject {
     }
 
     init() {
+        workshopShowOnly = Self.storedShowOnly(forKey: Self.workshopShowOnlyStorageKey)
+        discoverShowOnly = Self.storedShowOnly(forKey: Self.discoverShowOnlyStorageKey)
+        subscriptionShowOnly = Self.storedShowOnly(forKey: Self.subscriptionShowOnlyStorageKey)
         if let stored = UserDefaults.standard.object(forKey: Self.ageRatingStorageKey) as? Int {
             ageRatingFilter = WorkshopAgeRatingFilter(rawValue: stored)
         }
@@ -291,6 +320,24 @@ class WorkshopViewModel: ObservableObject {
             }
             .store(in: &serviceStateCancellables)
 
+        SteamServiceManager.shared.$workshopFavoriteIDs
+            .receive(on: RunLoop.main)
+            .sink { [weak self] favoriteIDs in
+                guard let self else { return }
+                self.workshopFavoriteIDs = favoriteIDs
+                if self.workshopShowOnly.contains(.myFavourites) {
+                    self.currentPage = 1
+                    self.search()
+                }
+                if self.discoverShowOnly.contains(.myFavourites) {
+                    self.loadDiscover(force: true)
+                }
+                if self.subscriptionShowOnly.contains(.myFavourites) {
+                    self.refreshSubscriptionFilters()
+                }
+            }
+            .store(in: &serviceStateCancellables)
+
         SteamServiceManager.shared.$authenticationState
             .receive(on: RunLoop.main)
             .sink { [weak self] state in
@@ -320,6 +367,11 @@ class WorkshopViewModel: ObservableObject {
             .store(in: &serviceStateCancellables)
 
         refreshInstalledState()
+    }
+
+    private static func storedShowOnly(forKey key: String) -> FRShowOnly {
+        guard let raw = UserDefaults.standard.object(forKey: key) as? Int else { return .none }
+        return FRShowOnly(rawValue: raw & FRShowOnly.all.rawValue)
     }
 
     // MARK: - Installed-state cache
@@ -522,6 +574,8 @@ class WorkshopViewModel: ObservableObject {
         let requestTags = Array(selectedTags)
         let requestSortOrder = sortOrder
         let requestTypeFilter = typeFilter
+        let requestShowOnly = workshopShowOnly
+        let requestFavoriteIDs = SteamServiceManager.shared.workshopFavoriteIDs
         let requestAgeRating = ageRatingFilter
         let requestWidescreenResolution = widescreenResolution
         let requestUltraWidescreenResolution = ultraWidescreenResolution
@@ -531,6 +585,13 @@ class WorkshopViewModel: ObservableObject {
         let requestMiscResolution = miscResolution
         let requestTrendPeriod = trendPeriod
         let requestPage = currentPage
+        if requestShowOnly.contains(.myFavourites), !SteamServiceManager.shared.isLoggedIn {
+            items = []
+            totalItems = 0
+            isLoading = false
+            error = L("需要登录 Steam")
+            return
+        }
         isLoading = true
         error = nil
         pageNavigationMessage = nil
@@ -544,7 +605,12 @@ class WorkshopViewModel: ObservableObject {
                 if Self.isPublishedFileId(requestSearchText) {
                     let details = try await SteamWebAPI.shared.getFileDetails(workshopIds: [requestSearchText])
                     let items = details.filter {
-                        $0.publishedFileId == requestSearchText && $0.consumerAppId == 431960
+                        $0.publishedFileId == requestSearchText &&
+                            $0.consumerAppId == 431960 &&
+                            requestShowOnly.matches(
+                                workshopItem: $0,
+                                favoriteIDs: requestFavoriteIDs
+                            )
                     }
                     result = (items, items.count)
                 } else if Self.isSteamUserId(requestSearchText) {
@@ -563,6 +629,8 @@ class WorkshopViewModel: ObservableObject {
                         triplescreenResolution: requestTriplescreenResolution,
                         portraitResolution: requestPortraitResolution,
                         miscResolution: requestMiscResolution,
+                        showOnly: requestShowOnly,
+                        favoriteIDs: requestFavoriteIDs,
                         page: requestPage,
                         perPage: self.itemsPerPage,
                         trendDays: requestSortOrder.usesTrendPeriod ? requestTrendPeriod.rawValue : nil
@@ -803,6 +871,7 @@ class WorkshopViewModel: ObservableObject {
         selectedTags.removeAll()
         searchText = ""
         typeFilter = .all
+        workshopShowOnly = .none
         sortOrder = .trending
         trendPeriod = .week
         ageRatingFilter = .default
@@ -825,6 +894,13 @@ class WorkshopViewModel: ObservableObject {
         let generation = discoverGeneration
         let rating = ageRatingFilter
         let period = discoverTrendPeriod
+        let showOnly = discoverShowOnly
+        let favoriteIDs = SteamServiceManager.shared.workshopFavoriteIDs
+        if showOnly.contains(.myFavourites), !SteamServiceManager.shared.isLoggedIn {
+            discoverItems = [:]
+            isDiscoverLoading = false
+            return
+        }
         isDiscoverLoading = true
 
         discoverTask = Task { @MainActor [weak self] in
@@ -840,7 +916,9 @@ class WorkshopViewModel: ObservableObject {
                             category: category,
                             period: period,
                             count: category == .trending ? 15 : 12,
-                            ageRating: rating
+                            ageRating: rating,
+                            showOnly: showOnly,
+                            favoriteIDs: favoriteIDs
                         )
                         guard let items else { return nil }
                         return (category, items)
@@ -873,6 +951,36 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func refreshDiscover() {
+        loadDiscover(force: true)
+    }
+
+    func setWorkshopShowOnly(_ option: FRShowOnly, isOn: Bool) {
+        if isOn {
+            workshopShowOnly.insert(option)
+        } else {
+            workshopShowOnly.remove(option)
+        }
+        currentPage = 1
+        if workshopShowOnly.contains(.myFavourites) {
+            SteamServiceManager.shared.refreshWorkshopFavorites()
+        }
+        search()
+    }
+
+    func setDiscoverShowOnly(_ option: FRShowOnly, isOn: Bool) {
+        if isOn {
+            discoverShowOnly.insert(option)
+        } else {
+            discoverShowOnly.remove(option)
+        }
+        if discoverShowOnly.contains(.myFavourites) {
+            SteamServiceManager.shared.refreshWorkshopFavorites()
+        }
+        loadDiscover(force: true)
+    }
+
+    func clearDiscoverFilters() {
+        discoverShowOnly = .none
         loadDiscover(force: true)
     }
 
@@ -994,6 +1102,18 @@ class WorkshopViewModel: ObservableObject {
         rebuildSubscriptionPage(startIndex: 0)
     }
 
+    func setSubscriptionShowOnly(_ option: FRShowOnly, isOn: Bool) {
+        if isOn {
+            subscriptionShowOnly.insert(option)
+        } else {
+            subscriptionShowOnly.remove(option)
+        }
+        if subscriptionShowOnly.contains(.myFavourites) {
+            SteamServiceManager.shared.refreshWorkshopFavorites()
+        }
+        refreshSubscriptionFilters()
+    }
+
     func setSubscriptionTypeFilter(_ filter: WorkshopTypeFilter) {
         subscriptionTypeFilter = filter
         refreshSubscriptionFilters()
@@ -1070,6 +1190,7 @@ class WorkshopViewModel: ObservableObject {
         subscriptionSearchText = ""
         subscriptionSelectedTags.removeAll()
         subscriptionTypeFilter = .all
+        subscriptionShowOnly = .none
         subscriptionAgeRatingFilter = .all
         subscriptionWidescreenResolution = .all
         subscriptionUltraWidescreenResolution = .all
@@ -1155,6 +1276,50 @@ class WorkshopViewModel: ObservableObject {
 
     func subscriptionActionError(for workshopId: String) -> String? {
         subscriptionActionErrorItemID == workshopId ? subscriptionActionError : nil
+    }
+
+    func isWorkshopFavorite(_ workshopId: String) -> Bool {
+        workshopFavoriteIDs.contains(workshopId)
+    }
+
+    func favoriteActionError(for workshopId: String) -> String? {
+        favoriteActionErrorItemID == workshopId ? favoriteActionError : nil
+    }
+
+    func dismissFavoriteActionError() {
+        favoriteActionError = nil
+        favoriteActionErrorItemID = nil
+    }
+
+    func toggleFavorite(_ item: WorkshopItem) {
+        toggleWorkshopFavorite(workshopId: item.publishedFileId)
+    }
+
+    func toggleWorkshopFavorite(workshopId: String) {
+        guard steamSetupState == .ready else {
+            openSteamSetupIfActionable()
+            return
+        }
+        guard !workshopId.isEmpty, !changingFavoriteIDs.contains(workshopId) else { return }
+        let favorited = !isWorkshopFavorite(workshopId)
+        changingFavoriteIDs.insert(workshopId)
+        favoriteActionError = nil
+        favoriteActionErrorItemID = workshopId
+        SteamServiceManager.shared.setWorkshopFavorite(
+            workshopId: workshopId,
+            favorited: favorited
+        ) { [weak self] result in
+            guard let self else { return }
+            self.changingFavoriteIDs.remove(workshopId)
+            switch result {
+            case .success:
+                self.favoriteActionError = nil
+                self.favoriteActionErrorItemID = nil
+            case .failure(let error):
+                self.favoriteActionError = error.localizedDescription
+                self.favoriteActionErrorItemID = workshopId
+            }
+        }
     }
 
     func refreshSubscriptionStates(for items: [WorkshopItem]) {
@@ -1420,6 +1585,13 @@ class WorkshopViewModel: ObservableObject {
     }
 
     private func matchesSubscriptionFilters(_ item: WorkshopItem) -> Bool {
+        if !subscriptionShowOnly.matches(
+            workshopItem: item,
+            favoriteIDs: SteamServiceManager.shared.workshopFavoriteIDs
+        ) {
+            return false
+        }
+
         let query = subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             let searchableValues = [
@@ -1698,6 +1870,10 @@ class WorkshopViewModel: ObservableObject {
                 self.changingSubscriptionIDs = []
                 self.subscriptionActionError = nil
                 self.subscriptionActionErrorItemID = nil
+                self.workshopFavoriteIDs = []
+                self.changingFavoriteIDs = []
+                self.favoriteActionError = nil
+                self.favoriteActionErrorItemID = nil
                 self.isPreparingSubscriptionDownloads = false
                 self.subscriptionDownloadPlan = nil
                 self.comments = []

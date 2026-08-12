@@ -145,6 +145,7 @@ struct WorkshopItemDetail: View {
                 tagList(for: item)
 
                 sectionHeader("操作")
+                favoriteSection(for: item)
                 subscriptionSection(for: item)
                 downloadSection(for: item)
 
@@ -209,6 +210,64 @@ struct WorkshopItemDetail: View {
                 }
             }
             .padding()
+        }
+    }
+
+    @ViewBuilder
+    func favoriteSection(for item: WorkshopItem) -> some View {
+        let id = item.publishedFileId
+        let isFavorite = workshopViewModel.isWorkshopFavorite(id)
+        let isChanging = workshopViewModel.changingFavoriteIDs.contains(id)
+
+        VStack(spacing: 6) {
+            if workshopViewModel.steamSetupState == .checking {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(workshopViewModel.steamCheckingMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+            } else if workshopViewModel.steamSetupState != .ready {
+                Button {
+                    AppDelegate.shared.openSteamSetup()
+                } label: {
+                    Label("登录 Steam 以收藏", systemImage: "person.crop.circle.badge.exclamationmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            } else if isChanging {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在同步收藏状态…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+            } else {
+                Button {
+                    workshopViewModel.toggleFavorite(item)
+                } label: {
+                    Label(
+                        LocalizedStringKey(isFavorite ? "取消收藏" : "加入收藏"),
+                        systemImage: isFavorite ? "heart.slash.fill" : "heart.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(isFavorite ? .red : .accentColor)
+            }
+
+            if let error = workshopViewModel.favoriteActionError(for: id) {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -847,6 +906,7 @@ struct CreatorProfileView: View {
                             isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                             presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                             downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                            isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                             isActive: selectedDetailItem == nil,
                             animatedPreviewMode: animatedPreviewMode
                         )
@@ -858,6 +918,19 @@ struct CreatorProfileView: View {
                         }
                         .contextMenu {
                             Section {
+                                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
+                                    Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
+                                } else {
+                                    Button {
+                                        workshopViewModel.toggleFavorite(item)
+                                    } label: {
+                                        Label(
+                                            LocalizedStringKey(workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "取消收藏" : "加入收藏"),
+                                            systemImage: workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "heart.slash.fill" : "heart.fill"
+                                        )
+                                    }
+                                }
+
                                 Button {
                                     workshopViewModel.downloadItem(item)
                                 } label: {

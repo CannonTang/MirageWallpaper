@@ -119,13 +119,17 @@ struct ContentView: View {
                             }
 
                             if loadedSections.contains(.discover) {
-                                DiscoverView(
-                                    workshopViewModel: workshopViewModel,
-                                    viewModel: viewModel,
-                                    wallpaperViewModel: wallpaperViewModel,
-                                    navigationModel: navigationModel,
-                                    isActive: navigationModel.selection == .discover
-                                )
+                                FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
+                                    DiscoverFilterSidebar(workshopViewModel: workshopViewModel)
+                                }, content: {
+                                    DiscoverView(
+                                        workshopViewModel: workshopViewModel,
+                                        viewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        navigationModel: navigationModel,
+                                        isActive: navigationModel.selection == .discover
+                                    )
+                                })
                                 .sectionVisibility(navigationModel.selection == .discover)
                             }
 
@@ -245,6 +249,19 @@ struct ContentView: View {
                 message: Text(feedback.message),
                 dismissButton: .default(Text("好"))
             )
+        }
+        .alert(
+            "Steam 收藏",
+            isPresented: Binding(
+                get: { workshopViewModel.favoriteActionError != nil },
+                set: { if !$0 { workshopViewModel.dismissFavoriteActionError() } }
+            )
+        ) {
+            Button("确定", role: .cancel) {
+                workshopViewModel.dismissFavoriteActionError()
+            }
+        } message: {
+            Text(workshopViewModel.favoriteActionError ?? "")
         }
         .alert(
             "需要基础壁纸",
