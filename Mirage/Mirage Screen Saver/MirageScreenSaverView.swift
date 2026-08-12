@@ -246,6 +246,7 @@ final class MirageScreenSaverView: ScreenSaverView {
         guard !didLoadWallpaper, window != nil else { return }
         layoutSubtreeIfNeeded()
         normalizeFullScreenBoundsIfNeeded()
+        layoutSubtreeIfNeeded()
         didLoadWallpaper = true
         guard let configuration = MirageSaverConfiguration.load() else {
             showMessage(MirageSaverLocalization.string("请先在 Mirage 设置中选择屏保壁纸"))
@@ -317,26 +318,15 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     private func normalizeFullScreenBoundsIfNeeded() {
-        hostReportedSize = bounds.size
+        if hostReportedSize == .zero {
+            hostReportedSize = bounds.size
+        }
+        guard !isPreview else { return }
         guard let screen = window?.screen ?? NSScreen.main else { return }
         let logicalSize = screen.frame.size
         guard logicalSize.width > 0, logicalSize.height > 0 else { return }
-
-        let physicalSize = displayPixelSize() ?? CGSize(
-            width: logicalSize.width * screen.backingScaleFactor,
-            height: logicalSize.height * screen.backingScaleFactor
-        )
-        let matchesPhysicalPixels = approximatelyEqual(bounds.size, physicalSize)
-        let matchesLogicalPoints = approximatelyEqual(bounds.size, logicalSize)
-        guard matchesPhysicalPixels, !matchesLogicalPoints else { return }
-
-        // macOS 26's legacyScreenSaver ViewBridge can give a full-screen view
-        // the display's physical pixel dimensions as its logical bounds even
-        // though the remote container is sized in points. Normalize only that
-        // exact full-display signature; small System Settings previews and
-        // ordinary point-sized views are left untouched.
+        guard !approximatelyEqual(bounds.size, logicalSize) else { return }
         bounds = NSRect(origin: bounds.origin, size: logicalSize)
-        layoutSubtreeIfNeeded()
     }
 
     private func approximatelyEqual(_ lhs: CGSize, _ rhs: CGSize) -> Bool {
@@ -347,13 +337,9 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     private func displayPixelSize() -> CGSize? {
         guard let screen = window?.screen ?? NSScreen.main else { return nil }
-        let scale = screen.backingScaleFactor
-        let size = screen.frame.size
-        guard size.width > 0, size.height > 0, scale > 0 else { return nil }
-        // A CAMetalLayer renders in AppKit backing pixels. This can differ from
-        // CGDisplayMode.pixelWidth on a scaled display, so derive it from the
-        // screen's stable logical frame and backing scale.
-        return CGSize(width: size.width * scale, height: size.height * scale)
+        let size = screen.convertRectToBacking(screen.frame).size
+        guard size.width > 0, size.height > 0 else { return nil }
+        return size
     }
 
     private func loadVideo(_ configuration: MirageSaverConfiguration) {
@@ -420,6 +406,7 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     override func layout() {
         super.layout()
+        normalizeFullScreenBoundsIfNeeded()
         guard let rootLayer = layer else { return }
         rootLayer.contentsScale = window?.backingScaleFactor ?? rootLayer.contentsScale
         playerLayer?.frame = videoPresentationBounds
