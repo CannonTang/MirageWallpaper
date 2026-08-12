@@ -216,6 +216,9 @@ struct WorkshopView: View {
                                     }
                                 }
                             }
+                            #if arch(arm64)
+                            .padding(.trailing)
+                            #endif
 
                             if workshopViewModel.isLoading {
                                 ProgressView()

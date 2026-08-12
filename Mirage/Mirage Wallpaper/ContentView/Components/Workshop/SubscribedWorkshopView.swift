@@ -307,6 +307,9 @@ struct SubscribedWorkshopView: View {
                         }
                     }
                     .padding(.vertical, 2)
+                    #if arch(arm64)
+                    .padding(.trailing)
+                    #endif
 
                     if workshopViewModel.subscriptionPageCount > 1 {
                         Color.clear.frame(height: 58)
