@@ -108,11 +108,31 @@ void MeshCache::release(MeshCacheKey key) {
 
 VkBuffer MeshCache::gpuBuf() const { return m_buf ? m_buf->gpuBuf() : VK_NULL_HANDLE; }
 
-bool MeshCache::recordPendingUploads(vvk::CommandBuffer& cmd) {
+bool MeshCache::beginPendingUploads() {
     if (! m_buf || ! m_dirty) return true;
-    if (! m_buf->recordUpload(cmd)) return false;
+    return m_buf->beginUpload();
+}
+
+bool MeshCache::hasPendingUploadChunk() const {
+    return m_buf && m_dirty && m_buf->hasUploadChunk();
+}
+
+bool MeshCache::recordPendingUploadChunk(vvk::CommandBuffer& cmd, VkDeviceSize max_bytes) {
+    return m_buf && m_dirty && m_buf->recordUploadChunk(cmd, max_bytes);
+}
+
+void MeshCache::finishPendingUploads() {
+    if (! m_buf || ! m_dirty) return;
+    m_buf->finishUpload();
     m_dirty = false;
-    return true;
+}
+
+void MeshCache::completePendingUploads() {
+    if (m_buf) m_buf->completeUpload();
+}
+
+void MeshCache::cancelPendingUploads() {
+    if (m_buf) m_buf->cancelUpload();
 }
 
 void MeshCache::onRenderGraphCleared() {

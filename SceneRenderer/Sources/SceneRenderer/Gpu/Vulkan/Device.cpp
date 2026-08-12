@@ -363,9 +363,11 @@ VkDeviceSize Device::GetUsage() const {
     return budget.usage;
 }
 
-void Device::Destroy() {
-    VVK_CHECK(m_device.WaitIdle());
-    savePipelineCache();
+void Device::Destroy(bool wait_idle) {
+    if (wait_idle) {
+        VVK_CHECK(m_device.WaitIdle());
+        savePipelineCache();
+    }
     destroyPipelineCache();
 }
 

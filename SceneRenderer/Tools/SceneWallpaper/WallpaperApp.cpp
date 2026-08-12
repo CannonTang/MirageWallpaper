@@ -552,6 +552,10 @@ int main(int argc, char** argv) {
     info.redraw_callback    = [&state]() {
         SceneRendererMacDesktopWake(state.desktop);
     };
+    info.failure_callback = [&state](VkResult) {
+        EmitLifecycleEvent(&state, "renderer-error");
+        SceneRendererMacDesktopStop(state.desktop);
+    };
     if (use_metalfx) {
         info.metal_frame_callback = [&state](void* texture, void* command_queue,
                                              std::uint32_t width,

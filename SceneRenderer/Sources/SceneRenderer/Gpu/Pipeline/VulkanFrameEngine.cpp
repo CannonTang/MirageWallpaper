@@ -25,6 +25,7 @@ using namespace sr::vulkan;
 constexpr uint64_t             vk_wait_time { 10u * 1000u * 1000000u };
 constexpr uint32_t             vk_upload_command_num { 3 };
 constexpr uint32_t             vk_command_num { vk_upload_command_num + 1 };
+constexpr VkDeviceSize         vk_mesh_upload_chunk_size { 8u * 1024u * 1024u };
 constexpr VkPipelineStageFlags vk_upload_wait_stages { VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
                                                        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT };
@@ -447,41 +448,6 @@ struct RenderProgram {
         loaded = false;
     }
 
-    uint64_t commitUploads(const Device& device, RenderingResources& rr,
-                           vvk::CommandBuffer& upload_cmd) {
-        VVK_CHECK_ACT(return 0,
-                             upload_cmd.Begin(VkCommandBufferBeginInfo {
-                                 .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                 .pNext = nullptr,
-                                 .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-                             }));
-        if (! device.mesh_cache().recordPendingUploads(upload_cmd)) return 0;
-        VVK_CHECK_ACT(return 0, upload_cmd.End());
-        {
-            const uint64_t                signal_value = ++rr.upload_timeline_value;
-            VkTimelineSemaphoreSubmitInfo timeline_info {
-                .sType                     = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-                .pNext                     = nullptr,
-                .waitSemaphoreValueCount   = 0,
-                .pWaitSemaphoreValues      = nullptr,
-                .signalSemaphoreValueCount = 1,
-                .pSignalSemaphoreValues    = &signal_value,
-            };
-            VkSubmitInfo sub_info {
-                .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .pNext                = &timeline_info,
-                .commandBufferCount   = 1,
-                .pCommandBuffers      = upload_cmd.address(),
-                .signalSemaphoreCount = 1,
-                .pSignalSemaphores    = rr.sem_upload.address(),
-            };
-            VVK_CHECK_ACT(return 0, device.graphics_queue().handle.Submit(sub_info, {}));
-            loaded = true;
-            return signal_value;
-        }
-        return 0;
-    }
-
     void prepareFrameData(RenderingResources& rr) {
         for (auto& record : pass_records) {
             if (record.pass != nullptr && record.pass->prepared())
@@ -577,7 +543,7 @@ struct VulkanRender::Impl {
     bool init(RenderInitInfo);
     void destroy();
 
-    void drawFrame(Scene&);
+    bool drawFrame(Scene&);
     void flushPendingFrame();
 
     bool CreateRenderingResource(RenderingResources&);
@@ -602,17 +568,22 @@ struct VulkanRender::Impl {
     void                                UpdateCameraFillMode(Scene&, sr::FillMode);
 
     bool                       initRes();
-    std::optional<std::size_t> acquireUploadCommandSlot(RenderingResources&);
-    void                       commitPreparedUploads();
-    void                       drawFrameSwapchain();
-    void                       drawFrameOffscreen();
+    bool                       acquireUploadCommandSlot(RenderingResources&, std::size_t&);
+    bool                       commitPreparedUploads();
+    bool                       drawFrameSwapchain();
+    bool                       drawFrameOffscreen();
     bool                       onSwapchainReady(unsigned width, unsigned height);
     bool                       createSwapchainSemaphores();
     // Rebuild the swapchain and everything derived from it. False means the
     // surface is not presentable right now (0x0 while a display is being
     // reconfigured) — the caller skips the frame and retries next tick.
     bool                       recreateSwapchain();
-    void                       retireInFlightFrame();
+    bool                       retireInFlightFrame();
+    bool                       waitForPendingUploads();
+    bool                       prepareForResourceMutation();
+    void                       finishMeshUpload();
+    void                       fail(VkResult);
+    void                       evictUnusedMeshes();
 
     Instance                m_instance;
     std::unique_ptr<Device> m_device;
@@ -623,6 +594,7 @@ struct VulkanRender::Impl {
     std::unique_ptr<FinPass> m_testpass { nullptr };
     ReDrawCB                 m_redraw_cb;
     MetalFrameCB m_metal_frame_cb;
+    RenderFailureCB m_failure_cb;
 
     std::unique_ptr<StagingBuffer> m_dyn_buf { nullptr };
     ShaderReflectionCache          m_shader_reflection_cache;
@@ -649,6 +621,10 @@ struct VulkanRender::Impl {
     // wait happens at the head of the next frame instead of right after
     // present, so the GPU works while the host sleeps on the frame timer.
     bool                         m_frame_in_flight { false };
+    bool                         m_mesh_upload_pending { false };
+    std::atomic<bool>            m_failed { false };
+    bool                         m_skip_wait_idle { false };
+    VkResult                     m_failure_result { VK_SUCCESS };
 
     // for VUID-vkQueueSubmit-pSignalSemaphores-00067
     std::vector<vvk::Semaphore> m_sem_swap_finish_per_image;
@@ -660,7 +636,10 @@ VulkanRender::VulkanRender(): pImpl(std::make_unique<Impl>()) {}
 VulkanRender::~VulkanRender() {};
 
 bool VulkanRender::inited() const { return pImpl->m_inited; }
-bool VulkanRender::readyToDraw() const { return pImpl->m_inited && pImpl->m_program.loaded; }
+bool VulkanRender::failed() const { return pImpl->m_failed; }
+bool VulkanRender::readyToDraw() const {
+    return pImpl->m_inited && ! pImpl->m_failed && pImpl->m_program.loaded;
+}
 
 VkInstance VulkanRender::vkInstance() const {
     if (! pImpl->m_inited) return VK_NULL_HANDLE;
@@ -758,7 +737,7 @@ void VulkanRender::driverUuid(uint8_t out[16]) const {
 
 bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(std::move(info)); }
 void VulkanRender::destroy() { pImpl->destroy(); }
-void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
+bool VulkanRender::drawFrame(Scene& scene) { return pImpl->drawFrame(scene); };
 void VulkanRender::flushPendingFrame() { pImpl->flushPendingFrame(); }
 void VulkanRender::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     pImpl->clearLastRenderGraph(retention);
@@ -808,7 +787,7 @@ std::vector<PreparedPassDiagnostic> VulkanRender::preparedPassDiagnostics() cons
     return pImpl->preparedPassDiagnostics();
 }
 void VulkanRender::evictUnusedMeshes() {
-    if (auto* d = pImpl->m_device.get()) d->mesh_cache().evictUnused();
+    pImpl->evictUnusedMeshes();
 };
 void VulkanRender::UpdateCameraFillMode(Scene& scene, sr::FillMode fill) {
     pImpl->UpdateCameraFillMode(scene, fill);
@@ -825,6 +804,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     m_redraw_cb = info.redraw_callback;
     m_metal_frame_cb = std::move(info.metal_frame_callback);
+    m_failure_cb = std::move(info.failure_callback);
     VkExtent2D extent { info.width, info.height };
     if (extent.width * extent.height < 500 * 500) {
         rstd_error("too small swapchain image size: {}x{}", extent.width, extent.height);
@@ -993,16 +973,15 @@ bool VulkanRender::Impl::initRes() {
 void VulkanRender::Impl::destroy() {
     if (! m_inited) return;
     if (m_device && m_device->handle()) {
-        VVK_CHECK(m_device->handle().WaitIdle());
+        if (! m_skip_wait_idle) VVK_CHECK(m_device->handle().WaitIdle());
 
-        // res
         m_program.destroyPasses(*m_device, m_rendering_resources);
         ReleaseCompletedRetiredResources(m_rendering_resources);
         m_program.clear();
         m_dyn_buf->destroy();
         m_device->mesh_cache().destroy();
 
-        m_device->Destroy();
+        m_device->Destroy(! m_skip_wait_idle);
     }
     m_instance.Destroy();
 }
@@ -1104,46 +1083,160 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
 
 void VulkanRender::Impl::DestroyRenderingResource(RenderingResources& rr) {}
 
-std::optional<std::size_t> VulkanRender::Impl::acquireUploadCommandSlot(RenderingResources& rr) {
-    if (m_upload_cmds.empty()) return std::nullopt;
-    const std::size_t slot = m_next_upload_cmd;
+bool VulkanRender::Impl::acquireUploadCommandSlot(RenderingResources& rr, std::size_t& slot) {
+    if (m_upload_cmds.empty() || m_failed) return false;
+    slot                       = m_next_upload_cmd;
     m_next_upload_cmd      = (m_next_upload_cmd + 1) % m_upload_cmds.size();
 
     const uint64_t wait_value = m_upload_cmd_values[slot];
     if (wait_value != 0) {
         uint64_t counter = 0;
-        VVK_CHECK_ACT(return std::nullopt, rr.sem_upload.GetCounter(&counter));
+        VkResult res = rr.sem_upload.GetCounter(&counter);
+        if (res != VK_SUCCESS) {
+            fail(res);
+            return false;
+        }
         if (counter < wait_value) {
-            VVK_CHECK_ACT(return std::nullopt, rr.sem_upload.Wait(wait_value, vk_wait_time));
+            res = rr.sem_upload.Wait(wait_value, vk_wait_time);
+            if (res != VK_SUCCESS) {
+                fail(res);
+                return false;
+            }
         }
         m_upload_cmd_values[slot] = 0;
     }
-    return slot;
+    return true;
 }
 
-void VulkanRender::Impl::commitPreparedUploads() {
-    auto slot = acquireUploadCommandSlot(m_rendering_resources);
-    if (! slot.has_value()) return;
-    auto signal_value =
-        m_program.commitUploads(*m_device, m_rendering_resources, m_upload_cmds[*slot]);
-    if (signal_value == 0) return;
-    m_upload_cmd_values[*slot]                 = signal_value;
-    m_rendering_resources.pending_upload_value = signal_value;
+bool VulkanRender::Impl::commitPreparedUploads() {
+    if (m_failed) return false;
+    auto& rr    = m_rendering_resources;
+    auto& cache = m_device->mesh_cache();
+    if (! cache.beginPendingUploads()) {
+        fail(VK_ERROR_INITIALIZATION_FAILED);
+        return false;
+    }
+    if (! cache.hasPendingUploadChunk()) {
+        cache.finishPendingUploads();
+        cache.completePendingUploads();
+        m_program.loaded = true;
+        return true;
+    }
+
+    uint64_t final_value = 0;
+    while (cache.hasPendingUploadChunk()) {
+        std::size_t slot = 0;
+        if (! acquireUploadCommandSlot(rr, slot)) {
+            cache.cancelPendingUploads();
+            return false;
+        }
+        auto& cmd = m_upload_cmds[slot];
+        VkResult res = cmd.Begin(VkCommandBufferBeginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        });
+        if (res != VK_SUCCESS) {
+            cache.cancelPendingUploads();
+            fail(res);
+            return false;
+        }
+        if (! cache.recordPendingUploadChunk(cmd, vk_mesh_upload_chunk_size)) {
+            cache.cancelPendingUploads();
+            fail(VK_ERROR_INITIALIZATION_FAILED);
+            return false;
+        }
+        res = cmd.End();
+        if (res != VK_SUCCESS) {
+            cache.cancelPendingUploads();
+            fail(res);
+            return false;
+        }
+
+        const uint64_t signal_value = ++rr.upload_timeline_value;
+        VkTimelineSemaphoreSubmitInfo timeline_info {
+            .sType                     = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .pNext                     = nullptr,
+            .waitSemaphoreValueCount   = 0,
+            .pWaitSemaphoreValues      = nullptr,
+            .signalSemaphoreValueCount = 1,
+            .pSignalSemaphoreValues    = &signal_value,
+        };
+        VkSubmitInfo sub_info {
+            .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext                = &timeline_info,
+            .commandBufferCount   = 1,
+            .pCommandBuffers      = cmd.address(),
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores    = rr.sem_upload.address(),
+        };
+        res = m_device->graphics_queue().handle.Submit(sub_info, {});
+        if (res != VK_SUCCESS) {
+            cache.cancelPendingUploads();
+            fail(res);
+            return false;
+        }
+        m_upload_cmd_values[slot] = signal_value;
+        final_value               = signal_value;
+    }
+
+    cache.finishPendingUploads();
+    m_mesh_upload_pending       = true;
+    rr.pending_upload_value     = final_value;
+    m_program.loaded            = true;
+    return true;
 }
 
-void VulkanRender::Impl::drawFrame(Scene& scene) {
-    if (! (m_inited && m_program.loaded)) return;
+void VulkanRender::Impl::fail(VkResult result) {
+    if (result == VK_SUCCESS || m_failed.exchange(true)) return;
+    m_failure_result = result;
+    m_skip_wait_idle = result == VK_TIMEOUT || result == VK_ERROR_DEVICE_LOST;
+    m_program.loaded = false;
+    rstd_error("renderer failed: {}", vvk::ToString(result));
+    if (m_failure_cb) m_failure_cb(result);
+}
+
+void VulkanRender::Impl::finishMeshUpload() {
+    if (! m_mesh_upload_pending) return;
+    m_device->mesh_cache().completePendingUploads();
+    m_mesh_upload_pending = false;
+    std::fill(m_upload_cmd_values.begin(), m_upload_cmd_values.end(), 0);
+}
+
+bool VulkanRender::Impl::waitForPendingUploads() {
+    if (m_failed) return false;
+    auto& rr = m_rendering_resources;
+    if (rr.pending_upload_value == 0) return true;
+    const VkResult res = rr.sem_upload.Wait(rr.pending_upload_value, vk_wait_time);
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
+    finishMeshUpload();
+    rr.pending_upload_value = 0;
+    return true;
+}
+
+bool VulkanRender::Impl::prepareForResourceMutation() {
+    if (! retireInFlightFrame()) return false;
+    return waitForPendingUploads();
+}
+
+void VulkanRender::Impl::evictUnusedMeshes() {
+    if (! m_device || ! prepareForResourceMutation()) return;
+    m_device->mesh_cache().evictUnused();
+}
+
+bool VulkanRender::Impl::drawFrame(Scene& scene) {
+    if (! (m_inited && ! m_failed && m_program.loaded)) return false;
 
     if (m_instance.offscreen()) {
-        // Both paths share rr.fence_frame, and the offscreen path submits into
-        // it directly. If the surface went away with a swapchain frame still
-        // in flight, retire it first so the fence is not signalled-but-unreset
-        // at the next submit.
-        retireInFlightFrame();
-        drawFrameOffscreen();
-        if (m_redraw_cb) m_redraw_cb();
+        if (! retireInFlightFrame()) return false;
+        if (! drawFrameOffscreen()) return false;
+        if (m_redraw_cb && ! m_failed) m_redraw_cb();
+        return ! m_failed;
     } else {
-        drawFrameSwapchain();
+        return drawFrameSwapchain();
     }
 }
 
@@ -1159,32 +1252,45 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 // reads it. Overlapping more than one frame would additionally require
 // per-frame copies of m_dyn_buf's device buffer and of every descriptor set
 // pointing at it; both are shared today, which is why the depth stops at one.
-void VulkanRender::Impl::retireInFlightFrame() {
-    if (! m_frame_in_flight) return;
+bool VulkanRender::Impl::retireInFlightFrame() {
+    if (m_failed) return false;
+    if (! m_frame_in_flight) return true;
     RenderingResources& rr = m_rendering_resources;
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+    VkResult res = rr.fence_frame.Wait(vk_wait_time);
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
     m_frame_in_flight = false;
     ReleaseCompletedRetiredResources(rr);
     m_finpass->finishFrameDump(*m_device);
     m_device->tex_cache().ReleaseRecordedUploads();
+    finishMeshUpload();
     rr.pending_upload_value = 0;
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+    res = rr.fence_frame.Reset();
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
     if (m_redraw_cb) m_redraw_cb();
+    return true;
 }
 
-void VulkanRender::Impl::flushPendingFrame() { retireInFlightFrame(); }
+void VulkanRender::Impl::flushPendingFrame() {
+    if (retireInFlightFrame()) (void)waitForPendingUploads();
+}
 
-void VulkanRender::Impl::drawFrameSwapchain() {
+bool VulkanRender::Impl::drawFrameSwapchain() {
     RenderingResources& rr = m_rendering_resources;
 
-    retireInFlightFrame();
+    if (! retireInFlightFrame()) return false;
 
     // A pending rebuild (or a swapchain we failed to rebuild earlier) has to
     // be resolved before anything touches the images. While the surface stays
     // unpresentable — display asleep, 0x0 drawable mid-reconfiguration — we
     // just skip frames instead of creating an invalid swapchain.
     if (m_swapchain_out_of_date || ! m_device->swapchain().handle()) {
-        if (! recreateSwapchain()) return;
+        if (! recreateSwapchain()) return false;
     }
 
     uint32_t image_index = 0;
@@ -1201,7 +1307,7 @@ void VulkanRender::Impl::drawFrameSwapchain() {
             rstd_info("swapchain out of date on acquire: {}", vvk::ToString(res));
             m_swapchain_out_of_date = true;
             (void)recreateSwapchain();
-            return;
+            return false;
         }
         if (res == VK_SUBOPTIMAL_KHR) {
             // The image is valid and the acquire semaphore *is* signalled, so
@@ -1209,15 +1315,15 @@ void VulkanRender::Impl::drawFrameSwapchain() {
             // rather than leaving a dangling signalled semaphore behind.
             m_swapchain_out_of_date = true;
         } else if (res != VK_SUCCESS) {
-            rstd_error("vkAcquireNextImageKHR failed: {}", vvk::ToString(res));
-            return;
+            fail(res);
+            return false;
         }
     }
     auto swap_images = m_device->swapchain().images();
     if (image_index >= swap_images.size() || image_index >= m_sem_swap_finish_per_image.size()) {
         rstd_error("acquired swapchain image {} out of range", image_index);
         m_swapchain_out_of_date = true;
-        return;
+        return false;
     }
     const auto& image = swap_images[image_index];
 
@@ -1226,15 +1332,26 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     // buffer before recordUpload emits the GPU copy commands for this frame.
     m_program.prepareFrameData(rr);
 
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
+    VkResult command_res = rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     });
+    if (command_res != VK_SUCCESS) {
+        fail(command_res);
+        return false;
+    }
     m_device->tex_cache().RecordPendingUploads(rr.command);
-    m_dyn_buf->recordUpload(rr.command);
+    if (! m_dyn_buf->recordUpload(rr.command)) {
+        fail(VK_ERROR_INITIALIZATION_FAILED);
+        return false;
+    }
     m_program.execute(*m_device, rr);
-    (void)rr.command.End();
+    command_res = rr.command.End();
+    if (command_res != VK_SUCCESS) {
+        fail(command_res);
+        return false;
+    }
 
     auto& sem_present_done = m_sem_swap_finish_per_image[image_index];
 
@@ -1275,14 +1392,12 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pSignalSemaphores    = sem_present_done.address(),
     };
 
-    VVK_CHECK_ACT(
-        {
-            // The acquire semaphore is signalled but nothing will ever wait on
-            // it now. Force a rebuild so it is recreated unsignalled.
-            m_swapchain_out_of_date = true;
-            return;
-        },
-        m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
+    VkResult submit_res = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
+    if (submit_res != VK_SUCCESS) {
+        m_swapchain_out_of_date = true;
+        fail(submit_res);
+        return false;
+    }
     VkPresentInfoKHR present_info {
         .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext              = nullptr,
@@ -1299,7 +1414,8 @@ void VulkanRender::Impl::drawFrameSwapchain() {
             rstd_info("swapchain needs rebuild after present: {}", vvk::ToString(res));
             m_swapchain_out_of_date = true;
         } else if (res != VK_SUCCESS) {
-            rstd_error("vkQueuePresentKHR failed: {}", vvk::ToString(res));
+            fail(res);
+            return false;
         }
     }
     // Submitted successfully: the fence is now owned by the GPU and is awaited
@@ -1307,9 +1423,10 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     // rebuild is handled — rebuilding here would tear down images this frame's
     // work may still be reading.
     m_frame_in_flight = true;
+    return true;
 }
-void VulkanRender::Impl::drawFrameOffscreen() {
-    if (! m_ex_swapchain) return;
+bool VulkanRender::Impl::drawFrameOffscreen() {
+    if (! m_ex_swapchain || m_failed) return false;
 
     // Poll the offscreen swapchain before committing to a slot.
     // Previous frame's GPU work has fenced at the tail of the last
@@ -1321,29 +1438,40 @@ void VulkanRender::Impl::drawFrameOffscreen() {
     // format-agnostic now — vkCmdBlitImage handles cross-format channel
     // mapping, no rebuild needed on renegotiation.
     if (! m_ex_swapchain->ready() || ! m_finpass->prepared()) {
-        return;
+        return false;
     }
 
     RenderingResources& rr = m_rendering_resources;
     ImageParameters     image;
     if (! m_ex_swapchain->acquireRenderTarget(image)) {
-        return;
+        return false;
     }
 
     m_finpass->setPresent(image);
     m_program.prepareFrameData(rr);
 
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
+    VkResult command_res = rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     });
+    if (command_res != VK_SUCCESS) {
+        fail(command_res);
+        return false;
+    }
     m_device->tex_cache().RecordPendingUploads(rr.command);
-    m_dyn_buf->recordUpload(rr.command);
+    if (! m_dyn_buf->recordUpload(rr.command)) {
+        fail(VK_ERROR_INITIALIZATION_FAILED);
+        return false;
+    }
 
     m_program.execute(*m_device, rr);
 
-    (void)rr.command.End();
+    command_res = rr.command.End();
+    if (command_res != VK_SUCCESS) {
+        fail(command_res);
+        return false;
+    }
 
     const bool                 wait_upload = rr.pending_upload_value != 0;
     std::array<VkSemaphore, 1> wait_semaphores {
@@ -1375,20 +1503,34 @@ void VulkanRender::Impl::drawFrameOffscreen() {
         .signalSemaphoreCount = 1,
         .pSignalSemaphores    = rr.sem_export.address(),
     };
-    VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
+    VkResult res = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
 
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+    res = rr.fence_frame.Wait(vk_wait_time);
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
     ReleaseCompletedRetiredResources(rr);
     m_finpass->finishFrameDump(*m_device);
     m_device->tex_cache().ReleaseRecordedUploads();
+    finishMeshUpload();
     rr.pending_upload_value = 0;
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+    res = rr.fence_frame.Reset();
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
 
     m_ex_swapchain->submitRendered(-1);
+    return true;
 }
 
 bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {
-    if (! m_inited || ! m_device) return false;
+    if (! m_inited || ! m_device || m_failed) return false;
     auto& cur            = m_device->out_extent();
     bool  extent_changed = (width != cur.width) || (height != cur.height);
     if (! extent_changed) {
@@ -1399,7 +1541,14 @@ bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {
     // Drain GPU work for the previous extent's resources before tearing
     // down the texture cache + render passes inside compileRenderGraph
     // (which the caller will run next).
-    VVK_CHECK(m_device->handle().WaitIdle());
+    const VkResult res = m_device->handle().WaitIdle();
+    if (res != VK_SUCCESS) {
+        fail(res);
+        return false;
+    }
+    finishMeshUpload();
+    m_rendering_resources.pending_upload_value = 0;
+    std::fill(m_upload_cmd_values.begin(), m_upload_cmd_values.end(), 0);
     m_device->set_out_extent(VkExtent2D { width, height });
     return true;
 }
@@ -1463,6 +1612,7 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
 
 void VulkanRender::Impl::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     flushPendingFrame();
+    if (m_failed) return;
     m_program.destroyPasses(*m_device, m_rendering_resources);
     ReleaseCompletedRetiredResources(m_rendering_resources);
     m_program.clear();
@@ -1485,7 +1635,7 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
 
 void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
                                             const RenderSceneSnapshot& render_scene) {
-    if (! m_inited) return;
+    if (! m_inited || m_failed || ! prepareForResourceMutation()) return;
     m_program.loaded = false;
 
     m_program.buildFromGraph(rg);
@@ -1504,7 +1654,7 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
     m_program.rebuildScopes();
 
-    commitPreparedUploads();
+    (void)commitPreparedUploads();
 };
 
 void VulkanRender::Impl::refreshPreparedResources(Scene& scene) {
@@ -1514,7 +1664,9 @@ void VulkanRender::Impl::refreshPreparedResources(Scene& scene) {
 
 void VulkanRender::Impl::refreshPreparedResources(Scene&                     scene,
                                                   const RenderSceneSnapshot& render_scene) {
-    if (! m_inited || m_program.pass_records.empty()) return;
+    if (! m_inited || m_failed || m_program.pass_records.empty() ||
+        ! prepareForResourceMutation())
+        return;
 
     const auto limits = m_device->gpu().GetProperties().limits;
     const VkExtent2D max_framebuffer_extent {
@@ -1529,12 +1681,12 @@ void VulkanRender::Impl::refreshPreparedResources(Scene&                     sce
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
     m_program.rebuildScopes();
 
-    commitPreparedUploads();
+    (void)commitPreparedUploads();
 }
 
 void VulkanRender::Impl::invalidatePreparedRenderItems(
     std::span<const sr::RenderItemId> render_items, PassInvalidationFlags flags) {
-    if (! m_inited) return;
+    if (! m_inited || m_failed) return;
     m_program.invalidateRenderItems(render_items, flags);
 }
 

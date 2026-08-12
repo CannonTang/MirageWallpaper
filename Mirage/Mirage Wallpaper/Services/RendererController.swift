@@ -1278,6 +1278,14 @@ final class RendererController {
             return
         }
 
+        if event == "renderer-error" {
+            NSLog("[Mirage] 场景渲染器发生不可恢复错误 (显示器=\(displayID))")
+            if isCandidate, let transition {
+                failCandidateLocked(transition, reason: "renderer-error")
+            }
+            return
+        }
+
         if event == "video-did-end" {
             guard isActive else { return }
             DispatchQueue.main.async { [weak self] in

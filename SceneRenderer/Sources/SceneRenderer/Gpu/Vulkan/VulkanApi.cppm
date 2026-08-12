@@ -487,7 +487,7 @@ public:
     static bool CheckGPU(vvk::PhysicalDevice gpu, std::span<const Extension> exts,
                          VkSurfaceKHR surface);
 
-    void Destroy();
+    void Destroy(bool wait_idle = true);
 
     // Rebuild the surface swapchain (VK_ERROR_OUT_OF_DATE_KHR, resolution
     // change, display hot-plug). Waits for device idle before touching the old
@@ -614,6 +614,12 @@ public:
     bool fillBuf(const StagingBufferRef& ref, size_t offset, size_t size, uint8_t c);
 
     bool recordUpload(vvk::CommandBuffer&);
+    bool beginUpload();
+    bool hasUploadChunk() const;
+    bool recordUploadChunk(vvk::CommandBuffer&, VkDeviceSize max_bytes);
+    void finishUpload();
+    void completeUpload();
+    void cancelUpload();
 
     VkBuffer gpuBuf() const;
 
@@ -642,6 +648,11 @@ private:
     VmaBufferParameters m_stage_buf;
     VmaBufferParameters m_gpu_buf;
     std::vector<DirtyRange> m_dirty_ranges;
+    std::vector<DirtyRange> m_live_ranges;
+    std::vector<DirtyRange> m_upload_ranges;
+    std::size_t             m_upload_range_index { 0 };
+    VkDeviceSize            m_upload_range_offset { 0 };
+    bool                    m_upload_active { false };
 };
 
 // ---------- MeshCache.hpp ----------
@@ -715,8 +726,12 @@ public:
     // Current GPU buffer handle. May change across increaseBuf in QueryOrUpload.
     VkBuffer gpuBuf() const;
 
-    // Flushes any pending writes to GPU. No-op if nothing dirty since last flush.
-    bool recordPendingUploads(vvk::CommandBuffer& cmd);
+    bool beginPendingUploads();
+    bool hasPendingUploadChunk() const;
+    bool recordPendingUploadChunk(vvk::CommandBuffer& cmd, VkDeviceSize max_bytes);
+    void finishPendingUploads();
+    void completePendingUploads();
+    void cancelPendingUploads();
 
     // No-op for now; reserved as the hook downstream wires to clearLastRenderGraph.
     void onRenderGraphCleared();

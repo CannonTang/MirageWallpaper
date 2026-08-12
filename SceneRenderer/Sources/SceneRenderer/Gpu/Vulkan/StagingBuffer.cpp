@@ -25,6 +25,54 @@ StagingBuffer::~StagingBuffer() {}
 
 namespace
 {
+std::vector<StagingBuffer::DirtyRange>
+MergeRanges(std::span<const StagingBuffer::DirtyRange> ranges) {
+    std::vector<StagingBuffer::DirtyRange> sorted(ranges.begin(), ranges.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+        return a.offset < b.offset;
+    });
+    std::vector<StagingBuffer::DirtyRange> merged;
+    merged.reserve(sorted.size());
+    for (const auto& r : sorted) {
+        if (r.size == 0) continue;
+        if (merged.empty()) {
+            merged.push_back(r);
+            continue;
+        }
+        auto& last     = merged.back();
+        auto  last_end = last.offset + last.size;
+        if (r.offset <= last_end) {
+            auto end = std::max(last_end, r.offset + r.size);
+            last.size = end - last.offset;
+        } else {
+            merged.push_back(r);
+        }
+    }
+    return merged;
+}
+
+std::vector<StagingBuffer::DirtyRange>
+IntersectRanges(std::span<const StagingBuffer::DirtyRange> dirty,
+                std::span<const StagingBuffer::DirtyRange> live) {
+    auto merged_dirty = MergeRanges(dirty);
+    auto merged_live  = MergeRanges(live);
+    std::vector<StagingBuffer::DirtyRange> result;
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < merged_dirty.size() && j < merged_live.size()) {
+        const auto dirty_end = merged_dirty[i].offset + merged_dirty[i].size;
+        const auto live_end  = merged_live[j].offset + merged_live[j].size;
+        const auto begin     = std::max(merged_dirty[i].offset, merged_live[j].offset);
+        const auto end       = std::min(dirty_end, live_end);
+        if (begin < end) result.push_back({ .offset = begin, .size = end - begin });
+        if (dirty_end < live_end)
+            ++i;
+        else
+            ++j;
+    }
+    return result;
+}
+
 std::optional<VmaBufferParameters> CreateGpuBuffer(VmaAllocator allocator, VkBufferUsageFlags usage,
                                                    std::size_t size) {
     do {
@@ -113,6 +161,7 @@ StagingBuffer::VirtualBlock* StagingBuffer::newVirtualBlock(VkDeviceSize nsize) 
     return &block;
 }
 bool StagingBuffer::increaseBuf(VkDeviceSize nsize) {
+    if (m_upload_active) return false;
     if (m_stage_raw == nullptr) {
         VVK_CHECK_BOOL_RE(mapStageBuf());
     }
@@ -165,10 +214,13 @@ void StagingBuffer::destroy() {
     m_stage_buf = {};
     m_gpu_buf   = {};
     m_dirty_ranges.clear();
+    m_live_ranges.clear();
+    cancelUpload();
 }
 
 bool StagingBuffer::allocateSubRef(VkDeviceSize size, StagingBufferRef& ref,
                                    VkDeviceSize alignment) {
+    if (m_upload_active) return false;
     VmaVirtualAllocationCreateInfo allocCreateInfo = {};
     allocCreateInfo.size                           = size;
     allocCreateInfo.alignment                      = alignment;
@@ -189,6 +241,7 @@ bool StagingBuffer::allocateSubRef(VkDeviceSize size, StagingBufferRef& ref,
             if (auto res = vmaVirtualAllocate(block.handle, &allocCreateInfo, &allocation, &offset);
                 res == VK_SUCCESS) {
                 setRef(ref, block);
+                m_live_ranges.push_back({ .offset = ref.offset, .size = ref.size });
                 return true;
             }
         }
@@ -213,10 +266,12 @@ bool StagingBuffer::allocateSubRef(VkDeviceSize size, StagingBufferRef& ref,
     }
     VVK_CHECK_BOOL_RE(vmaVirtualAllocate(block.handle, &allocCreateInfo, &allocation, &offset));
     setRef(ref, block);
+    m_live_ranges.push_back({ .offset = ref.offset, .size = ref.size });
     return true;
 }
 void StagingBuffer::unallocateSubRef(const StagingBufferRef& ref) {
     CHECK_REF(ref, ;);
+    if (m_upload_active) return;
     if (ref.m_virtual_index < m_virtual_blocks.size()) {
         auto& block = m_virtual_blocks[ref.m_virtual_index];
         vmaVirtualFree(block.handle, ref.m_allocation);
@@ -225,6 +280,10 @@ void StagingBuffer::unallocateSubRef(const StagingBufferRef& ref) {
             block.handle  = VK_NULL_HANDLE;
             block.enabled = false;
         }
+        auto live = std::find_if(m_live_ranges.begin(), m_live_ranges.end(), [&ref](const auto& r) {
+            return r.offset == ref.offset && r.size == ref.size;
+        });
+        if (live != m_live_ranges.end()) m_live_ranges.erase(live);
     } else {
         rstd_error("unallocate stagingbuffer failed: wrong index {}", ref.m_virtual_index);
     }
@@ -235,6 +294,7 @@ VkResult StagingBuffer::mapStageBuf() { return m_stage_buf.handle.MapMemory(&m_s
 bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> data,
                                size_t offset) {
     CHECK_REF(ref, return false);
+    if (m_upload_active) return false;
 
     if (m_stage_raw == nullptr && (mapStageBuf() != VK_SUCCESS || m_stage_raw == nullptr))
         return false;
@@ -254,6 +314,7 @@ bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> d
 
 bool StagingBuffer::fillBuf(const StagingBufferRef& ref, size_t offset, size_t size, uint8_t c) {
     CHECK_REF(ref, return false);
+    if (m_upload_active) return false;
 
     if (m_stage_raw == nullptr && (mapStageBuf() != VK_SUCCESS || m_stage_raw == nullptr))
         return false;
@@ -270,6 +331,20 @@ bool StagingBuffer::fillBuf(const StagingBufferRef& ref, size_t offset, size_t s
 }
 
 bool StagingBuffer::recordUpload(vvk::CommandBuffer& cmd) {
+    if (! beginUpload()) return false;
+    while (hasUploadChunk()) {
+        if (! recordUploadChunk(cmd, std::numeric_limits<VkDeviceSize>::max())) {
+            cancelUpload();
+            return false;
+        }
+    }
+    finishUpload();
+    completeUpload();
+    return true;
+}
+
+bool StagingBuffer::beginUpload() {
+    if (m_upload_active) return false;
     bool gpu_created = false;
     if (! m_gpu_buf.handle) {
         if (auto opt = CreateGpuBuffer(m_device.vma_allocator(), m_usage, m_stage_buf.req_size);
@@ -279,41 +354,65 @@ bool StagingBuffer::recordUpload(vvk::CommandBuffer& cmd) {
         } else
             return false;
     }
-    if (gpu_created) markDirty(0, m_stage_buf.req_size);
-    if (m_dirty_ranges.empty()) return true;
+    m_upload_ranges = gpu_created ? MergeRanges(m_live_ranges)
+                                  : IntersectRanges(m_dirty_ranges, m_live_ranges);
+    for (const auto& range : m_upload_ranges) {
+        VVK_CHECK_ACT(
+            {
+                m_upload_ranges.clear();
+                return false;
+            },
+            vmaFlushAllocation(m_device.vma_allocator(),
+                               m_stage_buf.handle.Allocation(),
+                               range.offset,
+                               range.size));
+    }
+    m_upload_range_index  = 0;
+    m_upload_range_offset = 0;
+    m_upload_active       = true;
+    return true;
+}
 
-    std::sort(m_dirty_ranges.begin(), m_dirty_ranges.end(), [](const auto& a, const auto& b) {
-        return a.offset < b.offset;
-    });
-    std::vector<DirtyRange> merged;
-    merged.reserve(m_dirty_ranges.size());
-    for (const auto& r : m_dirty_ranges) {
-        if (r.size == 0) continue;
-        if (merged.empty()) {
-            merged.push_back(r);
-            continue;
-        }
-        auto& last     = merged.back();
-        auto  last_end = last.offset + last.size;
-        if (r.offset <= last_end) {
-            auto end = std::max(last_end, r.offset + r.size);
-            last.size = end - last.offset;
-        } else {
-            merged.push_back(r);
+bool StagingBuffer::hasUploadChunk() const {
+    return m_upload_active && m_upload_range_index < m_upload_ranges.size();
+}
+
+bool StagingBuffer::recordUploadChunk(vvk::CommandBuffer& cmd, VkDeviceSize max_bytes) {
+    if (! m_upload_active || max_bytes == 0) return false;
+    std::vector<DirtyRange> chunk;
+    VkDeviceSize remaining = max_bytes;
+    while (remaining > 0 && m_upload_range_index < m_upload_ranges.size()) {
+        const auto& range     = m_upload_ranges[m_upload_range_index];
+        const auto  available = range.size - m_upload_range_offset;
+        const auto  size      = std::min(available, remaining);
+        chunk.push_back({ .offset = range.offset + m_upload_range_offset, .size = size });
+        remaining -= size;
+        m_upload_range_offset += size;
+        if (m_upload_range_offset == range.size) {
+            ++m_upload_range_index;
+            m_upload_range_offset = 0;
         }
     }
-
-    // Keep the staging allocation persistently mapped: it is HOST_VISIBLE
-    // (VMA CPU_ONLY) so the pointer stays valid for the buffer's lifetime, and
-    // vmaFlushAllocation makes writes visible to the GPU regardless of map
-    // state. Previously this unmapped every frame and writeToBuf/fillBuf
-    // remapped on the next frame — pure per-frame overhead. The map obtained in
-    // allocate()/increaseBuf() is now released once, in destroy().
-    VVK_CHECK_BOOL_RE(vmaFlushAllocation(
-        m_device.vma_allocator(), m_stage_buf.handle.Allocation(), 0, VK_WHOLE_SIZE));
-    RecordCopyBuffer(m_gpu_buf, m_stage_buf, merged, cmd);
-    m_dirty_ranges.clear();
+    if (chunk.empty()) return false;
+    RecordCopyBuffer(m_gpu_buf, m_stage_buf, chunk, cmd);
     return true;
+}
+
+void StagingBuffer::finishUpload() {
+    if (! m_upload_active || hasUploadChunk()) return;
+    m_dirty_ranges.clear();
+}
+
+void StagingBuffer::completeUpload() {
+    if (! m_upload_active || hasUploadChunk()) return;
+    cancelUpload();
+}
+
+void StagingBuffer::cancelUpload() {
+    m_upload_ranges.clear();
+    m_upload_range_index  = 0;
+    m_upload_range_offset = 0;
+    m_upload_active       = false;
 }
 
 VkBuffer StagingBuffer::gpuBuf() const { return *m_gpu_buf.handle; }

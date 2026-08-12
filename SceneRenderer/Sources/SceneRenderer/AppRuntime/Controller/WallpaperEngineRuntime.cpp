@@ -1227,13 +1227,18 @@ void SceneRenderController::on(RenderDraw&&) {
          * drawFrame so newly-rasterised glyphs are visible the same frame. */
         m_render->pumpFontAtlases(*m_scene);
 
-        m_render->drawFrame(*m_scene);
+        const bool rendered = m_render->drawFrame(*m_scene);
+        if (m_render->failed()) {
+            frame_timer.Stop();
+            frame_timer.FrameEnd();
+            return;
+        }
 
         m_scene->PassFrameTime(frame_timer.IdeaTime() * m_speed);
 
         m_scene->shaderValueUpdater->FrameEnd();
 
-        if (! m_scene->first_frame_ok) {
+        if (rendered && ! m_scene->first_frame_ok) {
             m_scene->first_frame_ok = true;
             if (m_main_tx) (void)m_main_tx->send(MainMsg { MainFirstFrame {} });
         }

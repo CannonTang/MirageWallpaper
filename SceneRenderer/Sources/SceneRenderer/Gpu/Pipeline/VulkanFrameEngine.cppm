@@ -25,6 +25,7 @@ using ReDrawCB = std::function<void()>;
 using MetalFrameCB =
     std::function<void(void* mtl_texture, void* mtl_command_queue, uint32_t width,
                        uint32_t height)>;
+using RenderFailureCB = std::function<void(VkResult)>;
 
 struct VulkanSurfaceInfo {
     std::function<VkResult(VkInstance, VkSurfaceKHR*)> createSurfaceOp;
@@ -47,6 +48,7 @@ struct RenderInitInfo {
     uint32_t msaa_samples { 1 };
     ReDrawCB redraw_callback;
     MetalFrameCB metal_frame_callback;
+    RenderFailureCB failure_callback;
 };
 
 std::unique_ptr<rg::RenderGraph> sceneToRenderGraph(Scene&);
@@ -95,7 +97,7 @@ public:
 
     void destroy();
 
-    void drawFrame(Scene&);
+    bool drawFrame(Scene&);
     void flushPendingFrame();
 
     void clearLastRenderGraph(
@@ -125,6 +127,7 @@ public:
 
     ExSwapchain* exSwapchain() const;
     bool         inited() const;
+    bool         failed() const;
     // Called on the render thread after compileRenderGraph; unlike inited(),
     // this includes successful render-program preparation.
     bool         readyToDraw() const;
