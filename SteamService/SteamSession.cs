@@ -5,6 +5,8 @@
 //
 
 using System.Collections.Concurrent;
+using System.Net;
+using System.Security.Cryptography;
 using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
@@ -29,6 +31,7 @@ internal sealed class SteamSession : IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim authGate = new(1, 1);
     private readonly SemaphoreSlim appInfoGate = new(1, 1);
+    private readonly SemaphoreSlim favoriteGate = new(1, 1);
     private readonly ConcurrentDictionary<(uint DepotId, string Host), SteamContent.CDNAuthToken> cdnTokens = new();
     private readonly Task callbackLoop;
     private TaskCompletionSource<bool>? connectedSource;
@@ -37,6 +40,8 @@ internal sealed class SteamSession : IAsyncDisposable
     private InteractiveAuthenticator? authenticator;
     private CancellationTokenSource? authCancellation;
     private SteamApps.PICSProductInfoCallback.PICSProductInfo? appInfo;
+    private string refreshToken = "";
+    private string accessToken = "";
     private bool shuttingDown;
 
     public bool IsLoggedIn { get; private set; }
@@ -88,6 +93,8 @@ internal sealed class SteamSession : IAsyncDisposable
             writer.AuthState("connecting", username);
             await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
             await LogOnAsync(username, refreshToken, cancellationToken).ConfigureAwait(false);
+            this.refreshToken = refreshToken;
+            accessToken = "";
             AccountName = username;
             writer.AuthState("loggedIn", username, steamId: SteamId);
         }
@@ -122,6 +129,8 @@ internal sealed class SteamSession : IAsyncDisposable
                 .ConfigureAwait(false);
             var result = await PollCredentialsResultAsync(session, loginAuthenticator, authCancellation.Token).ConfigureAwait(false);
             await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
+            refreshToken = result.RefreshToken;
+            accessToken = result.AccessToken;
             AccountName = result.AccountName;
             writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData ?? guardData, steamId: SteamId);
         }
@@ -155,6 +164,8 @@ internal sealed class SteamSession : IAsyncDisposable
             var result = await session.PollingWaitForResultAsync(authCancellation.Token).ConfigureAwait(false);
             writer.AuthState("authenticating", result.AccountName);
             await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
+            refreshToken = result.RefreshToken;
+            accessToken = result.AccessToken;
             AccountName = result.AccountName;
             writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData, steamId: SteamId);
         }
@@ -313,6 +324,133 @@ internal sealed class SteamSession : IAsyncDisposable
             files);
     }
 
+    public async Task<FavoritePage> GetFavoritesAsync(int startIndex, CancellationToken cancellationToken)
+    {
+        const int pageSize = 50;
+        if (!ulong.TryParse(SteamId, out var steamId))
+        {
+            throw new ServiceException("NOT_AUTHENTICATED", "The Steam session has no valid Steam ID.");
+        }
+        var normalizedStart = Math.Max(0, startIndex);
+        var request = new CPublishedFile_GetUserFiles_Request
+        {
+            steamid = steamId,
+            appid = AppId,
+            page = checked((uint)(normalizedStart / pageSize + 1)),
+            numperpage = pageSize,
+            type = "myfavorites",
+            ids_only = true
+        };
+        var response = await publishedFiles.GetUserFiles(request)
+            .ToTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccess(response.Result, "FAVORITES_UNAVAILABLE");
+        var ids = response.Body.publishedfiledetails
+            .Where(file => file.consumer_appid == 0 || file.consumer_appid == AppId)
+            .Select(file => file.publishedfileid)
+            .Where(id => id != 0)
+            .ToArray();
+        return new FavoritePage(
+            checked((int)response.Body.total),
+            normalizedStart,
+            normalizedStart + pageSize,
+            ids);
+    }
+
+    public async Task SetFavoriteAsync(ulong workshopId, bool favorite, CancellationToken cancellationToken)
+    {
+        await favoriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var token = await GetCommunityAccessTokenAsync(attempt > 0, cancellationToken).ConfigureAwait(false);
+                var sessionId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(12));
+                var cookies = new CookieContainer();
+                cookies.Add(new Cookie("sessionid", sessionId, "/", ".steamcommunity.com"));
+                cookies.Add(new Cookie("steamLoginSecure", $"{SteamId}||{token}", "/", ".steamcommunity.com"));
+                using var handler = new HttpClientHandler
+                {
+                    CookieContainer = cookies,
+                    AllowAutoRedirect = true
+                };
+                using var http = new HttpClient(handler)
+                {
+                    Timeout = TimeSpan.FromSeconds(30)
+                };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("Mirage Wallpaper/1.0");
+                var endpoint = favorite ? "favorite" : "unfavorite";
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"https://steamcommunity.com/sharedfiles/{endpoint}");
+                request.Headers.Referrer = new Uri(
+                    $"https://steamcommunity.com/sharedfiles/filedetails/?id={workshopId}");
+                request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["id"] = workshopId.ToString(),
+                    ["appid"] = AppId.ToString(),
+                    ["sessionid"] = sessionId
+                });
+                using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode &&
+                    await WaitForFavoriteStateAsync(workshopId, favorite, cancellationToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+                accessToken = "";
+            }
+            throw new ServiceException(
+                favorite ? "FAVORITE_ADD_FAILED" : "FAVORITE_REMOVE_FAILED",
+                "Steam did not confirm the requested favorite state.");
+        }
+        finally
+        {
+            favoriteGate.Release();
+        }
+    }
+
+    private async Task<string> GetCommunityAccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
+    {
+        if (!forceRefresh && !string.IsNullOrWhiteSpace(accessToken)) return accessToken;
+        if (!ulong.TryParse(SteamId, out var steamId) || string.IsNullOrWhiteSpace(refreshToken))
+        {
+            throw new ServiceException("NOT_AUTHENTICATED", "The Steam session has no reusable authentication token.");
+        }
+        var result = await client.Authentication
+            .GenerateAccessTokenForAppAsync(new SteamID(steamId), refreshToken)
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(result.AccessToken))
+        {
+            throw new ServiceException("FAVORITE_SESSION_FAILED", "Steam did not issue a community access token.");
+        }
+        accessToken = result.AccessToken;
+        return accessToken;
+    }
+
+    private async Task<bool> WaitForFavoriteStateAsync(ulong workshopId, bool favorite, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (await IsFavoriteAsync(workshopId, cancellationToken).ConfigureAwait(false) == favorite) return true;
+            await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+        }
+        return await IsFavoriteAsync(workshopId, cancellationToken).ConfigureAwait(false) == favorite;
+    }
+
+    private async Task<bool> IsFavoriteAsync(ulong workshopId, CancellationToken cancellationToken)
+    {
+        var startIndex = 0;
+        while (true)
+        {
+            var page = await GetFavoritesAsync(startIndex, cancellationToken).ConfigureAwait(false);
+            if (page.PublishedFileIds.Contains(workshopId)) return true;
+            if (page.NextStartIndex >= page.TotalResults) return false;
+            startIndex = page.NextStartIndex;
+        }
+    }
+
     public async Task<IReadOnlyDictionary<ulong, bool>> GetSubscriptionStatesAsync(IEnumerable<ulong> workshopIds, CancellationToken cancellationToken)
     {
         var states = new Dictionary<ulong, bool>();
@@ -425,6 +563,8 @@ internal sealed class SteamSession : IAsyncDisposable
         IsLoggedIn = false;
         AccountName = "";
         SteamId = "";
+        refreshToken = "";
+        accessToken = "";
         appInfo = null;
         cdnTokens.Clear();
         if (client.IsConnected) user.LogOff();
@@ -519,6 +659,8 @@ internal sealed class SteamSession : IAsyncDisposable
             IsLoggedIn = false;
             AccountName = "";
             SteamId = "";
+            refreshToken = "";
+            accessToken = "";
             writer.AuthState("loggedOut", message: "Steam connection closed.", errorCode: "CONNECTION_LOST");
         }
     }
@@ -534,6 +676,8 @@ internal sealed class SteamSession : IAsyncDisposable
         IsLoggedIn = false;
         AccountName = "";
         SteamId = "";
+        refreshToken = "";
+        accessToken = "";
         writer.AuthState("loggedOut", message: callback.Result.ToString());
     }
 
@@ -551,6 +695,7 @@ internal sealed class SteamSession : IAsyncDisposable
         lifetime.Dispose();
         authGate.Dispose();
         appInfoGate.Dispose();
+        favoriteGate.Dispose();
     }
 }
 
@@ -558,6 +703,12 @@ internal sealed record SubscriptionPage(
     int TotalResults,
     int StartIndex,
     IReadOnlyList<SubscribedFile> Files);
+
+internal sealed record FavoritePage(
+    int TotalResults,
+    int StartIndex,
+    int NextStartIndex,
+    IReadOnlyList<ulong> PublishedFileIds);
 
 internal sealed record SubscribedFile(
     ulong PublishedFileId,

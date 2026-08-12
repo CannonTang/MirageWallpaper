@@ -124,6 +124,48 @@ while (running)
                 });
             }).ConfigureAwait(false);
             break;
+        case "listFavorites":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            var favoritesStart = Math.Max(0, command.StartIndex ?? 0);
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                var page = await session.GetFavoritesAsync(favoritesStart, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new
+                {
+                    total = page.TotalResults,
+                    startIndex = page.StartIndex,
+                    nextStartIndex = page.NextStartIndex,
+                    workshopIds = page.PublishedFileIds.Select(id => id.ToString())
+                });
+            }).ConfigureAwait(false);
+            break;
+        case "favorite":
+        case "unfavorite":
+            if (!session.IsLoggedIn)
+            {
+                writer.Response(command.RequestId, false, "The Steam session is not authenticated.", "NOT_AUTHENTICATED");
+                break;
+            }
+            if (!TryWorkshopId(command.WorkshopId, out var favoriteId))
+            {
+                writer.Response(command.RequestId, false, "The workshop identifier is invalid.", "INVALID_WORKSHOP_ID");
+                break;
+            }
+            var favorite = command.Command == "favorite";
+            await RunRequestAsync(command.RequestId, writer, async () =>
+            {
+                await session.SetFavoriteAsync(favoriteId, favorite, CancellationToken.None).ConfigureAwait(false);
+                writer.Response(command.RequestId, true, data: new
+                {
+                    workshopId = favoriteId.ToString(),
+                    favorited = favorite
+                });
+            }).ConfigureAwait(false);
+            break;
         case "checkSubscriptionStates":
             if (!session.IsLoggedIn)
             {
