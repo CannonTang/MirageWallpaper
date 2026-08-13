@@ -161,6 +161,7 @@ struct ContentView: View {
                                 .sectionVisibility(navigationModel.selection == .subscriptions)
                             }
                         }
+                        .isolatedFromParentLayout()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .padding()
@@ -323,6 +324,12 @@ struct ContentView: View {
 }
 
 private extension View {
+    func isolatedFromParentLayout() -> some View {
+        Color.clear
+            .overlay { self }
+            .clipped()
+    }
+
     func sectionVisibility(_ visible: Bool) -> some View {
         opacity(visible ? 1 : 0)
             .allowsHitTesting(visible)
