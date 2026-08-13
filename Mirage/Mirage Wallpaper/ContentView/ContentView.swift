@@ -119,17 +119,13 @@ struct ContentView: View {
                             }
 
                             if loadedSections.contains(.discover) {
-                                FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
-                                    DiscoverFilterSidebar(workshopViewModel: workshopViewModel)
-                                }, content: {
-                                    DiscoverView(
-                                        workshopViewModel: workshopViewModel,
-                                        viewModel: viewModel,
-                                        wallpaperViewModel: wallpaperViewModel,
-                                        navigationModel: navigationModel,
-                                        isActive: navigationModel.selection == .discover
-                                    )
-                                })
+                                DiscoverView(
+                                    workshopViewModel: workshopViewModel,
+                                    viewModel: viewModel,
+                                    wallpaperViewModel: wallpaperViewModel,
+                                    navigationModel: navigationModel,
+                                    isActive: navigationModel.selection == .discover
+                                )
                                 .sectionVisibility(navigationModel.selection == .discover)
                             }
 
