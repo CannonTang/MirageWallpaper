@@ -21,46 +21,66 @@ struct TopTabBar: View {
     }
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            bar(compact: false)
+            bar(compact: true)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func bar(compact: Bool) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: 4) {
-                tab(section: .installed, title: "已安装", systemImage: "square.and.arrow.down.fill")
-                tab(section: .discover, title: "发现", systemImage: "sparkle.magnifyingglass")
-                tab(section: .workshop, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
-                tab(section: .subscriptions, title: "已订阅", systemImage: "checkmark.circle.fill")
+                tab(section: .installed, title: "已安装", systemImage: "square.and.arrow.down.fill", compact: compact)
+                tab(section: .discover, title: "发现", systemImage: "sparkle.magnifyingglass", compact: compact)
+                tab(section: .workshop, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount, compact: compact)
+                tab(section: .subscriptions, title: "已订阅", systemImage: "checkmark.circle.fill", compact: compact)
             }
             .padding(4)
             .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)), interactive: false)
-            .fixedSize()
+            .fixedSize(horizontal: true, vertical: false)
 
-            Spacer(minLength: 10)
+            Spacer(minLength: compact ? 6 : 10)
 
             HStack(spacing: 2) {
-                chromeButton(title: "移动端", systemImage: "platter.filled.bottom.iphone") { }
-                DisplayPicker(wallpaperViewModel: wallpaperViewModel)
-                chromeButton(title: "设置", systemImage: "gearshape.fill") {
+                chromeButton(title: "移动端", systemImage: "platter.filled.bottom.iphone", compact: compact) { }
+                DisplayPicker(wallpaperViewModel: wallpaperViewModel, compact: compact)
+                chromeButton(title: "设置", systemImage: "gearshape.fill", compact: compact) {
                     AppDelegate.shared.openSettingsWindow()
                 }
             }
             .padding(3)
             .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.32)), interactive: false)
-            .fixedSize()
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.vertical, 2)
     }
 
     // A single segmented pill. The selected segment gets an accent-filled
     // capsule; hover gets a soft translucent capsule. No hard rectangles.
     @ViewBuilder
-    private func tab(section: MainSection, title: LocalizedStringKey, systemImage: String, badge: Int = 0) -> some View {
+    private func tab(
+        section: MainSection,
+        title: LocalizedStringKey,
+        systemImage: String,
+        badge: Int = 0,
+        compact: Bool
+    ) -> some View {
         let isSelected = navigationModel.selection == section
         let isHovering = hoverSelection == section
 
         Button {
             navigationModel.selection = section
         } label: {
-            Label(title, systemImage: systemImage)
+            Group {
+                if compact {
+                    Image(systemName: systemImage)
+                        .frame(width: 20, height: 20)
+                } else {
+                    Label(title, systemImage: systemImage)
+                }
+            }
                 .font(.headline)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, compact ? 10 : 14)
                 .padding(.vertical, 7)
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .background {
@@ -85,11 +105,17 @@ struct TopTabBar: View {
         }
         .buttonStyle(.plain)
         .onHover { hoverSelection = $0 ? section : nil }
+        .help(Text(title))
     }
 
     @ViewBuilder
-    private func chromeButton(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
-        ChromeButton(title: title, systemImage: systemImage, action: action)
+    private func chromeButton(
+        title: LocalizedStringKey,
+        systemImage: String,
+        compact: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        ChromeButton(title: title, systemImage: systemImage, compact: compact, action: action)
     }
 }
 
@@ -98,13 +124,21 @@ struct TopTabBar: View {
 private struct ChromeButton: View {
     let title: LocalizedStringKey
     let systemImage: String
+    let compact: Bool
     let action: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Group {
+                if compact {
+                    Image(systemName: systemImage)
+                        .frame(width: 18, height: 18)
+                } else {
+                    Label(title, systemImage: systemImage)
+                }
+            }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
@@ -115,5 +149,6 @@ private struct ChromeButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help(Text(title))
     }
 }

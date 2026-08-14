@@ -10,9 +10,9 @@ struct SubscribedWorkshopFilterSidebar: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
 
     var body: some View {
-        VStack {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
-                VStack(spacing: 30) {
+                VStack(alignment: .leading, spacing: 30) {
                     Button {
                         workshopViewModel.clearSubscriptionFilters()
                     } label: {
@@ -174,9 +174,11 @@ struct SubscribedWorkshopFilterSidebar: View {
                     }
                 }
                 .padding(.trailing)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

@@ -67,6 +67,29 @@ struct ExplorerBottomBar: View {
     }
 
     private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            fullHeader
+            compactHeader
+        }
+    }
+
+    private var fullHeader: some View {
+        HStack(spacing: 8) {
+            headerLeading(displayPickerWidth: 190)
+            Spacer()
+            headerActions(compact: false)
+        }
+    }
+
+    private var compactHeader: some View {
+        HStack(spacing: 6) {
+            headerLeading(displayPickerWidth: 120)
+            Spacer(minLength: 4)
+            headerActions(compact: true)
+        }
+    }
+
+    private func headerLeading(displayPickerWidth: CGFloat) -> some View {
         HStack(spacing: 8) {
             Button {
                 isCollapsed.toggle()
@@ -78,11 +101,9 @@ struct ExplorerBottomBar: View {
             }
             .buttonStyle(.plain)
             .help(isCollapsed ? L("展开播放列表") : L("收起播放列表"))
-
             Text(itemCount > 0 ? L("播放列表 (%d)", itemCount) : L("播放列表"))
                 .font(.title2.bold())
                 .lineLimit(1)
-
             if displays.count > 1 {
                 Picker("", selection: $targetScreen) {
                     ForEach(displays) { info in
@@ -90,37 +111,50 @@ struct ExplorerBottomBar: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 190)
+                .frame(width: displayPickerWidth)
             }
+        }
+    }
 
-            Spacer()
-
+    private func headerActions(compact: Bool) -> some View {
+        HStack(spacing: 8) {
             Button {
                 isOpenPresented = true
             } label: {
-                Label(L("载入"), systemImage: "folder.fill")
+                actionLabel("载入", systemImage: "folder.fill", compact: compact)
             }
             .disabled(manager.saved.isEmpty)
-
+            .help(L("载入"))
             Button {
                 isSavePresented = true
             } label: {
-                Label(L("保存"), systemImage: "square.and.arrow.down.fill")
+                actionLabel("保存", systemImage: "square.and.arrow.down.fill", compact: compact)
             }
             .disabled(itemCount == 0)
-
+            .help(L("保存"))
             Button {
                 isSettingsPresented = true
             } label: {
-                Label(L("配置"), systemImage: "gearshape.2.fill")
+                actionLabel("配置", systemImage: "gearshape.2.fill", compact: compact)
             }
-
+            .help(L("配置"))
             Button {
                 addCurrentSelection()
             } label: {
-                Label(L("添加壁纸"), systemImage: "plus")
+                actionLabel("添加壁纸", systemImage: "plus", compact: compact)
             }
             .buttonStyle(.borderedProminent)
+            .help(L("添加壁纸"))
+        }
+    }
+
+    @ViewBuilder
+    private func actionLabel(_ title: LocalizedStringKey, systemImage: String, compact: Bool) -> some View {
+        if compact {
+            Image(systemName: systemImage)
+                .frame(width: 16, height: 16)
+        } else {
+            Label(title, systemImage: systemImage)
         }
     }
 

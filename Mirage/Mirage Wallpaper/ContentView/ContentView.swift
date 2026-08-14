@@ -44,9 +44,11 @@ private struct FilterSidebarLayout<Sidebar: View, Content: View>: View {
         ZStack(alignment: .leading) {
             content
                 .padding(.leading, isPresented ? 235 : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(nil, value: isPresented)
             sidebar
-                .frame(width: 225)
+                .frame(width: 225, alignment: .leading)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
                 .offset(x: isPresented ? 0 : -225)
                 .opacity(isPresented ? 1 : 0)
                 .allowsHitTesting(isPresented)
@@ -162,6 +164,7 @@ struct ContentView: View {
                     }
                     .padding()
                     .frame(minWidth: 640)
+                    .layoutPriority(1)
 
                     ZStack {
                         WallpaperPreview(contentViewModel: viewModel,
@@ -201,7 +204,6 @@ struct ContentView: View {
                         idealWidth: workshopViewModel.showCreatorProfile ? 420 : 320,
                         maxWidth: workshopViewModel.showCreatorProfile ? 420 : 360
                     )
-                    .layoutPriority(1)
                 }
             }
             .opacity(viewModel.isStaging ? 1 : 0)

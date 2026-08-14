@@ -84,9 +84,9 @@ struct FilterResults: View {
     @ObservedObject var viewModel: FilterResultsViewModel
     
     var body: some View {
-        VStack {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
-                VStack(spacing: 30) {
+                VStack(alignment: .leading, spacing: 30) {
                     Button {
                         viewModel.reset()
                     } label: {
@@ -203,9 +203,10 @@ struct FilterResults: View {
                     }
                 }
                 .padding(.trailing)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
