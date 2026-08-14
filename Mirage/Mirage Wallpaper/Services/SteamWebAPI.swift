@@ -72,7 +72,7 @@ final class SteamWebAPI {
         searchText: String = "",
         tags: [String] = [],
         sortOrder: WorkshopSortOrder = .trending,
-        typeFilter: WorkshopTypeFilter = .all,
+        typeFilters: Set<WorkshopTypeFilter> = [.all],
         ageRating: WorkshopAgeRatingFilter = .all,
         widescreenResolution: FRWidescreenResolution = .all,
         ultraWidescreenResolution: FRUltraWidescreenResolution = .all,
@@ -114,8 +114,11 @@ final class SteamWebAPI {
         var allTags = selectableTags.isSubset(of: requestedTags)
             ? tags.filter { !selectableTags.contains($0) }
             : tags
-        if typeFilter != .all {
-            allTags.append(typeFilter == .preset ? "Preset" : typeFilter.rawValue.capitalized)
+        let requestedTypes = typeFilters.normalizedWorkshopTypes
+        let filterTypesLocally = !requestedTypes.hasNoWorkshopTypeConstraint &&
+            requestedTypes.singleWorkshopType == nil
+        if let typeTag = requestedTypes.singleWorkshopType?.steamTag {
+            allTags.append(typeTag)
         }
         let selectedRatings = ageRating.selectedRatings
         let hasEveryone = selectedRatings.contains(WorkshopAgeRating.everyone)
@@ -168,7 +171,7 @@ final class SteamWebAPI {
         let requestedPageSize = max(1, perPage)
         let resultItems: [WorkshopItem]
         let resultTotal: Int
-        if filterRatingsLocally || filterResolutionLocally || filterFavoritesLocally {
+        if filterTypesLocally || filterRatingsLocally || filterResolutionLocally || filterFavoritesLocally {
             var cursor = "*"
             var seenCursors = Set<String>()
             var matchingItems: [WorkshopItem] = []
@@ -185,7 +188,8 @@ final class SteamWebAPI {
                 cursorParams["cursor"] = cursor
                 let batch = try await fetchQueryBatch(params: cursorParams)
                 matchingItems.append(contentsOf: batch.items.filter { item in
-                    (!filterRatingsLocally || item.ageRating.map(selectedRatings.contains) == true) &&
+                    (!filterTypesLocally || requestedTypes.matches(item)) &&
+                        (!filterRatingsLocally || item.ageRating.map(selectedRatings.contains) == true) &&
                         (!filterResolutionLocally || FRResolutionFilter.matches(
                             tags: item.tags,
                             widescreen: widescreenResolution,

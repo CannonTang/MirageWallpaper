@@ -24,7 +24,7 @@ class WorkshopViewModel: ObservableObject {
     @Published var selectedTags: Set<String> = []
     @Published var sortOrder: WorkshopSortOrder = .trending
     @Published var trendPeriod: WorkshopTrendPeriod = .week
-    @Published var typeFilter: WorkshopTypeFilter = .all
+    @Published var selectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
     @Published var workshopShowOnly: FRShowOnly = .none {
         didSet {
             guard workshopShowOnly != oldValue else { return }
@@ -113,7 +113,7 @@ class WorkshopViewModel: ObservableObject {
     @Published private(set) var subscriptionsError: String?
     @Published var subscriptionSearchText = ""
     @Published var subscriptionSelectedTags: Set<String> = []
-    @Published var subscriptionTypeFilter: WorkshopTypeFilter = .all
+    @Published var subscriptionSelectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
     @Published var subscriptionShowOnly: FRShowOnly = .none {
         didSet {
             guard subscriptionShowOnly != oldValue else { return }
@@ -220,7 +220,7 @@ class WorkshopViewModel: ObservableObject {
         !subscriptionShowOnly.isEmpty ||
             !subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             (!subscriptionSelectedTags.isEmpty && !allSubscriptionTagsSelected) ||
-            subscriptionTypeFilter != .all ||
+            subscriptionSelectedTypeFilters.normalizedWorkshopTypes != [.all] ||
             (!subscriptionAgeRatingFilter.isEmpty && subscriptionAgeRatingFilter != .all) ||
             !allSubscriptionResolutionsSelected
     }
@@ -568,7 +568,7 @@ class WorkshopViewModel: ObservableObject {
         let requestSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestTags = Array(selectedTags)
         let requestSortOrder = sortOrder
-        let requestTypeFilter = typeFilter
+        let requestTypeFilters = selectedTypeFilters.normalizedWorkshopTypes
         let requestShowOnly = workshopShowOnly
         let requestFavoriteIDs = SteamServiceManager.shared.workshopFavoriteIDs
         let requestAgeRating = ageRatingFilter
@@ -616,7 +616,7 @@ class WorkshopViewModel: ObservableObject {
                         searchText: requestSearchText,
                         tags: requestTags,
                         sortOrder: requestSortOrder,
-                        typeFilter: requestTypeFilter,
+                        typeFilters: requestTypeFilters,
                         ageRating: requestAgeRating,
                         widescreenResolution: requestWidescreenResolution,
                         ultraWidescreenResolution: requestUltraWidescreenResolution,
@@ -788,6 +788,35 @@ class WorkshopViewModel: ObservableObject {
         search()
     }
 
+    private static func updatedTypeSelection(
+        _ selection: Set<WorkshopTypeFilter>,
+        filter: WorkshopTypeFilter,
+        isOn: Bool
+    ) -> Set<WorkshopTypeFilter> {
+        var updated = selection.normalizedWorkshopTypes
+        if filter == .all {
+            return isOn ? [.all] : updated
+        }
+        if isOn {
+            updated.remove(.all)
+            updated.insert(filter)
+        } else {
+            updated.remove(filter)
+            if updated.isEmpty {
+                updated = [.all]
+            }
+        }
+        return updated
+    }
+
+    func setWorkshopTypeFilter(_ filter: WorkshopTypeFilter, isOn: Bool) {
+        let updated = Self.updatedTypeSelection(selectedTypeFilters, filter: filter, isOn: isOn)
+        guard updated != selectedTypeFilters else { return }
+        selectedTypeFilters = updated
+        currentPage = 1
+        search()
+    }
+
     func applyTagFilter(_ tag: String) {
         if selectedTags.contains(tag) {
             selectedTags.remove(tag)
@@ -865,7 +894,7 @@ class WorkshopViewModel: ObservableObject {
     func clearFilters() {
         selectedTags.removeAll()
         searchText = ""
-        typeFilter = .all
+        selectedTypeFilters = [.all]
         workshopShowOnly = .none
         sortOrder = .trending
         trendPeriod = .week
@@ -1276,8 +1305,14 @@ class WorkshopViewModel: ObservableObject {
         refreshSubscriptionFilters()
     }
 
-    func setSubscriptionTypeFilter(_ filter: WorkshopTypeFilter) {
-        subscriptionTypeFilter = filter
+    func setSubscriptionTypeFilter(_ filter: WorkshopTypeFilter, isOn: Bool) {
+        let updated = Self.updatedTypeSelection(
+            subscriptionSelectedTypeFilters,
+            filter: filter,
+            isOn: isOn
+        )
+        guard updated != subscriptionSelectedTypeFilters else { return }
+        subscriptionSelectedTypeFilters = updated
         refreshSubscriptionFilters()
     }
 
@@ -1351,7 +1386,7 @@ class WorkshopViewModel: ObservableObject {
     func clearSubscriptionFilters() {
         subscriptionSearchText = ""
         subscriptionSelectedTags.removeAll()
-        subscriptionTypeFilter = .all
+        subscriptionSelectedTypeFilters = [.all]
         subscriptionShowOnly = .none
         subscriptionAgeRatingFilter = .all
         subscriptionWidescreenResolution = .all
@@ -1768,18 +1803,7 @@ class WorkshopViewModel: ObservableObject {
             }
         }
 
-        switch subscriptionTypeFilter {
-        case .all:
-            break
-        case .scene:
-            guard item.kind == .scene else { return false }
-        case .web:
-            guard item.kind == .web else { return false }
-        case .video:
-            guard item.kind == .video else { return false }
-        case .preset:
-            guard item.isPreset else { return false }
-        }
+        guard subscriptionSelectedTypeFilters.matches(item) else { return false }
 
         if !subscriptionAgeRatingFilter.isEmpty,
            subscriptionAgeRatingFilter != .all,
@@ -1979,7 +2003,7 @@ class WorkshopViewModel: ObservableObject {
     ) {
         selectedTags = [tag]
         searchText = ""
-        typeFilter = .all
+        selectedTypeFilters = [.all]
         sortOrder = .trending
         self.trendPeriod = trendPeriod
         showCustomization = false
@@ -1993,7 +2017,7 @@ class WorkshopViewModel: ObservableObject {
     ) {
         selectedTags.removeAll()
         searchText = ""
-        typeFilter = .all
+        selectedTypeFilters = [.all]
         sortOrder = sort
         self.trendPeriod = trendPeriod
         showCustomization = false
@@ -2019,7 +2043,7 @@ class WorkshopViewModel: ObservableObject {
                 self.subscriptionStartIndex = 0
                 self.subscriptionSearchText = ""
                 self.subscriptionSelectedTags = []
-                self.subscriptionTypeFilter = .all
+                self.subscriptionSelectedTypeFilters = [.all]
                 self.subscriptionAgeRatingFilter = .all
                 self.subscriptionWidescreenResolution = .all
                 self.subscriptionUltraWidescreenResolution = .all

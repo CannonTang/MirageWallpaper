@@ -32,12 +32,8 @@ struct WorkshopFilterSidebar: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in
                                 Toggle(filter.label, isOn: Binding(
-                                    get: { workshopViewModel.typeFilter == filter },
-                                    set: { if $0 {
-                                        workshopViewModel.typeFilter = filter
-                                        workshopViewModel.currentPage = 1
-                                        workshopViewModel.search()
-                                    }}
+                                    get: { workshopViewModel.selectedTypeFilters.contains(filter) },
+                                    set: { workshopViewModel.setWorkshopTypeFilter(filter, isOn: $0) }
                                 ))
                                 .toggleStyle(.checkbox)
                             }

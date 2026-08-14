@@ -477,6 +477,50 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
         case .preset: return L("预设")
         }
     }
+
+    var steamTag: String? {
+        switch self {
+        case .all: return nil
+        case .scene: return "Scene"
+        case .web: return "Web"
+        case .video: return "Video"
+        case .preset: return "Preset"
+        }
+    }
+
+    func matches(_ item: WorkshopItem) -> Bool {
+        switch self {
+        case .all: return true
+        case .scene: return item.kind == .scene
+        case .web: return item.kind == .web
+        case .video: return item.kind == .video
+        case .preset: return item.isPreset
+        }
+    }
+}
+
+extension Set where Element == WorkshopTypeFilter {
+    var normalizedWorkshopTypes: Set<WorkshopTypeFilter> {
+        if isEmpty || contains(.all) { return [.all] }
+        return subtracting([.all])
+    }
+
+    var hasNoWorkshopTypeConstraint: Bool {
+        let selection = normalizedWorkshopTypes
+        return selection.contains(.all) ||
+            selection.isSuperset(of: [.scene, .web, .video])
+    }
+
+    var singleWorkshopType: WorkshopTypeFilter? {
+        let selection = normalizedWorkshopTypes
+        guard !selection.hasNoWorkshopTypeConstraint, selection.count == 1 else { return nil }
+        return selection.first
+    }
+
+    func matches(_ item: WorkshopItem) -> Bool {
+        let selection = normalizedWorkshopTypes
+        return selection.hasNoWorkshopTypeConstraint || selection.contains { $0.matches(item) }
+    }
 }
 
 // MARK: - Download Task
