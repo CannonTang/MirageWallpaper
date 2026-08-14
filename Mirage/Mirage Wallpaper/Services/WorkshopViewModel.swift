@@ -89,13 +89,14 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Discover State
 
-    @Published private(set) var discoverItems: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
-    @Published var discoverTrendPeriod: WorkshopTrendPeriod = .week
+    @Published private(set) var discoverRows: [DiscoverRow] = []
+    @Published private(set) var discoverBrowse: DiscoverBrowseState?
+    @Published var discoverSearchText = ""
     @Published var isDiscoverLoading: Bool = false
-
-    var bannerItems: [WorkshopItem] {
-        Array((discoverItems[.trending] ?? []).prefix(5))
-    }
+    @Published private(set) var discoverError: String?
+    @Published private(set) var discoverSelectedItemID: String?
+    @Published private(set) var isDiscoverDetailLoading = false
+    @Published private(set) var discoverDetailError: String?
 
     // MARK: - Download State
 
@@ -242,6 +243,11 @@ class WorkshopViewModel: ObservableObject {
     private var backgroundAutoApplyIDs: Set<String> = []
     private var searchTask: Task<Void, Never>?
     private var discoverTask: Task<Void, Never>?
+    private var discoverRowTasks: [String: Task<Void, Never>] = [:]
+    private var discoverRowRequestIDs: [String: UUID] = [:]
+    private var discoverBrowseTask: Task<Void, Never>?
+    private var discoverBrowseRequestID: UUID?
+    private var discoverDetailTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var discoverGeneration = 0
     private var subscriptionGeneration = 0
@@ -879,49 +885,25 @@ class WorkshopViewModel: ObservableObject {
     func loadDiscover(force: Bool = false) {
         if isDiscoverLoading && !force { return }
         discoverTask?.cancel()
+        discoverRowTasks.values.forEach { $0.cancel() }
+        discoverRowTasks.removeAll()
+        discoverRowRequestIDs.removeAll()
         discoverGeneration += 1
         let generation = discoverGeneration
-        let period = discoverTrendPeriod
         isDiscoverLoading = true
+        discoverError = nil
 
         discoverTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let loaded = await withTaskGroup(
-                of: (WorkshopDiscoverCategory, [WorkshopItem])?.self,
-                returning: [WorkshopDiscoverCategory: [WorkshopItem]].self
-            ) { group in
-                for category in WorkshopDiscoverCategory.allCases {
-                    group.addTask {
-                        guard !Task.isCancelled else { return nil }
-                        let items = try? await SteamWebAPI.shared.fetchDiscover(
-                            category: category,
-                            period: period,
-                            count: category == .trending ? 15 : 12
-                        )
-                        guard let items else { return nil }
-                        return (category, items)
-                    }
-                }
-                var sections: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
-                for await result in group {
-                    if let (category, items) = result {
-                        sections[category] = items
-                    }
-                }
-                return sections
+            do {
+                let definitions = try await WallpaperEngineExploreAPI.shared.fetch(force: force)
+                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+                self.discoverRows = DiscoverFeedBuilder.build(definitions: definitions)
+            } catch {
+                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+                self.discoverRows = []
+                self.discoverError = error.localizedDescription
             }
-
-            guard !Task.isCancelled, generation == self.discoverGeneration else { return }
-            let enriched = await SteamWebAPI.shared.enrichCreatorDetails(
-                in: loaded.values.flatMap { $0 }
-            )
-            guard !Task.isCancelled, generation == self.discoverGeneration else { return }
-            let byID = Dictionary(enriched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            self.discoverItems = loaded.mapValues { items in
-                items.map { byID[$0.id] ?? $0 }
-            }
-            self.rememberCreators(in: enriched)
-            self.refreshSubscriptionStates(for: enriched)
             if generation == self.discoverGeneration {
                 self.isDiscoverLoading = false
             }
@@ -929,7 +911,226 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func refreshDiscover() {
+        if let browse = discoverBrowse {
+            loadDiscoverBrowsePage(browse.page)
+            return
+        }
         loadDiscover(force: true)
+    }
+
+    func performDiscoverSearch() {
+        let search = discoverSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !search.isEmpty else { return }
+        openDiscoverQuery(DiscoverFeedBuilder.searchRow(text: search).query)
+    }
+
+    func clearDiscoverSearch() {
+        discoverSearchText = ""
+    }
+
+    func loadDiscoverRow(id: String) {
+        requestDiscoverRow(id: id, page: 1, replacing: true)
+    }
+
+    func openDiscoverRow(id: String) {
+        guard let query = discoverRows.first(where: { $0.id == id })?.query else { return }
+        openDiscoverQuery(query)
+    }
+
+    func closeDiscoverBrowse() {
+        discoverBrowseTask?.cancel()
+        discoverBrowseTask = nil
+        discoverBrowseRequestID = nil
+        discoverBrowse = nil
+    }
+
+    func goToDiscoverBrowsePage(_ page: Int) {
+        guard let browse = discoverBrowse else { return }
+        let clamped = max(1, min(page, browse.totalPages))
+        guard clamped != browse.page else { return }
+        loadDiscoverBrowsePage(clamped)
+    }
+
+    private func openDiscoverQuery(_ query: DiscoverQuery) {
+        discoverBrowseTask?.cancel()
+        discoverBrowse = DiscoverBrowseState(query: query)
+        loadDiscoverBrowsePage(1)
+    }
+
+    private func loadDiscoverBrowsePage(_ page: Int) {
+        guard var browse = discoverBrowse else { return }
+        let clamped = max(1, min(page, browse.totalPages))
+        let requestID = UUID()
+        discoverBrowseTask?.cancel()
+        discoverBrowseRequestID = requestID
+        browse.page = clamped
+        browse.items = []
+        browse.isLoading = true
+        browse.error = nil
+        discoverBrowse = browse
+
+        discoverBrowseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.fetchDiscoverResults(
+                    query: browse.query,
+                    page: clamped,
+                    perPage: 50
+                )
+                guard !Task.isCancelled,
+                      self.discoverBrowseRequestID == requestID,
+                      self.discoverBrowse?.query.id == browse.query.id else { return }
+                var updated = self.discoverBrowse ?? browse
+                updated.items = result.items
+                updated.total = result.total
+                updated.page = min(clamped, updated.totalPages)
+                updated.isLoading = false
+                self.discoverBrowse = updated
+                self.rememberCreators(in: result.items)
+                self.refreshSubscriptionStates(for: result.items)
+            } catch {
+                guard !Task.isCancelled,
+                      self.discoverBrowseRequestID == requestID,
+                      self.discoverBrowse?.query.id == browse.query.id else { return }
+                var updated = self.discoverBrowse ?? browse
+                updated.isLoading = false
+                updated.error = error.localizedDescription
+                self.discoverBrowse = updated
+            }
+        }
+    }
+
+    func selectDiscoverItem(_ item: WorkshopItem) {
+        selectionGeneration += 1
+        let generation = selectionGeneration
+        discoverDetailTask?.cancel()
+        discoverSelectedItemID = item.publishedFileId
+        discoverDetailError = nil
+        isDiscoverDetailLoading = true
+        selectedItem = nil
+        showCustomization = false
+        showCreatorProfile = false
+        selectedCreator = nil
+
+        discoverDetailTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let details = try await SteamWebAPI.shared.getFileDetails(
+                    workshopIds: [item.publishedFileId]
+                )
+                guard !Task.isCancelled,
+                      generation == self.selectionGeneration,
+                      self.discoverSelectedItemID == item.publishedFileId else { return }
+                guard let detail = details.first else {
+                    throw SteamAPIError.invalidResponse
+                }
+                self.isDiscoverDetailLoading = false
+                self.selectedItem = detail
+                self.rememberCreators(in: [detail])
+                self.prepareWorkshopInteractions(for: detail)
+            } catch {
+                guard !Task.isCancelled,
+                      generation == self.selectionGeneration,
+                      self.discoverSelectedItemID == item.publishedFileId else { return }
+                self.isDiscoverDetailLoading = false
+                self.discoverDetailError = error.localizedDescription
+            }
+        }
+    }
+
+    private func requestDiscoverRow(id: String, page: Int, replacing: Bool) {
+        guard discoverRowTasks[id] == nil,
+              let index = discoverRows.firstIndex(where: { $0.id == id }) else { return }
+        if replacing && !discoverRows[index].items.isEmpty { return }
+        let query = discoverRows[index].query
+        let generation = discoverGeneration
+        let requestID = UUID()
+        discoverRowRequestIDs[id] = requestID
+        discoverRows[index].isLoading = true
+        discoverRows[index].error = nil
+
+        discoverRowTasks[id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.discoverRowRequestIDs[id] == requestID {
+                    self.discoverRowTasks[id] = nil
+                    self.discoverRowRequestIDs[id] = nil
+                }
+            }
+            do {
+                let result = try await self.fetchDiscoverResults(query: query, page: page, perPage: 12)
+                guard !Task.isCancelled,
+                      generation == self.discoverGeneration,
+                      let currentIndex = self.discoverRows.firstIndex(where: { $0.id == id }) else { return }
+                let visibleItems = result.items
+                if replacing {
+                    self.discoverRows[currentIndex].items = visibleItems
+                } else {
+                    let existing = Set(self.discoverRows[currentIndex].items.map(\.id))
+                    self.discoverRows[currentIndex].items.append(contentsOf: visibleItems.filter { !existing.contains($0.id) })
+                }
+                self.discoverRows[currentIndex].total = result.total
+                self.discoverRows[currentIndex].page = page
+                self.discoverRows[currentIndex].isLoading = false
+                if case .creator(_, let sortMethod) = query.kind,
+                   let creatorName = visibleItems.first?.creatorName,
+                   !creatorName.isEmpty {
+                    self.discoverRows[currentIndex].query.title = sortMethod == "newestfirst"
+                        ? L("来自 %@ 的最新壁纸", creatorName)
+                        : L("来自 %@ 的热门壁纸", creatorName)
+                }
+                self.rememberCreators(in: visibleItems)
+                self.refreshSubscriptionStates(for: visibleItems)
+            } catch {
+                guard !Task.isCancelled,
+                      generation == self.discoverGeneration,
+                      let currentIndex = self.discoverRows.firstIndex(where: { $0.id == id }) else { return }
+                self.discoverRows[currentIndex].isLoading = false
+                self.discoverRows[currentIndex].error = error.localizedDescription
+            }
+        }
+    }
+
+    private func fetchDiscoverResults(
+        query: DiscoverQuery,
+        page: Int,
+        perPage: Int
+    ) async throws -> (items: [WorkshopItem], total: Int) {
+        let result: (items: [WorkshopItem], total: Int)
+        switch query.kind {
+        case .workshop:
+            result = try await SteamWebAPI.shared.queryDiscoverFiles(
+                searchText: query.searchText,
+                sortOrder: query.sortOrder,
+                requiredTags: query.requiredTags,
+                excludedTags: query.excludedTags,
+                page: page,
+                perPage: perPage,
+                trendDays: query.trendDays
+            )
+        case .creator(let steamId, let sortMethod):
+            result = try await SteamWebAPI.shared.getUserFiles(
+                steamId: steamId,
+                page: page,
+                perPage: perPage,
+                sortMethod: sortMethod,
+                requiredTags: query.requiredTags,
+                excludedTags: query.excludedTags,
+                enrichCreatorProfiles: true
+            )
+        case .collection(let collectionId):
+            result = try await SteamWebAPI.shared.getCollectionItems(
+                collectionId: collectionId,
+                page: page,
+                perPage: perPage
+            )
+        }
+        guard query.exact else { return result }
+        let items = result.items.filter { item in
+            item.title.localizedCaseInsensitiveContains(query.searchText) ||
+                item.itemDescription.localizedCaseInsensitiveContains(query.searchText)
+        }
+        return (items, result.total)
     }
 
     func setWorkshopShowOnly(_ option: FRShowOnly, isOn: Bool) {

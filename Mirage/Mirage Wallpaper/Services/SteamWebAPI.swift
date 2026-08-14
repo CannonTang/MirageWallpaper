@@ -226,6 +226,45 @@ final class SteamWebAPI {
         return (items, resultTotal)
     }
 
+    func queryDiscoverFiles(
+        searchText: String,
+        sortOrder: WorkshopSortOrder,
+        requiredTags: [String],
+        excludedTags: [String],
+        page: Int,
+        perPage: Int,
+        trendDays: Int?
+    ) async throws -> (items: [WorkshopItem], total: Int) {
+        var params: [String: String] = [
+            "key": apiKey,
+            "query_type": "\(sortOrder.apiValue)",
+            "appid": appId,
+            "filetype": "18",
+            "page": "\(max(1, page))",
+            "numperpage": "\(max(1, perPage))",
+            "return_tags": "true",
+            "return_previews": "true",
+            "return_metadata": "true",
+            "strip_description_bbcode": "true",
+            "match_all_tags": "true"
+        ]
+        let normalizedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalizedSearch.isEmpty {
+            params["search_text"] = normalizedSearch
+        }
+        if sortOrder.usesTrendPeriod, let trendDays {
+            params["days"] = "\(max(1, min(365, trendDays)))"
+        }
+        for (index, tag) in requiredTags.enumerated() {
+            params["requiredtags[\(index)]"] = tag
+        }
+        for (index, tag) in excludedTags.enumerated() {
+            params["excludedtags[\(index)]"] = tag
+        }
+        let batch = try await fetchQueryBatch(params: params)
+        return (batch.items, batch.total)
+    }
+
     private func fetchQueryBatch(
         params: [String: String]
     ) async throws -> (items: [WorkshopItem], total: Int, nextCursor: String?) {
@@ -255,7 +294,10 @@ final class SteamWebAPI {
 
     // MARK: - Get File Details
 
-    func getFileDetails(workshopIds: [String]) async throws -> [WorkshopItem] {
+    func getFileDetails(
+        workshopIds: [String],
+        enrichCreatorProfiles: Bool = true
+    ) async throws -> [WorkshopItem] {
         try await throttle()
 
         let components = URLComponents(string: baseURL + "ISteamRemoteStorage/GetPublishedFileDetails/v1/")!
@@ -287,13 +329,21 @@ final class SteamWebAPI {
         let items = (apiResponse.response.publishedfiledetails ?? [])
             .map { $0.toWorkshopItem() }
             .filter { $0.fileSize > 0 }
-        return await enrichCreators(in: items)
+        return enrichCreatorProfiles ? await enrichCreators(in: items) : items
     }
 
-    func getUserFiles(steamId: String, page: Int = 1, perPage: Int = 30) async throws -> (items: [WorkshopItem], total: Int) {
+    func getUserFiles(
+        steamId: String,
+        page: Int = 1,
+        perPage: Int = 30,
+        sortMethod: String? = nil,
+        requiredTags: [String] = [],
+        excludedTags: [String] = [],
+        enrichCreatorProfiles: Bool = true
+    ) async throws -> (items: [WorkshopItem], total: Int) {
         try await throttle()
         var components = URLComponents(string: baseURL + "IPublishedFileService/GetUserFiles/v1/")!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "key", value: apiKey),
             URLQueryItem(name: "steamid", value: steamId),
             URLQueryItem(name: "appid", value: appId),
@@ -304,6 +354,16 @@ final class SteamWebAPI {
             URLQueryItem(name: "return_metadata", value: "true"),
             URLQueryItem(name: "strip_description_bbcode", value: "true"),
         ]
+        if let sortMethod, !sortMethod.isEmpty {
+            queryItems.append(URLQueryItem(name: "sortmethod", value: sortMethod))
+        }
+        for (index, tag) in requiredTags.enumerated() {
+            queryItems.append(URLQueryItem(name: "requiredtags[\(index)]", value: tag))
+        }
+        for (index, tag) in excludedTags.enumerated() {
+            queryItems.append(URLQueryItem(name: "excludedtags[\(index)]", value: tag))
+        }
+        components.queryItems = queryItems
         guard let url = components.url else { throw SteamAPIError.invalidURL }
         let (data, response) = try await session.data(from: url)
         guard let httpResponse = response as? HTTPURLResponse else { throw SteamAPIError.invalidResponse }
@@ -311,9 +371,41 @@ final class SteamWebAPI {
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
         let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
         let visibleItems = decodedItems.filter { $0.fileSize > 0 }
-        let items = await enrichCreators(in: visibleItems)
+        let items = enrichCreatorProfiles ? await enrichCreators(in: visibleItems) : visibleItems
         let total = apiResponse.response.total ?? items.count
         return (items, total)
+    }
+
+    func getCollectionItems(
+        collectionId: String,
+        page: Int = 1,
+        perPage: Int = 12
+    ) async throws -> (items: [WorkshopItem], total: Int) {
+        try await throttle()
+        let components = URLComponents(string: baseURL + "ISteamRemoteStorage/GetCollectionDetails/v1/")!
+        guard let url = components.url else { throw SteamAPIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = "collectioncount=1&publishedfileids[0]=\(collectionId)".data(using: .utf8)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw SteamAPIError.invalidResponse }
+        guard httpResponse.statusCode == 200 else { throw SteamAPIError.httpError(httpResponse.statusCode) }
+        let decoded = try decoder.decode(SteamCollectionResponse.self, from: data)
+        guard let details = decoded.response.collectiondetails?.first,
+              details.result == 1 else { return ([], 0) }
+        let ids = (details.children ?? [])
+            .sorted { ($0.sortorder ?? 0) < ($1.sortorder ?? 0) }
+            .compactMap(\.publishedfileid)
+        let start = max(0, (max(1, page) - 1) * max(1, perPage))
+        guard start < ids.count else { return ([], ids.count) }
+        let end = min(ids.count, start + max(1, perPage))
+        let items = try await getFileDetails(
+            workshopIds: Array(ids[start..<end]),
+            enrichCreatorProfiles: false
+        )
+        let order = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
+        return (items.sorted { order[$0.id, default: 0] < order[$1.id, default: 0] }, ids.count)
     }
 
     func creatorProfile(steamId: String) async -> WorkshopCreator? {
