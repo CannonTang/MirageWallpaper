@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.7</title>
+            <pubDate>Fri, 14 Aug 2026 18:41:41 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>327</sparkle:version>
+            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 899e6820a36d7e7b243b603c299f8a0b4c181775
+Channel: beta
+
+fix(app): prevent compact window clipping
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-327-899e6820a36d-macOS-x86_64.zip" length="236297741" type="application/octet-stream" sparkle:edSignature="6997QBdNiKMLODWVg0Z3D5PJfGBAueyph4kDEvrosZj7pOEh84PSb8JcLIgjRSQGDoDjB8GoOm++VQwG+GRECw=="/>
+        </item>
+        <item>
+            <title>1.0.7</title>
             <pubDate>Fri, 14 Aug 2026 16:35:13 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -89,23 +106,6 @@ feat(workshop): add favorite controls and show-only filters
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-315-443777e29a80-macOS-x86_64.zip" length="236091864" type="application/octet-stream" sparkle:edSignature="o+0brt0TeD9WXxjGMRdid+KeoOvoFhunnvw2S/03GOmAt9th/CPOa436WqV9hs1hzMZuULH8MRW+4KLjQZI6CQ=="/>
-        </item>
-        <item>
-            <title>1.0.7</title>
-            <pubDate>Wed, 12 Aug 2026 16:37:41 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>313</sparkle:version>
-            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: c8809574601504418502732720bad2cdfc50136a
-Channel: beta
-
-fix(renderer): split large mesh uploads
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-313-c88095746015-macOS-x86_64.zip" length="236033250" type="application/octet-stream" sparkle:edSignature="oxHEpczFAzThuYjSyOMztxKOYRcKtZmJnVUDkiZS+OJKUQ6aZB1s11kURHD4FTrF2+WRQBrtRs+jef2fKY6yBg=="/>
         </item>
         <item>
             <title>1.0.7</title>
@@ -473,6 +473,6 @@ chore(release): bump version to 1.0.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: JNhNjRE/PND5TjIxAioY/aEP0UPjvU/nGEUSVwduwZgO/iVuo9x2ZVXf0RzwVb51CSnjVNz//cRLlSI0bM38DQ==
-length: 34510
+edSignature: /lxqy3DqkhNPUCrn+1vFwleAMSbCVtDlRUim+LTKpplctsGIEabMJIjGlN6RdQb978/kdVgHL18HDM1+jBSNDQ==
+length: 34512
 -->
