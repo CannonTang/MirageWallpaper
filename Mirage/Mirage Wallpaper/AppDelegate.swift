@@ -98,8 +98,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         SteamServiceManager.shared.start()
 
-        let w = wallpaperViewModel.currentWallpaper
-        if w.isValid {
+        if wallpaperViewModel.hasAnyWallpaper {
             wallpaperViewModel.restoreAllDisplays()
         }
 
