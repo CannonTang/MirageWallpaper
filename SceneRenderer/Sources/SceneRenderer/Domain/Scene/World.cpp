@@ -1010,6 +1010,7 @@ SceneNodeId Scene::RegisterNode(SceneNode& node,
             return node.m_identity;
         }
         node.m_wallpaper_identity              = wallpaper;
+        node.m_scene_script_layer              = true;
         node.m_id                              = wallpaper->value;
         m_wallpaper_node_ids[wallpaper->value] = node.m_identity;
     } else if (! node.m_wallpaper_identity) {
@@ -1026,8 +1027,13 @@ SceneNodeId Scene::RegisterNode(SceneNode& node,
 
 void Scene::RebuildResourceIndex() { m_resource_index.Rebuild(*this, m_resource_generation); }
 
+void Scene::RegisterScriptLayer(SceneNode& node) {
+    node.m_scene_script_layer = true;
+    RegisterNode(node);
+}
+
 void Scene::AttachRuntimeNode(SceneNode& parent, rstd::sync::Arc<SceneNode> node) {
-    RegisterNode(*node);
+    RegisterScriptLayer(*node);
     parent.AppendChild(std::move(node));
     RebuildResourceIndex();
     m_render_graph_dirty = true;
@@ -1035,12 +1041,35 @@ void Scene::AttachRuntimeNode(SceneNode& parent, rstd::sync::Arc<SceneNode> node
 
 std::optional<std::size_t> Scene::LayerIndex(const SceneNode& node) const {
     auto* parent = node.Parent();
-    return parent != nullptr ? parent->ChildIndex(node) : std::nullopt;
+    if (parent == nullptr || ! node.SceneScriptLayer()) return std::nullopt;
+    std::size_t index = 0;
+    for (const auto& child : parent->m_children) {
+        if (! child->SceneScriptLayer()) continue;
+        if (child.as_ptr() == &node) return index;
+        ++index;
+    }
+    return std::nullopt;
 }
 
 bool Scene::SortLayer(SceneNode& node, std::size_t index) {
     auto* parent = node.Parent();
-    if (parent == nullptr || ! parent->MoveChild(node, index)) return false;
+    if (parent == nullptr || ! node.SceneScriptLayer()) return false;
+    auto current = LayerIndex(node);
+    if (! current || *current == index) return false;
+
+    auto moving      = parent->m_children.end();
+    auto destination = parent->m_children.end();
+    std::size_t logical_index = 0;
+    for (auto it = parent->m_children.begin(); it != parent->m_children.end(); ++it) {
+        if (it->as_ptr() == &node) moving = it;
+        if (! (*it)->SceneScriptLayer()) continue;
+        if (logical_index == index) destination = it;
+        ++logical_index;
+    }
+    if (moving == parent->m_children.end() || destination == parent->m_children.end())
+        return false;
+    if (*current < index) ++destination;
+    parent->m_children.splice(destination, parent->m_children, moving);
     m_render_graph_dirty = true;
     return true;
 }

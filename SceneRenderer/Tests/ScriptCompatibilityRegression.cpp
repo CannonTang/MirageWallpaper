@@ -373,6 +373,12 @@ void TestDynamicLayerCompatibility() {
 
 void TestDynamicLayerOrdering() {
     sr::Scene scene;
+    std::array<rstd::sync::Arc<sr::SceneNode>, 3> internal {
+        rstd::sync::Arc<sr::SceneNode>::make(),
+        rstd::sync::Arc<sr::SceneNode>::make(),
+        rstd::sync::Arc<sr::SceneNode>::make(),
+    };
+    for (auto& node : internal) scene.sceneGraph->AppendChild(node.clone());
     auto      ring = rstd::sync::Arc<sr::SceneNode>::make(
         Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "ring");
     auto body = rstd::sync::Arc<sr::SceneNode>::make(
@@ -425,8 +431,9 @@ void TestDynamicLayerOrdering() {
     if (created.size() != 2) return;
     const auto& children = scene.sceneGraph->GetChildren();
     auto it = children.begin();
-    bool order_ok = children.size() == 4;
+    bool order_ok = children.size() == 7;
     if (order_ok) {
+        for (const auto& node : internal) order_ok = order_ok && it++->as_ptr() == node.as_ptr();
         order_ok = it++->as_ptr() == created[1].as_ptr();
         order_ok = order_ok && it++->as_ptr() == created[0].as_ptr();
         order_ok = order_ok && it++->as_ptr() == ring.as_ptr();

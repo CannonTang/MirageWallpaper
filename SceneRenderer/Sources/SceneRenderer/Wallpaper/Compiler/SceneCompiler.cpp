@@ -2234,6 +2234,51 @@ void NormalizeEffectPositionCurve(SceneAnimationCurve& curve) {
     normalize_axis(curve.c1);
 }
 
+script::FieldScript* RegisterMaterialValueScript(ParseContext&                  context,
+                                                 SceneNode*                     owner,
+                                                 const wpscene::Material&       material,
+                                                 const std::string&             material_key,
+                                                 const wpscene::ScriptBinding& binding) {
+    if (! owner) return nullptr;
+    auto value = material.constantshadervalues.find(material_key);
+    if (value == material.constantshadervalues.end()) return nullptr;
+
+    script::FieldKind kind = script::FieldKind::Unknown;
+    switch (value->second.size()) {
+    case 1: kind = script::FieldKind::Scalar; break;
+    case 2: kind = script::FieldKind::Vec2; break;
+    case 3: kind = script::FieldKind::Vec3; break;
+    case 4: kind = script::FieldKind::Vec4; break;
+    default: return nullptr;
+    }
+
+    auto  sha = utils::genSha1(std::span<const char>(binding.source));
+    auto* field_script = EnsureScriptScene(context).runtime().MakeFieldScript(binding.source,
+                                                                               sha,
+                                                                               kind,
+                                                                               binding.properties,
+                                                                               binding.initial_value,
+                                                                               owner);
+    RegisterFieldScriptMetadata(context, owner, field_script);
+    return field_script;
+}
+
+void RegisterHiddenTextEffectScripts(ParseContext&                         context,
+                                     SceneNode*                            owner,
+                                     std::span<const wpscene::ImageEffect> effects) {
+    for (const auto& effect : effects) {
+        if (effect.visible || ! effect.visible_user.empty()) continue;
+        for (usize index = 0; index < effect.materials.size(); ++index) {
+            auto material = effect.materials[index].clone();
+            if (index < effect.passes.size()) material.MergePass(effect.passes[index]);
+            for (const auto& [material_key, binding] :
+                 material.constantshadervalues_bindings.scripts) {
+                RegisterMaterialValueScript(context, owner, material, material_key, binding);
+            }
+        }
+    }
+}
+
 // Register a (material, shader-info, wpmat) triple into the scene-wide user
 // variable index. Must be called AFTER the SceneMaterial has been moved into
 // a shared_ptr (e.g. `mesh->AddMaterial(std::move(local))`) and `stable_mat`
@@ -2294,29 +2339,11 @@ void RegisterShaderUserVarIndex(ParseContext& context, SceneNode* owner,
     auto& scripts = EnsureScriptScene(context);
     for (const auto& [material_key, binding] :
          wpmat.constantshadervalues_bindings.scripts) {
-        auto value = wpmat.constantshadervalues.find(material_key);
-        if (value == wpmat.constantshadervalues.end()) continue;
-
-        script::FieldKind kind = script::FieldKind::Unknown;
-        switch (value->second.size()) {
-        case 1: kind = script::FieldKind::Scalar; break;
-        case 2: kind = script::FieldKind::Vec2; break;
-        case 3: kind = script::FieldKind::Vec3; break;
-        case 4: kind = script::FieldKind::Vec4; break;
-        default: continue;
-        }
         auto uniform_name = ResolveShaderMaterialKey(info, material_key);
         if (uniform_name.empty()) continue;
-
-        auto  sha = utils::genSha1(std::span<const char>(binding.source));
-        auto* field_script = scripts.runtime().MakeFieldScript(binding.source,
-                                                               sha,
-                                                               kind,
-                                                               binding.properties,
-                                                               binding.initial_value,
-                                                               owner);
+        auto* field_script =
+            RegisterMaterialValueScript(context, owner, wpmat, material_key, binding);
         if (! field_script) continue;
-        RegisterFieldScriptMetadata(context, owner, field_script);
         scripts.AddActuator({
             field_script,
             [pScene, stable_mat, uniform_name = std::move(uniform_name)](
@@ -5202,6 +5229,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         sp_node->CopyTrans(SceneNode());
         sp_node->SetCamera(addr);
     }
+
+    RegisterHiddenTextEffectScripts(context, compose_node.as_ptr(), obj.effects);
 
     auto compose_hold      = SceneNodeArcHold(compose_node.clone());
     auto apply_text_anchor = [compose_hold, anchor_state]() {

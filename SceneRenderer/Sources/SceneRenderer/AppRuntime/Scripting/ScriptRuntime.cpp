@@ -2934,6 +2934,7 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
         fs->m_impl->clone_queue.erase(fs->m_impl->clone_queue.begin());
     }
     if (! node) return JS_ThrowReferenceError(ctx, "createLayer asset is unavailable");
+    if (host->scene) host->scene->RegisterScriptLayer(*node);
     if (! configuration_request) {
         if (host->scene)
             host->scene->SetNodeVisible(*node, true);

@@ -1529,6 +1529,7 @@ public:
 
     SceneNodeId                     Identity() const { return m_identity; }
     std::optional<WallpaperLayerId> WallpaperIdentity() const { return m_wallpaper_identity; }
+    bool                            SceneScriptLayer() const { return m_scene_script_layer; }
 
     i32  ID() const { return m_id; }
     i32& ID() { return m_id; }
@@ -1541,6 +1542,7 @@ private:
 
     SceneNodeId                     m_identity;
     std::optional<WallpaperLayerId> m_wallpaper_identity;
+    bool                            m_scene_script_layer { false };
     i32                             m_id { -1 };
     std::string m_name;
 
@@ -3007,6 +3009,7 @@ public:
     SceneNodeId               RegisterNode(
                       SceneNode& node,
                       std::optional<WallpaperLayerId> wallpaper = std::nullopt);
+    void                      RegisterScriptLayer(SceneNode& node);
     void                      AttachRuntimeNode(SceneNode& parent,
                                                 rstd::sync::Arc<SceneNode> node);
     std::optional<std::size_t> LayerIndex(const SceneNode& node) const;
