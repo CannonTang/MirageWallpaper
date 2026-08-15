@@ -319,11 +319,8 @@ static OSStatus WRTapIOProc(AudioDeviceID inDevice, const AudioTimeStamp *inNow,
 
     vDSP_vmul(window, 1, _hann, 1, window, 1, kFFT_N);
 
-    // vDSP's real-to-complex DFT expects the time samples split even/odd
-    // across Ir/Ii (kFFT_N/2 each), not the contiguous window. Feeding the
-    // window directly as Ir transforms a different signal: only the first
-    // half of the samples are read and every frequency lands at half its
-    // true bin.
+    // vDSP real DFT expects even/odd split, not contiguous input.
+    // Passing it directly uses only half the samples and halves the bin.
     float splitEven[kFFT_N / 2];
     float splitOdd[kFFT_N / 2];
     float realOut[kFFT_N / 2];
@@ -348,8 +345,7 @@ static OSStatus WRTapIOProc(AudioDeviceID inDevice, const AudioTimeStamp *inNow,
         grouped[b] = sumMag / (float)perGroup;
     }
 
-    // vDSP's real DFT is scaled 2x relative to the mathematical DFT, so the
-    // usual 2/N amplitude normalization becomes 1/half here.
+    // vDSP real DFT is 2x the mathematical DFT, so 2/N becomes 1/half here.
     const float norm = 1.0f / (float)half;
     const float logBase = 4.0f;
     for (NSUInteger b = 0; b < kBinCount; ++b) {
