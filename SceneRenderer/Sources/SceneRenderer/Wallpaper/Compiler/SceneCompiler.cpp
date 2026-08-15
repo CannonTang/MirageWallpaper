@@ -2904,7 +2904,10 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
     }
     const bool is_hidden_link_source =
         context.hidden_link_source_ids.count(static_cast<std::int32_t>(wpimgobj.id)) != 0;
-    if (! has_author_effect && (is_hidden_link_source || wpimgobj.composite_layer)) {
+    const bool is_linked_composite =
+        wpimgobj.composite_layer &&
+        context.IsLinkedSource(static_cast<std::int32_t>(wpimgobj.id));
+    if (! has_author_effect && (is_hidden_link_source || is_linked_composite)) {
         AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
     }
 
@@ -2934,6 +2937,10 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             : AlignmentOffset(wpimgobj.alignment, { geometry_size[0], geometry_size[1] });
     const bool solid_scene_context = HasSolidCompositeContext(context, wpimgobj);
     spImgNode->SetSize({ geometry_size[0], geometry_size[1] });
+    if (hasEffect && wpimgobj.composite_layer) {
+        spImgNode->SetGeometryTransform(
+            Affine3d(Translation3d(alignment_offset.cast<double>())).matrix());
+    }
     spImgNode->SetPerspective(wpimgobj.perspective);
     spImgNode->SetReflected(wpimgobj.reflected);
     spImgNode->SetBaseColor(Vector3f(wpimgobj.color.data()), wpimgobj.alpha);
@@ -3097,8 +3104,6 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
 
     if (puppet) {
         if (hasEffect) {
-            effct_final_mesh.SetGeometryTransform(
-                Affine3d(Translation3d(alignment_offset.cast<double>())).matrix());
             GenCardMesh(
                 mesh, { geometry_size[0], geometry_size[1] }, mapRate, source_alignment_offset);
             if (primary_puppet_mesh != nullptr) {
@@ -3137,12 +3142,18 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             GenCardMesh(effct_final_mesh,
                         { geometry_size[0], geometry_size[1] },
                         { 1.0f, 1.0f },
-                        alignment_offset);
+                        Vector3f::Zero());
         }
+    }
+    if (hasEffect) {
+        effct_final_mesh.SetGeometryTransform(
+            effct_final_mesh.GeometryTransform() *
+            Affine3d(Translation3d(alignment_offset.cast<double>())).matrix());
     }
     // material blendmode for last step to use
     auto finalMaterialState = material;
     std::shared_ptr<SceneImageEffectLayer> image_effect_layer;
+    std::shared_ptr<SceneNodeArcHold>      effect_camera_anchor;
     if (color_blend_attachment_override.has_value()) {
         finalMaterialState.blenmode = *color_blend_attachment_override;
     }
@@ -3334,8 +3345,19 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         auto& scene = *context.scene;
         // currently use addr for unique
         std::string nodeAddr = getAddr(spImgNode.as_ptr());
+        if (wpimgobj.composite_layer && ! wpimgobj.fullscreen) {
+            auto anchor = rstd::sync::Arc<SceneNode>::make(
+                alignment_offset,
+                Vector3f::Ones(),
+                Vector3f::Zero(),
+                nodeAddr + "_effect_camera_anchor");
+            anchor->SetParentAnchor(spImgNode.as_ptr());
+            effect_camera_anchor = std::make_shared<SceneNodeArcHold>(anchor.clone());
+            scene.transform_updaters.push_back(
+                [effect_camera_anchor](double) { (void)effect_camera_anchor; });
+        }
         // set camera to attatch effect
-        if (isPassthrough) {
+        if (isPassthrough && wpimgobj.fullscreen) {
             scene.cameras[nodeAddr] = std::make_shared<SceneCamera>(SceneCamera::MakeOrthographic(
                 scene.activeCamera->Width(), scene.activeCamera->Height(), -1.0, 1.0));
             auto attached = scene.activeCamera->GetAttachedNode();
@@ -3350,12 +3372,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             i32 h                   = effect_extent[1];
             scene.cameras[nodeAddr] =
                 std::make_shared<SceneCamera>(SceneCamera::MakeOrthographic(w, h, -1.0, 1.0));
-            // Attach the per-layer effect camera to spImgNode itself so the
-            // camera follows the layer through any parent-container world
-            // translation. Otherwise the layer's quad ends up off-center in
-            // the ping-pong RT whenever the layer is nested under a non-zero
-            // container.
-            scene.cameras.at(nodeAddr)->AttatchNode(spImgNode.as_ptr());
+            scene.cameras.at(nodeAddr)->AttatchNode(effect_camera_anchor
+                                                        ? effect_camera_anchor->get()
+                                                        : spImgNode.as_ptr());
         }
         if (wpimgobj.composite_layer) {
             const std::string group_camera = nodeAddr + "_group";
@@ -3363,7 +3382,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                 NonZeroRenderTargetExtent(effect_target_size[0], effect_target_size[1]);
             scene.cameras[group_camera] = std::make_shared<SceneCamera>(
                 SceneCamera::MakeOrthographic(group_extent[0], group_extent[1], -1.0, 1.0));
-            scene.cameras.at(group_camera)->AttatchNode(spImgNode.as_ptr());
+            scene.cameras.at(group_camera)->AttatchNode(effect_camera_anchor
+                                                            ? effect_camera_anchor->get()
+                                                            : spImgNode.as_ptr());
             scene.RegisterRenderGroup(WallpaperLayerId { .value = static_cast<i32>(wpimgobj.id) },
                                       group_camera);
         }
@@ -3401,6 +3422,12 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             };
             if (wpimgobj.fullscreen) {
                 scene.renderTargets[effect_ppong_a].bind = { .enable = true, .screen = true };
+            } else if (wpimgobj.composite_layer) {
+                scene.renderTargets[effect_ppong_a].bind = {
+                    .enable = true,
+                    .name   = nodeAddr,
+                    .screen = true,
+                };
             }
             // Point-art images (noInterpolation) must stay point-sampled through
             // the whole effect chain.
@@ -3484,6 +3511,13 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                         scene.renderTargets[rtname] = { .width      = fbo_size[0],
                                                         .height     = fbo_size[1],
                                                         .allowReuse = ! wpfbo.unique };
+                        if (wpimgobj.composite_layer && wpfbo.fit == 0) {
+                            scene.renderTargets[rtname].bind = {
+                                .enable = true,
+                                .name   = effect_ppong_a,
+                                .scale  = 1.0 / static_cast<double>(std::max(1u, wpfbo.scale)),
+                            };
+                        }
                     }
                     fboMap[wpfbo.name] = rtname;
                 }
@@ -3735,24 +3769,35 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             }
         }
     }
-    const Matrix4d alignment_base_transform =
+    const Matrix4d source_alignment_base_transform = spImgNode->GeometryTransform();
+    const Matrix4d final_alignment_base_transform =
         image_effect_layer ? image_effect_layer->FinalMesh().GeometryTransform()
                            : spImgNode->GeometryTransform();
     RegisterImageAlignmentBinding(
         context,
         spImgNode.as_ptr(),
         wpimgobj.alignment,
-        [image_effect_layer, alignment_base_transform, alignment_offset, geometry_size](
-            SceneNode* node, std::string_view alignment) {
-            const Vector3f delta =
-                AlignmentOffset(alignment, { geometry_size[0], geometry_size[1] }) -
-                alignment_offset;
-            Matrix4d transform = alignment_base_transform *
-                                 Affine3d(Translation3d(delta.cast<double>())).matrix();
-            if (image_effect_layer)
-                image_effect_layer->FinalMesh().SetGeometryTransform(std::move(transform));
-            else if (node)
-                node->SetGeometryTransform(std::move(transform));
+        [image_effect_layer,
+         effect_camera_anchor,
+         source_alignment_base_transform,
+         final_alignment_base_transform,
+         alignment_offset,
+         geometry_size](SceneNode* node, std::string_view alignment) {
+            const Vector3f offset =
+                AlignmentOffset(alignment, { geometry_size[0], geometry_size[1] });
+            const Vector3f delta = offset - alignment_offset;
+            const Matrix4d translation =
+                Affine3d(Translation3d(delta.cast<double>())).matrix();
+            if (image_effect_layer) {
+                if (node && effect_camera_anchor) {
+                    node->SetGeometryTransform(source_alignment_base_transform * translation);
+                }
+                image_effect_layer->FinalMesh().SetGeometryTransform(
+                    final_alignment_base_transform * translation);
+                if (effect_camera_anchor) effect_camera_anchor->get()->SetTranslate(offset);
+            } else if (node) {
+                node->SetGeometryTransform(final_alignment_base_transform * translation);
+            }
         });
 
     AssignNodeFieldAnimations(*spImgNode.as_ptr(), wpimgobj.field_bindings);

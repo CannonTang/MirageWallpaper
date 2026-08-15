@@ -303,7 +303,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
             const auto& nodeData   = *nodeDataPtr;
             auto        cameraNode = camera->GetAttachedNode();
             const bool  layerLocalEffectSource =
-                camera->HasImgEffect() && cameraNode.is_some() && *cameraNode == pNode;
+                camera->HasImgEffect() && cameraNode.is_some() &&
+                (*cameraNode == pNode || (*cameraNode)->Parent() == pNode);
             if (m_parallax.enable && ! layerLocalEffectSource) {
                 auto*       parallaxNode = pNode;
                 const auto* parallaxData = &nodeData;
@@ -368,7 +369,7 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 const auto& nodeData = *nodeDataPtr;
                 auto*       source   = nodeData.effect_projection_node;
                 source->UpdateTrans();
-                layerModel  = source->ModelTrans();
+                layerModel  = source->ModelTrans() * source->GeometryTransform();
                 effectModel = layerModel;
                 if (nodeData.effect_projection_size[0] > 0.0f &&
                     nodeData.effect_projection_size[1] > 0.0f) {

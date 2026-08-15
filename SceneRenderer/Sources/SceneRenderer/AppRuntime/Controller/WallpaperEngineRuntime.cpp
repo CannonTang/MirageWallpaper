@@ -1267,6 +1267,7 @@ void SceneRenderController::on(RenderSetFillMode&& m) {
     m_fillmode = m.mode;
     if (m_scene && renderInited()) {
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
+        if (m_rg) m_render->refreshPreparedResources(*m_scene, m_render_scene);
     }
 }
 
@@ -1275,12 +1276,12 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     if (! m_scene || ! renderInited()) return;
     if (m_rg) m_render->clearLastRenderGraph(retention);
     if (evict_meshes) m_render->evictUnusedMeshes();
+    m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
     m_rg           = sceneToRenderGraph(*m_scene, m_render_scene);
 
     if (m_main.isGenGraphviz()) m_rg->ToGraphviz("graph.dot");
     m_render->compileRenderGraph(*m_scene, *m_rg, m_render_scene);
-    m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     consumeDirtyEventsCoveredByGraphRebuild();
     (void)m_scene->ConsumeRenderGraphDirty();
 }
@@ -1477,8 +1478,8 @@ void SceneRenderController::on(RenderSwapchainReady&& m) {
     }
     bool extent_changed = m_render->onSwapchainReady(m.width, m.height);
     if (extent_changed && m_scene && m_rg) {
-        m_render->refreshPreparedResources(*m_scene, m_render_scene);
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
+        m_render->refreshPreparedResources(*m_scene, m_render_scene);
     }
     if (m_stopped)
         frame_timer.Stop();

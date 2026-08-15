@@ -17,10 +17,53 @@ import sr.utils;
 import sr.scene;
 import sr.spec_texs;
 import sr.text;
+import eigen;
 
 import sr.rgraph;
 
 using namespace sr::vulkan;
+
+std::array<sr::i32, 2> sr::vulkan::ProjectedLayerPhysicalExtent(
+    sr::Scene& scene, sr::SceneNode& node, unsigned width, unsigned height) {
+    if (width == 0 || height == 0 || scene.activeCamera == nullptr) return { 1, 1 };
+
+    node.UpdateTrans();
+    const Eigen::Matrix4d transform =
+        scene.activeCamera->GetViewProjectionMatrix() * node.ModelTrans() *
+        node.GeometryTransform();
+    const Eigen::Vector2f size = node.Size();
+    const double          half_width = std::abs(static_cast<double>(size.x())) * 0.5;
+    const double          half_height = std::abs(static_cast<double>(size.y())) * 0.5;
+    const std::array<Eigen::Vector4d, 4> corners {
+        Eigen::Vector4d { -half_width, -half_height, 0.0, 1.0 },
+        Eigen::Vector4d { half_width, -half_height, 0.0, 1.0 },
+        Eigen::Vector4d { half_width, half_height, 0.0, 1.0 },
+        Eigen::Vector4d { -half_width, half_height, 0.0, 1.0 },
+    };
+
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    for (const auto& corner : corners) {
+        const Eigen::Vector4d projected = transform * corner;
+        if (! projected.allFinite() || std::abs(projected.w()) < 1e-12) continue;
+        const double x = (projected.x() / projected.w() * 0.5 + 0.5) * width;
+        const double y = (projected.y() / projected.w() * 0.5 + 0.5) * height;
+        min_x          = std::min(min_x, x);
+        min_y          = std::min(min_y, y);
+        max_x          = std::max(max_x, x);
+        max_y          = std::max(max_y, y);
+    }
+
+    const auto extent = [](double min_value, double max_value) {
+        if (! std::isfinite(min_value) || ! std::isfinite(max_value)) return sr::i32 { 1 };
+        const double value = std::ceil(max_value) - std::floor(min_value);
+        return static_cast<sr::i32>(std::clamp(
+            value, 1.0, static_cast<double>(std::numeric_limits<sr::i32>::max())));
+    };
+    return { extent(min_x, max_x), extent(min_y, max_y) };
+}
 
 constexpr uint64_t             vk_wait_time { 10u * 1000u * 1000000u };
 constexpr uint32_t             vk_upload_command_num { 3 };
@@ -317,6 +360,21 @@ struct RenderProgram {
         for (auto& item : scene.renderTargets) {
             auto& rt = item.second;
             if (rt.bind.enable && rt.bind.screen) {
+                if (! rt.bind.name.empty()) {
+                    auto camera = scene.cameras.find(rt.bind.name);
+                    if (camera != scene.cameras.end() && camera->second) {
+                        auto attached = camera->second->GetAttachedNode();
+                        if (attached.is_some() && (*attached)->Parent() != nullptr) {
+                            const auto projected = ProjectedLayerPhysicalExtent(
+                                scene, *(*attached)->Parent(), extent.width, extent.height);
+                            rt.width = static_cast<sr::i32>(std::max(
+                                1.0, std::round(rt.bind.scale * projected[0])));
+                            rt.height = static_cast<sr::i32>(std::max(
+                                1.0, std::round(rt.bind.scale * projected[1])));
+                            continue;
+                        }
+                    }
+                }
                 rt.width  = static_cast<sr::i32>(rt.bind.scale * extent.width);
                 rt.height = static_cast<sr::i32>(rt.bind.scale * extent.height);
             }

@@ -87,6 +87,7 @@ struct PreparedPassDiagnostic {
 };
 
 void UpdateCameraFillModeForExtent(Scene&, sr::FillMode, unsigned width, unsigned height);
+std::array<i32, 2> ProjectedLayerPhysicalExtent(Scene&, SceneNode&, unsigned width, unsigned height);
 
 class VulkanRender {
 public:

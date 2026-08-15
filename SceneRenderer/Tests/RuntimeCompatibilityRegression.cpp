@@ -21,6 +21,7 @@ import sr.spec_texs;
 import sr.types;
 import sr.vulkan;
 import sr.vulkan_render;
+import sr.rgraph;
 import eigen;
 import rstd;
 import wavsen.audio;
@@ -746,6 +747,184 @@ void TestEffectSelfCompositeStaysLocal() {
           "a self-composite does not allocate an external link target");
 }
 
+sr::SceneNode* FindWallpaperNode(sr::SceneNode* node, std::int32_t id) {
+    if (node == nullptr) return nullptr;
+    if (auto wallpaper = node->WallpaperIdentity(); wallpaper && wallpaper->value == id) return node;
+    for (auto& child : node->GetChildren()) {
+        if (auto* found = FindWallpaperNode(child.as_ptr(), id)) return found;
+    }
+    return nullptr;
+}
+
+bool GraphEmitsLayer(sr::rg::RenderGraph& graph, const sr::RenderSceneSnapshot& snapshot,
+                     std::int32_t id) {
+    const auto render_items = snapshot.renderItemsFor(sr::WallpaperLayerId { .value = id });
+    for (auto node_id : graph.topologicalOrder()) {
+        auto* pass = static_cast<sr::vulkan::VulkanPass*>(graph.getPass(node_id));
+        if (pass == nullptr) continue;
+        auto pass_item = pass->renderItemId();
+        if (! pass_item) continue;
+        for (auto item : render_items) {
+            if (item.index == pass_item->index && item.generation == pass_item->generation)
+                return true;
+        }
+    }
+    return false;
+}
+
+void TestCompositeLayerElisionAndPhysicalExtent() {
+    const char* assets_root = std::getenv("SCENERENDERER_ASSETS_DIR");
+    if (assets_root == nullptr || assets_root[0] == '\0') return;
+
+    sr::fs::VFS vfs;
+    Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(assets_root)),
+          "composite-layer regression mounts the shared assets");
+    if (! vfs.Open("/assets/models/util/composelayer.json")) return;
+
+    auto unlinked_document = sr::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {"orthogonalprojection": {"width": 1920, "height": 1080}},
+            "objects": [{
+                "id": 490,
+                "name": "Hit Region",
+                "image": "models/util/composelayer.json",
+                "alignment": "left",
+                "copybackground": true,
+                "origin": [960.0, 540.0, 0.0],
+                "scale": [2.0, 3.0, 1.0],
+                "size": [100.0, 100.0],
+                "solid": true,
+                "visible": true
+            }]
+        })JSON",
+        sr::wpscene::kSceneVersionUnknown);
+    Check(unlinked_document.has_value(), "unlinked composite fixture parses");
+    if (! unlinked_document) return;
+
+    wavsen::audio::SoundManager sound_manager;
+    sr::WPSceneParser            parser;
+    auto unlinked = parser.Parse("unlinked-composite", *unlinked_document, vfs, sound_manager);
+    Check(unlinked != nullptr, "unlinked composite fixture compiles");
+    if (! unlinked) return;
+
+    auto* unlinked_node = FindWallpaperNode(unlinked->sceneGraph.as_ptr(), 490);
+    Check(unlinked_node != nullptr, "unlinked composite keeps its scene node");
+    if (! unlinked_node) return;
+    Check(unlinked->NodeImageEffectCount(*unlinked_node) == 0,
+          "unlinked identity composite has no synthetic effect chain");
+    Check(unlinked->static_elidable_layer_ids.count(490) != 0,
+          "unlinked identity composite is statically elidable");
+    Check(unlinked_node->Camera().empty(),
+          "unlinked identity composite allocates no effect camera");
+    auto unlinked_snapshot = sr::ExtractRenderSceneSnapshot(*unlinked);
+    auto unlinked_graph    = sr::sceneToRenderGraph(*unlinked, unlinked_snapshot);
+    Check(unlinked_graph != nullptr, "unlinked composite render graph builds");
+    if (unlinked_graph) {
+        Check(! GraphEmitsLayer(*unlinked_graph, unlinked_snapshot, 490),
+              "unlinked identity composite emits no render pass");
+    }
+
+    auto linked_document = sr::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {"orthogonalprojection": {"width": 1920, "height": 1080}},
+            "objects": [{
+                "id": 490,
+                "name": "Linked Region",
+                "image": "models/util/composelayer.json",
+                "alignment": "left",
+                "copybackground": true,
+                "origin": [960.0, 540.0, 0.0],
+                "scale": [2.0, 3.0, 1.0],
+                "size": [100.0, 100.0],
+                "solid": true,
+                "visible": true
+            }, {
+                "id": 491,
+                "name": "Composite Consumer",
+                "image": "models/util/composelayer.json",
+                "config": {"passthrough": false},
+                "origin": [200.0, 200.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [100.0, 100.0],
+                "instance": {
+                    "textures": ["_rt_imageLayerComposite_490_a"]
+                },
+                "visible": true
+            }]
+        })JSON",
+        sr::wpscene::kSceneVersionUnknown);
+    Check(linked_document.has_value(), "linked composite fixture parses");
+    if (! linked_document) return;
+
+    sr::WPSceneParser linked_parser;
+    auto linked = linked_parser.Parse("linked-composite", *linked_document, vfs, sound_manager);
+    Check(linked != nullptr, "linked composite fixture compiles");
+    if (! linked) return;
+
+    auto* linked_node = FindWallpaperNode(linked->sceneGraph.as_ptr(), 490);
+    Check(linked_node != nullptr, "linked composite keeps its scene node");
+    if (! linked_node) return;
+    Check(linked->NodeImageEffectCount(*linked_node) > 0,
+          "linked composite retains a publishable effect chain");
+    Check(! linked_node->Camera().empty(), "linked composite owns an effect camera");
+    if (linked_node->Camera().empty()) return;
+
+    auto camera = linked->cameras.find(linked_node->Camera());
+    Check(camera != linked->cameras.end() && camera->second,
+          "linked composite effect camera is registered");
+    if (camera == linked->cameras.end() || ! camera->second) return;
+    auto attached = camera->second->GetAttachedNode();
+    Check(attached.is_some() && (*attached)->Parent() == linked_node,
+          "linked composite capture camera follows its aligned layer anchor");
+    if (attached.is_some()) {
+        Check(Near((*attached)->Translate().x(), 50.0f) &&
+                  Near((*attached)->Translate().y(), 0.0f),
+              "linked composite capture camera uses authored left alignment");
+    }
+
+    Check(Near(static_cast<float>(linked_node->GeometryTransform()(0, 3)), 50.0f),
+          "linked composite source geometry uses authored left alignment");
+    auto effect_layer = camera->second->GetImgEffect();
+    Check(effect_layer != nullptr, "linked composite camera retains its effect layer");
+    if (effect_layer) {
+        Check(Near(static_cast<float>(effect_layer->FinalMesh().GeometryTransform()(0, 3)), 50.0f),
+              "linked composite final geometry matches source alignment");
+    }
+
+    const std::string pingpong =
+        std::string(sr::SR_EFFECT_PPONG_PREFIX_A) + linked_node->Camera();
+    auto target = linked->renderTargets.find(pingpong);
+    Check(target != linked->renderTargets.end(), "linked composite allocates its source target");
+    if (target != linked->renderTargets.end()) {
+        Check(target->second.bind.enable && target->second.bind.screen &&
+                  target->second.bind.name == linked_node->Camera(),
+              "linked composite target defers sizing to physical output projection");
+    }
+
+    sr::vulkan::UpdateCameraFillModeForExtent(
+        *linked, sr::FillMode::ASPECTCROP, 3840, 2160);
+    const auto retina_extent =
+        sr::vulkan::ProjectedLayerPhysicalExtent(*linked, *linked_node, 3840, 2160);
+    Check(retina_extent == std::array<std::int32_t, 2> { 400, 600 },
+          "linked composite target follows Retina output pixel density");
+    const auto scaled_extent =
+        sr::vulkan::ProjectedLayerPhysicalExtent(*linked, *linked_node, 1920, 1080);
+    Check(scaled_extent == std::array<std::int32_t, 2> { 200, 300 },
+          "linked composite target follows renderer output scaling");
+
+    auto linked_snapshot = sr::ExtractRenderSceneSnapshot(*linked);
+    Check(linked_snapshot.HasLinkConsumer(sr::WallpaperLayerId { .value = 490 }),
+          "linked composite remains discoverable by its texture consumer");
+    auto linked_graph = sr::sceneToRenderGraph(*linked, linked_snapshot);
+    Check(linked_graph != nullptr, "linked composite render graph builds");
+    if (linked_graph) {
+        Check(GraphEmitsLayer(*linked_graph, linked_snapshot, 490),
+              "linked composite emits its required render pass");
+    }
+}
+
 void TestDynamicCopySnapshotMatchesSourceRequest() {
     sr::Scene scene;
     scene.renderTargets["_rt_snapshot_source"] = {
@@ -1138,6 +1317,7 @@ int main() {
     TestDirectShapeLayerState();
     TestJsonArraysAndSceneDocumentMetadata();
     TestEffectSelfCompositeStaysLocal();
+    TestCompositeLayerElisionAndPhysicalExtent();
     TestDynamicCopySnapshotMatchesSourceRequest();
     TestFinalResolvePrecedesLinkPublication();
     TestUserPropertyIndexesOwnTheirTargets();
