@@ -98,9 +98,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         SteamServiceManager.shared.start()
 
-        // Gate on any persisted assignment, not the selected display's: the
-        // selected display may have had its wallpaper stopped while other
-        // displays still hold assignments that must come back after relaunch.
         if wallpaperViewModel.hasAnyWallpaper {
             wallpaperViewModel.restoreAllDisplays()
         }
