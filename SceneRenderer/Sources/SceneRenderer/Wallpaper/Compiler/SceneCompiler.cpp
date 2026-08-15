@@ -4647,8 +4647,6 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         return;
     }
 
-    // --- font resolution: VFS first (WE shared /assets + pkg overlay),
-    //     then host system font dirs.
     std::string font_name;
     if (obj.font.is_string()) {
         font_name = rstd::cppstd::to_string(*obj.font.as_str());
@@ -4659,30 +4657,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         }
     }
 
-    text::FontCache::ResolvedBlob resolved;
-    // `systemfont_<family>` is WE's alias for a host system font — never exists
-    // in the pkg, so skip the VFS round-trip and let fontconfig resolve it.
-    // Some scenes write it with a leading dir (e.g. `fonts/systemfont_arial`),
-    // so match on the basename.
-    const bool is_systemfont =
-        std::filesystem::path(font_name).filename().native().starts_with("systemfont_");
-    if (! font_name.empty() && ! is_systemfont) {
-        // scene.json's `font` is a pkg-relative path, e.g. `fonts/2.ttf` or
-        // `fonts/workshop/<id>/X.otf`. The pkg mounts at /assets so the full
-        // VFS path is /assets/<font_name>.
-        std::string vfs_path =
-            (std::filesystem::path("/assets") / font_name).lexically_normal().native();
-        std::string blob_str = fs::GetFileContent(*context.vfs, vfs_path);
-        if (! blob_str.empty()) {
-            auto bytes = std::make_shared<std::vector<std::byte>>(blob_str.size());
-            std::memcpy(bytes->data(), blob_str.data(), blob_str.size());
-            resolved.bytes  = std::move(bytes);
-            resolved.source = vfs_path;
-        }
-    }
-    if (! resolved.bytes) {
-        resolved = text::FontCache::ResolveSystemFont(font_name, /*fallback_to_any=*/true);
-    }
+    auto resolved = text::FontCache::ResolveFont(*context.vfs, font_name);
     if (! resolved.bytes) {
         rstd_error("text '{}': could not resolve font '{}'", obj.name, font_name);
         return;

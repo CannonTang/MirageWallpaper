@@ -4,6 +4,7 @@ export module sr.text;
 import sr.types;
 import rstd.cppstd;
 import sr.scene;
+import sr.fs;
 
 export namespace sr::text
 {
@@ -157,6 +158,8 @@ public:
     //      fallback (when fallback_to_any == true)
     // Returns {nullptr, ""} if nothing matches.
     static ResolvedBlob ResolveSystemFont(std::string_view name, bool fallback_to_any = true);
+    static ResolvedBlob ResolveFont(sr::fs::VFS& vfs, std::string_view name,
+                                    bool fallback_to_any = true);
 
 private:
     struct Impl;

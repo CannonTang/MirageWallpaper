@@ -1,13 +1,20 @@
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 import sr.text;
 import sr.scene;
 import sr.spec_texs;
+import sr.fs;
+import sr.pkg_fs;
 
 namespace
 {
@@ -18,10 +25,104 @@ bool Near(float actual, float expected, float epsilon = 0.001f) {
     return false;
 }
 
+bool Check(bool value, std::string_view what) {
+    if (value) return true;
+    std::cerr << "failed: " << what << '\n';
+    return false;
+}
+
+bool WriteFile(const std::filesystem::path& path, std::string_view value) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) return false;
+    std::ofstream output(path, std::ios::binary);
+    output.write(value.data(), static_cast<std::streamsize>(value.size()));
+    return output.good();
+}
+
+std::string BlobText(const sr::text::FontCache::ResolvedBlob& blob) {
+    if (! blob.bytes) return {};
+    return std::string(reinterpret_cast<const char*>(blob.bytes->data()), blob.bytes->size());
+}
+
+bool WritePackage(const std::filesystem::path& path,
+                  const std::vector<std::pair<std::string, std::string>>& entries) {
+    std::vector<std::uint8_t> bytes;
+    const auto append_i32 = [&bytes](std::int32_t value) {
+        const auto raw = static_cast<std::uint32_t>(value);
+        for (unsigned shift = 0; shift < 32; shift += 8)
+            bytes.push_back(static_cast<std::uint8_t>(raw >> shift));
+    };
+    const auto append_string = [&bytes, &append_i32](std::string_view value) {
+        append_i32(static_cast<std::int32_t>(value.size()));
+        bytes.insert(bytes.end(), value.begin(), value.end());
+    };
+
+    append_string("PKGV0023");
+    append_i32(static_cast<std::int32_t>(entries.size()));
+    std::int32_t offset = 0;
+    for (const auto& [name, value] : entries) {
+        append_string(name);
+        append_i32(offset);
+        append_i32(static_cast<std::int32_t>(value.size()));
+        offset += static_cast<std::int32_t>(value.size());
+    }
+    for (const auto& [_, value] : entries) bytes.insert(bytes.end(), value.begin(), value.end());
+
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    return output.good();
+}
+
 } // namespace
 
 int main() {
     bool ok = true;
+
+    int marker = 0;
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("scenerenderer-font-resolution-" +
+                       std::to_string(reinterpret_cast<std::uintptr_t>(&marker)));
+    const auto shared_root = root / "shared";
+    const auto package_path = root / "scene.pkg";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    ok &= Check(WriteFile(shared_root / "fonts" / "library" / "三极萌萌简体.ttf", "shared"),
+                "write shared font fixture");
+    ok &= Check(WritePackage(package_path,
+                             { { "fonts/exact.ttf", "exact" },
+                               { "fonts/workshop/example/三极萌萌简体.ttf", "package" },
+                               { "fonts/one/duplicate.ttf", "one" },
+                               { "fonts/two/duplicate.ttf", "two" } }),
+                "write package font fixture");
+
+    sr::fs::VFS vfs;
+    ok &= Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(shared_root.string()), "assets"),
+                "mount shared font fixture");
+    auto package = sr::fs::WPPkgFs::CreatePkgFs(package_path.string(), true);
+    ok &= Check(package && vfs.Mount("/assets", std::move(package)),
+                "mount package font fixture");
+
+    const auto exact = sr::text::FontCache::ResolveFont(vfs, "fonts/exact.ttf", false);
+    ok &= Check(exact.source == "/assets/fonts/exact.ttf" && BlobText(exact) == "exact",
+                "resolve exact package font path");
+
+    const auto normalized =
+        sr::text::FontCache::ResolveFont(vfs, "fonts\\exact.ttf", false);
+    ok &= Check(normalized.source == "/assets/fonts/exact.ttf" && BlobText(normalized) == "exact",
+                "resolve normalized package font path");
+
+    const auto nested =
+        sr::text::FontCache::ResolveFont(vfs, "fonts/三极萌萌简体.ttf", false);
+    ok &= Check(nested.source == "/assets/fonts/workshop/example/三极萌萌简体.ttf" &&
+                    BlobText(nested) == "package",
+                "resolve unique package font basename");
+
+    ok &= Check(! vfs.FindUniqueByBasenameInTopMount("/assets", "duplicate.ttf")
+                       .has_value(),
+                "reject ambiguous package font basename");
+    std::filesystem::remove_all(root, ec);
 
     // Tabs in WE text are formatting artifacts and consume neither atlas
     // space nor layout width.

@@ -14,6 +14,7 @@ import rstd.log;
 import rstd.cppstd;
 import sr.scene;
 import sr.shader_compile;
+import sr.fs;
 
 namespace sr::text
 {
@@ -624,6 +625,50 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
         if (scanned > kCap) break;
     }
     return { nullptr, {} };
+}
+
+FontCache::ResolvedBlob FontCache::ResolveFont(sr::fs::VFS& vfs, std::string_view name,
+                                               bool fallback_to_any) {
+    if (name.empty()) return ResolveSystemFont(name, fallback_to_any);
+
+    auto load_vfs = [&vfs](std::string_view path) -> ResolvedBlob {
+        if (! vfs.Contains(path)) return { nullptr, {} };
+        auto stream = vfs.Open(path);
+        if (! stream || stream->Size() <= 0) return { nullptr, {} };
+        auto blob = std::make_shared<std::vector<std::byte>>(stream->Usize());
+        if (stream->Read(blob->data(), blob->size()) != blob->size()) return { nullptr, {} };
+        return { std::move(blob), std::string(path) };
+    };
+
+    std::string normalized_name { name };
+    std::replace(normalized_name.begin(), normalized_name.end(), '\\', '/');
+    std::string_view normalized_relative = normalized_name;
+    if (normalized_relative.starts_with("/assets/"))
+        normalized_relative.remove_prefix(8);
+    else if (normalized_relative.starts_with("assets/"))
+        normalized_relative.remove_prefix(7);
+    while (normalized_relative.starts_with('/')) normalized_relative.remove_prefix(1);
+
+    const std::string basename = std::filesystem::path(normalized_relative).filename().native();
+    if (basename.starts_with("systemfont_"))
+        return ResolveSystemFont(name, fallback_to_any);
+
+    std::string exact = name.starts_with('/') ? std::string(name) : "/assets/" + std::string(name);
+    if (auto resolved = load_vfs(exact); resolved.bytes) return resolved;
+
+    const std::string normalized = sr::fs::ResolveAssetPath(normalized_relative);
+    if (normalized != exact) {
+        if (auto resolved = load_vfs(normalized); resolved.bytes) return resolved;
+    }
+
+    if (! basename.empty()) {
+        auto unique = vfs.FindUniqueByBasenameInTopMount("/assets", basename);
+        if (unique) {
+            if (auto resolved = load_vfs(*unique); resolved.bytes) return resolved;
+        }
+    }
+
+    return ResolveSystemFont(name, fallback_to_any);
 }
 
 // -- Atlas snapshot -------------------------------------------------------
