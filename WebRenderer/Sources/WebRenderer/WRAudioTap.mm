@@ -319,10 +319,18 @@ static OSStatus WRTapIOProc(AudioDeviceID inDevice, const AudioTimeStamp *inNow,
 
     vDSP_vmul(window, 1, _hann, 1, window, 1, kFFT_N);
 
-    float realOut[kFFT_N];
-    float imagOut[kFFT_N];
-    static float zeroIn[kFFT_N];
-    vDSP_DFT_Execute(_dftSetup, window, zeroIn, realOut, imagOut);
+    // vDSP's real-to-complex DFT expects the time samples split even/odd
+    // across Ir/Ii (kFFT_N/2 each), not the contiguous window. Feeding the
+    // window directly as Ir transforms a different signal: only the first
+    // half of the samples are read and every frequency lands at half its
+    // true bin.
+    float splitEven[kFFT_N / 2];
+    float splitOdd[kFFT_N / 2];
+    float realOut[kFFT_N / 2];
+    float imagOut[kFFT_N / 2];
+    DSPSplitComplex packed = { .realp = splitEven, .imagp = splitOdd };
+    vDSP_ctoz((const DSPComplex *)window, 2, &packed, 1, kFFT_N / 2);
+    vDSP_DFT_Execute(_dftSetup, splitEven, splitOdd, realOut, imagOut);
 
     const NSUInteger half = kFFT_N / 2;
     const NSUInteger usableBins = half - 1;
@@ -340,7 +348,9 @@ static OSStatus WRTapIOProc(AudioDeviceID inDevice, const AudioTimeStamp *inNow,
         grouped[b] = sumMag / (float)perGroup;
     }
 
-    const float norm = 2.0f / (float)half;
+    // vDSP's real DFT is scaled 2x relative to the mathematical DFT, so the
+    // usual 2/N amplitude normalization becomes 1/half here.
+    const float norm = 1.0f / (float)half;
     const float logBase = 4.0f;
     for (NSUInteger b = 0; b < kBinCount; ++b) {
         float m = grouped[b] * norm;
