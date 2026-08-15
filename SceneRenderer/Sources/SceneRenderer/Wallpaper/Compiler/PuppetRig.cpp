@@ -361,7 +361,10 @@ WPPuppet::Animation::getInterpolationInfo(double* cur_time) const {
 }
 
 void WPPuppetLayer::prepared(std::span<AnimationLayer> alayers) {
-    m_layers.resize(alayers.size());
+    m_layers.clear();
+    m_animation_order.clear();
+    m_layers.reserve(alayers.size());
+    m_animation_order.reserve(alayers.size());
 
     const auto&           anims         = m_puppet->anims;
     const AnimationLayer* additive_base = nullptr;
@@ -383,29 +386,167 @@ void WPPuppetLayer::prepared(std::span<AnimationLayer> alayers) {
         additive_base = nullptr;
     }
 
-    std::transform(alayers.rbegin(),
-                   alayers.rend(),
-                   m_layers.rbegin(),
-                   [additive_base, this](const auto& layer) {
-                       const auto& anims     = m_puppet->anims;
-                       auto        out_layer = layer;
+    std::vector<Layer> authored;
+    authored.reserve(alayers.size());
+    for (const auto& layer : alayers) {
+        auto out_layer = layer;
+        auto it = std::find_if(anims.begin(), anims.end(), [&layer](const auto& animation) {
+            return layer.id == animation.id;
+        });
+        if (it != anims.end() && std::addressof(layer) == additive_base) {
+            out_layer.additive = false;
+        }
+        const auto handle = m_next_animation_handle++;
+        authored.push_back(Layer {
+            .anim_layer = std::move(out_layer),
+            .anim       = it != anims.end() ? std::addressof(*it) : nullptr,
+            .handle     = handle,
+            .playing    = layer.visible,
+        });
+        m_animation_order.push_back(handle);
+    }
+    m_layers.assign(authored.rbegin(), authored.rend());
+}
 
-                       auto it = std::find_if(anims.begin(), anims.end(), [&layer](auto& a) {
-                           return layer.id == a.id;
-                       });
-                       bool ok = it != anims.end() && layer.visible;
+WPPuppetLayer::Layer* WPPuppetLayer::findAnimation(AnimationHandle handle) noexcept {
+    auto it = std::find_if(m_layers.begin(), m_layers.end(), [handle](const auto& layer) {
+        return layer.handle == handle;
+    });
+    return it == m_layers.end() ? nullptr : std::addressof(*it);
+}
 
-                       if (ok && std::addressof(layer) == additive_base) {
-                           // Additive-only stacks still need one absolute frame[0]
-                           // pose; otherwise authored puppet pieces stay scattered.
-                           out_layer.additive = false;
-                       }
+const WPPuppetLayer::Layer*
+WPPuppetLayer::findAnimation(AnimationHandle handle) const noexcept {
+    auto it = std::find_if(m_layers.begin(), m_layers.end(), [handle](const auto& layer) {
+        return layer.handle == handle;
+    });
+    return it == m_layers.end() ? nullptr : std::addressof(*it);
+}
 
-                       return Layer {
-                           .anim_layer = out_layer,
-                           .anim       = ok ? std::addressof(*it) : nullptr,
-                       };
-                   });
+std::size_t WPPuppetLayer::animationLayerCount() const noexcept {
+    return m_animation_order.size();
+}
+
+std::optional<WPPuppetLayer::AnimationHandle>
+WPPuppetLayer::animationLayer(std::size_t index) const noexcept {
+    if (index >= m_animation_order.size()) return std::nullopt;
+    return m_animation_order[index];
+}
+
+std::optional<WPPuppetLayer::AnimationHandle>
+WPPuppetLayer::animationLayer(std::string_view name) const noexcept {
+    for (auto handle : m_animation_order) {
+        const auto* layer = findAnimation(handle);
+        if (layer != nullptr && layer->anim_layer.name == name) return handle;
+    }
+    return std::nullopt;
+}
+
+std::optional<WPPuppetLayer::AnimationHandle>
+WPPuppetLayer::playSingleAnimation(std::string_view name) noexcept {
+    auto source_handle = animationLayer(name);
+    if (! source_handle) return std::nullopt;
+    const auto* source = findAnimation(*source_handle);
+    if (source == nullptr || source->anim == nullptr) return std::nullopt;
+    Layer layer        = *source;
+    layer.handle       = m_next_animation_handle++;
+    layer.anim_layer.visible  = true;
+    layer.anim_layer.cur_time = 0.0;
+    layer.playing      = true;
+    layer.completed    = false;
+    layer.force_single = true;
+    layer.temporary    = true;
+    layer.retire       = false;
+    m_layers.insert(m_layers.begin(), std::move(layer));
+    m_animation_order.push_back(m_layers.front().handle);
+    return m_layers.front().handle;
+}
+
+std::optional<WPPuppetLayer::AnimationState>
+WPPuppetLayer::animationState(AnimationHandle handle) const noexcept {
+    const auto* layer = findAnimation(handle);
+    if (layer == nullptr || layer->anim == nullptr) return std::nullopt;
+    const auto& animation = *layer->anim;
+    return AnimationState {
+        .fps         = animation.fps,
+        .frame_count = animation.length,
+        .duration    = animation.max_time,
+        .name        = layer->anim_layer.name,
+        .rate        = layer->anim_layer.rate,
+        .blend       = layer->anim_layer.blend,
+        .frame       = animation.frame_time > 0.0
+                           ? layer->anim_layer.cur_time / animation.frame_time
+                           : 0.0,
+        .visible     = layer->anim_layer.visible,
+        .playing     = layer->playing,
+    };
+}
+
+bool WPPuppetLayer::setAnimationName(AnimationHandle handle, std::string name) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr) return false;
+    layer->anim_layer.name = std::move(name);
+    return true;
+}
+
+bool WPPuppetLayer::setAnimationRate(AnimationHandle handle, double rate) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr || ! std::isfinite(rate)) return false;
+    layer->anim_layer.rate = rate;
+    return true;
+}
+
+bool WPPuppetLayer::setAnimationBlend(AnimationHandle handle, double blend) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr || ! std::isfinite(blend)) return false;
+    layer->anim_layer.blend = std::clamp(blend, 0.0, 1.0);
+    return true;
+}
+
+bool WPPuppetLayer::setAnimationVisible(AnimationHandle handle, bool visible) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr) return false;
+    layer->anim_layer.visible = visible;
+    return true;
+}
+
+bool WPPuppetLayer::setAnimationFrame(AnimationHandle handle, double frame) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr || layer->anim == nullptr || ! std::isfinite(frame)) return false;
+    const double clamped = std::clamp(frame, 0.0, static_cast<double>(layer->anim->length));
+    layer->anim_layer.cur_time = layer->anim->fps > 0.0 ? clamped / layer->anim->fps : 0.0;
+    layer->completed = false;
+    layer->retire    = false;
+    return true;
+}
+
+bool WPPuppetLayer::playAnimation(AnimationHandle handle) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr || layer->anim == nullptr) return false;
+    if (layer->completed) {
+        layer->anim_layer.cur_time = layer->anim_layer.rate < 0.0 ? layer->anim->max_time : 0.0;
+    }
+    layer->playing   = true;
+    layer->completed = false;
+    layer->retire    = false;
+    return true;
+}
+
+bool WPPuppetLayer::pauseAnimation(AnimationHandle handle) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr) return false;
+    layer->playing = false;
+    return true;
+}
+
+bool WPPuppetLayer::stopAnimation(AnimationHandle handle) noexcept {
+    auto* layer = findAnimation(handle);
+    if (layer == nullptr) return false;
+    layer->anim_layer.cur_time = 0.0;
+    layer->playing             = false;
+    layer->completed           = false;
+    layer->retire              = false;
+    return true;
 }
 
 std::span<const Eigen::Affine3f> WPPuppetLayer::genFrame(double time) noexcept {
@@ -448,10 +589,48 @@ void WPPuppetLayer::updateInterpolation(double elapsed) noexcept {
     double delta   = (m_last_elapsed < 0.0) ? 0.0 : (elapsed - m_last_elapsed);
     bool   advance = (m_last_elapsed < 0.0) || (delta > 0.0);
     if (advance) m_last_elapsed = elapsed;
+    if (advance) {
+        m_layers.erase(std::remove_if(m_layers.begin(),
+                                      m_layers.end(),
+                                      [](const auto& layer) { return layer.retire; }),
+                       m_layers.end());
+        m_animation_order.erase(
+            std::remove_if(m_animation_order.begin(),
+                           m_animation_order.end(),
+                           [this](AnimationHandle handle) {
+                               return findAnimation(handle) == nullptr;
+                           }),
+            m_animation_order.end());
+    }
     for (auto& layer : m_layers) {
         if (layer) {
-            if (advance) layer.anim_layer.cur_time += delta * layer.anim_layer.rate;
-            layer.interp_info = layer.anim->getInterpolationInfo(&(layer.anim_layer.cur_time));
+            if (advance && layer.playing) {
+                layer.anim_layer.cur_time += delta * layer.anim_layer.rate;
+                const bool single = layer.force_single || layer.anim->mode == WPPuppet::PlayMode::Single;
+                if (single && layer.anim_layer.rate >= 0.0 &&
+                    layer.anim_layer.cur_time >= layer.anim->max_time) {
+                    layer.anim_layer.cur_time = layer.anim->max_time;
+                    layer.playing             = false;
+                    layer.completed           = true;
+                    layer.retire              = layer.temporary;
+                } else if (single && layer.anim_layer.rate < 0.0 &&
+                           layer.anim_layer.cur_time <= 0.0) {
+                    layer.anim_layer.cur_time = 0.0;
+                    layer.playing             = false;
+                    layer.completed           = true;
+                    layer.retire              = layer.temporary;
+                }
+            }
+            if (layer.force_single) {
+                genSingleInterpolationInfo(layer.interp_info,
+                                           layer.anim_layer.cur_time,
+                                           static_cast<u32>(layer.anim->length),
+                                           layer.anim->frame_time,
+                                           layer.anim->max_time);
+            } else {
+                layer.interp_info =
+                    layer.anim->getInterpolationInfo(&(layer.anim_layer.cur_time));
+            }
         }
     }
 }

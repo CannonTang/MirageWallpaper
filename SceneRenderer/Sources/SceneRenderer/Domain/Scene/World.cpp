@@ -740,14 +740,20 @@ bool SceneAnimationCurve::Empty() const { return c0.empty() && c1.empty() && c2.
 
 SceneAnimationPlayback::SceneAnimationPlayback(std::string name, float fps,
                                                std::int32_t frame_count, std::string mode,
-                                               bool wraploop, bool start_paused)
+                                               bool wraploop, bool start_paused,
+                                               std::vector<SceneAnimationEvent> events)
     : m_name(std::move(name)),
       m_fps(fps > 0.0f ? fps : 30.0f),
       m_frame_count(std::max(frame_count, 0)),
       m_mode(std::move(mode)),
       m_wraploop(wraploop),
       m_status(start_paused ? SceneAnimationPlaybackStatus::Paused
-                            : SceneAnimationPlaybackStatus::Playing) {}
+                            : SceneAnimationPlaybackStatus::Playing),
+      m_events(std::move(events)) {
+    std::sort(m_events.begin(), m_events.end(), [](const auto& left, const auto& right) {
+        return left.frame < right.frame;
+    });
+}
 
 bool SceneAnimationPlayback::Loops() const {
     return m_wraploop || m_mode == "loop" || m_mode == "repeat";
@@ -786,7 +792,19 @@ void SceneAnimationPlayback::Tick(double runtime) {
     const double delta = std::max(runtime - *m_last_runtime, 0.0);
     m_last_runtime     = runtime;
     if (! IsPlaying() || delta == 0.0 || m_frame_count <= 0) return;
+    const double previous = m_phase_frame;
     m_phase_frame += delta * static_cast<double>(m_fps) * m_rate;
+    if (m_mode != "mirror" && ! Loops()) {
+        const double low  = std::min(previous, m_phase_frame);
+        const double high = std::max(previous, m_phase_frame);
+        for (const auto& event : m_events) {
+            const double frame = static_cast<double>(event.frame);
+            if ((m_rate >= 0.0 && frame > low && frame <= high) ||
+                (m_rate < 0.0 && frame >= low && frame < high)) {
+                m_pending_events.push_back(event);
+            }
+        }
+    }
     if (m_mode == "mirror" || Loops()) return;
     const double end = static_cast<double>(m_frame_count);
     if (m_rate >= 0.0 && m_phase_frame >= end) {
@@ -809,6 +827,7 @@ void SceneAnimationPlayback::Play() {
 void SceneAnimationPlayback::Stop() {
     m_phase_frame = 0.0;
     m_status      = SceneAnimationPlaybackStatus::Stopped;
+    m_pending_events.clear();
 }
 
 void SceneAnimationPlayback::Pause() {
@@ -822,10 +841,17 @@ void SceneAnimationPlayback::SetFrame(double frame) {
     if (m_status == SceneAnimationPlaybackStatus::Stopped ||
         m_status == SceneAnimationPlaybackStatus::Completed)
         m_status = SceneAnimationPlaybackStatus::Paused;
+    m_pending_events.clear();
 }
 
 void SceneAnimationPlayback::SetRate(double rate) {
     if (std::isfinite(rate)) m_rate = rate;
+}
+
+std::vector<SceneAnimationEvent> SceneAnimationPlayback::ConsumeEvents() {
+    std::vector<SceneAnimationEvent> out;
+    out.swap(m_pending_events);
+    return out;
 }
 
 float SceneAnimationCurve::EvaluateScalar(float base, double runtime) const {
@@ -865,6 +891,20 @@ void SceneNode::RegisterFieldAnimation(
         m_field_animation_playbacks.end())
         m_field_animation_playbacks.push_back(playback);
     if (! playback->Name().empty()) m_named_field_animations[playback->Name()] = playback;
+}
+
+void SceneNode::RegisterAnimationPlayback(
+    const std::shared_ptr<SceneAnimationPlayback>& playback) {
+    RegisterFieldAnimation(playback);
+}
+
+std::vector<SceneAnimationEvent> SceneNode::ConsumeAnimationEvents() {
+    std::vector<SceneAnimationEvent> events;
+    for (const auto& playback : m_field_animation_playbacks) {
+        auto pending = playback->ConsumeEvents();
+        for (auto& event : pending) events.push_back(std::move(event));
+    }
+    return events;
 }
 
 std::shared_ptr<SceneAnimationPlayback>

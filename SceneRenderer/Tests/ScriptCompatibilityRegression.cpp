@@ -748,6 +748,252 @@ void TestCursorClickOrder() {
           "release outside the pressed node does not dispatch cursorClick");
 }
 
+void TestPuppetAnimationCompatibility() {
+    struct State {
+        sr::script::AnimationLayerSnapshot snapshot;
+        bool                               single_called { false };
+    };
+    auto regular = std::make_shared<State>();
+    regular->snapshot = {
+        .fps         = 30.0,
+        .frame_count = 60,
+        .duration    = 2.0,
+        .name        = "ear",
+        .rate        = 1.0,
+        .blend       = 1.0,
+        .frame       = 0.0,
+        .visible     = false,
+        .playing     = false,
+    };
+    auto single = std::make_shared<State>();
+    single->snapshot = {
+        .fps         = 30.0,
+        .frame_count = 30,
+        .duration    = 1.0,
+        .name        = "turn",
+        .rate        = 1.0,
+        .blend       = 1.0,
+        .frame       = 0.0,
+        .visible     = true,
+        .playing     = true,
+    };
+    auto control = [](const std::shared_ptr<State>& state) {
+        return sr::script::AnimationLayerControl {
+            .snapshot = [state] { return std::optional(state->snapshot); },
+            .set_name = [state](std::string name) { state->snapshot.name = std::move(name); },
+            .set_rate = [state](double rate) { state->snapshot.rate = rate; },
+            .set_blend = [state](double blend) { state->snapshot.blend = blend; },
+            .set_visible = [state](bool visible) { state->snapshot.visible = visible; },
+            .set_frame = [state](double frame) { state->snapshot.frame = frame; },
+            .play = [state] { state->snapshot.playing = true; },
+            .pause = [state] { state->snapshot.playing = false; },
+            .stop = [state] {
+                state->snapshot.playing = false;
+                state->snapshot.frame   = 0.0;
+            },
+        };
+    };
+
+    sr::SceneNode node;
+    sr::script::JsRuntime runtime;
+    runtime.SetAnimationLayerResolvers(
+        [](sr::SceneNode*) { return std::size_t { 1 }; },
+        [regular, control](sr::SceneNode*, const sr::script::AnimationLayerKey& key)
+            -> std::optional<sr::script::AnimationLayerControl> {
+            if (const auto* index = std::get_if<std::size_t>(&key); index && *index == 0)
+                return control(regular);
+            if (const auto* name = std::get_if<std::string>(&key); name && *name == "ear")
+                return control(regular);
+            return std::nullopt;
+        },
+        [single, control](sr::SceneNode*, std::string_view name)
+            -> std::optional<sr::script::AnimationLayerControl> {
+            if (name != "turn") return std::nullopt;
+            single->single_called = true;
+            return control(single);
+        });
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let step = 0;
+            export function update() {
+                if (step++ === 0) {
+                    const animation = thisLayer.getAnimationLayer('ear');
+                    animation.visible = true;
+                    animation.rate = 2;
+                    animation.blend = 0.25;
+                    animation.setFrame(4);
+                    animation.play();
+                    return new Vec4(thisLayer.getAnimationLayerCount(),
+                        animation.visible ? 1 : 0, animation.getFrame(),
+                        animation.isPlaying() ? 1 : 0);
+                }
+                const animation = thisLayer.playSingleAnimation('turn');
+                animation.stop();
+                return new Vec4(animation.name === 'turn' ? 1 : 0,
+                    animation.isPlaying() ? 1 : 0, animation.visible ? 1 : 0,
+                    animation.frameCount);
+            }
+        )JS",
+        "test/puppet_animation_compatibility",
+        sr::script::FieldKind::Vec4,
+        Parse("{}"),
+        Parse("\"0 0 0 0\""),
+        &node);
+    Check(script != nullptr, "puppet animation script compiles");
+    if (! script) return;
+
+    runtime.TickAll();
+    const auto* first = std::get_if<sr::script::Vec4Value>(&script->last_value());
+    Check(first && first->x == 1.0 && first->y == 1.0 && first->z == 4.0 && first->w == 1.0,
+          "getAnimationLayer exposes live puppet state");
+    Check(regular->snapshot.visible && regular->snapshot.playing &&
+              std::abs(regular->snapshot.rate - 2.0) < 0.001 &&
+              std::abs(regular->snapshot.blend - 0.25) < 0.001,
+          "puppet animation setters reach the resolver");
+
+    runtime.TickAll();
+    const auto* second = std::get_if<sr::script::Vec4Value>(&script->last_value());
+    Check(single->single_called && second && second->x == 1.0 && second->y == 0.0 &&
+              second->z == 1.0 && second->w == 30.0,
+          "playSingleAnimation returns a controllable temporary layer");
+}
+
+void TestAnimationEventDispatch() {
+    sr::SceneNode node;
+    auto playback = std::make_shared<sr::SceneAnimationPlayback>(
+        "900",
+        30.0f,
+        30,
+        "single",
+        false,
+        true,
+        std::vector<sr::SceneAnimationEvent> { { .frame = 30, .name = "houye" } });
+    node.RegisterAnimationPlayback(playback);
+
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let value = 0;
+            export function animationEvent(event) {
+                if (event.name === 'houye') value = event.frame;
+            }
+            export function update() { return value; }
+        )JS",
+        "test/animation_event_dispatch",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        &node);
+    Check(script != nullptr, "animation event script compiles");
+    if (! script) return;
+
+    node.TickFieldAnimations(0.0);
+    playback->Play();
+    node.TickFieldAnimations(0.4);
+    runtime.TickAll();
+    const auto* before = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(before && before->v == 0.0, "animation event waits for its marker");
+
+    node.TickFieldAnimations(1.2);
+    runtime.TickAll();
+    const auto* after = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(after && after->v == 30.0, "animation event fires when a frame step crosses its marker");
+}
+
+void TestProjectedCursorHit() {
+    sr::SceneNode node;
+    node.SetSize({ 100.0f, 100.0f });
+
+    sr::script::JsRuntime runtime;
+    runtime.SetCursorProjectionResolver([](sr::SceneNode*) {
+        Eigen::Matrix4d projection = Eigen::Matrix4d::Identity();
+        projection(0, 0) = 0.01;
+        projection(1, 1) = 0.01;
+        projection(0, 3) = 0.5;
+        return std::optional(sr::script::CursorProjection {
+            .model                 = Eigen::Matrix4d::Identity(),
+            .model_view_projection = projection,
+        });
+    });
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let result = new Vec2(0, 0);
+            export function cursorClick(event) {
+                result = new Vec2(event.localPosition.x + 1, event.worldPosition.x + 1);
+            }
+            export function update() { return result; }
+        )JS",
+        "test/projected_cursor_hit",
+        sr::script::FieldKind::Vec2,
+        Parse("{}"),
+        Parse("\"0 0\""),
+        &node);
+    Check(script != nullptr, "projected cursor script compiles");
+    if (! script) return;
+
+    sr::script::FrameInputs input;
+    input.cursor_x              = 0.75f;
+    input.cursor_y              = 0.5f;
+    input.cursor_in_window      = true;
+    input.mouse_buttons_down    = 1;
+    input.mouse_buttons_pressed = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    input.mouse_buttons_down     = 0;
+    input.mouse_buttons_pressed  = 0;
+    input.mouse_buttons_released = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    const auto* result = std::get_if<sr::script::Vec2Value>(&script->last_value());
+    Check(result && std::abs(result->x - 1.0) < 0.001 &&
+              std::abs(result->y - 1.0) < 0.001,
+          "cursor hit testing uses the rendered projection and reports local coordinates");
+}
+
+void TestDegenerateProjectedCursorMisses() {
+    sr::SceneNode node;
+    node.SetSize({ 100.0f, 100.0f });
+
+    sr::script::JsRuntime runtime;
+    runtime.SetCursorProjectionResolver([](sr::SceneNode*) {
+        Eigen::Matrix4d projection = Eigen::Matrix4d::Zero();
+        projection(3, 3) = 1.0;
+        return std::optional(sr::script::CursorProjection {
+            .model                 = Eigen::Matrix4d::Identity(),
+            .model_view_projection = projection,
+        });
+    });
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let clicks = 0;
+            export function cursorClick() { clicks++; }
+            export function update() { return clicks; }
+        )JS",
+        "test/degenerate_projected_cursor_miss",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        &node);
+    Check(script != nullptr, "degenerate projected cursor script compiles");
+    if (! script) return;
+
+    sr::script::FrameInputs input;
+    input.cursor_x              = 0.5f;
+    input.cursor_y              = 0.5f;
+    input.cursor_in_window      = true;
+    input.mouse_buttons_down    = 1;
+    input.mouse_buttons_pressed = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    input.mouse_buttons_down     = 0;
+    input.mouse_buttons_pressed  = 0;
+    input.mouse_buttons_released = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    const auto* clicks = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(clicks && clicks->v == 0.0, "degenerate projected geometry cannot receive clicks");
+}
+
 void TestPrimitiveEngineUserPropertyValues() {
     sr::script::JsRuntime runtime;
     auto* script = runtime.MakeFieldScript(
@@ -844,6 +1090,10 @@ int main() {
     TestEffectAndMaterialCompatibility();
     TestTimelineAnimationCompatibility();
     TestCursorClickOrder();
+    TestPuppetAnimationCompatibility();
+    TestAnimationEventDispatch();
+    TestProjectedCursorHit();
+    TestDegenerateProjectedCursorMisses();
     TestPrimitiveEngineUserPropertyValues();
     TestMixedAudioBufferResolutions();
     if (g_failures == 0) std::cout << "ScriptCompatibilityRegression: ok\n";

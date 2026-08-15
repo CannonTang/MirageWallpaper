@@ -45,6 +45,37 @@ struct BoneTranslation {
     float x { 0.0f }, y { 0.0f }, z { 0.0f };
 };
 
+struct AnimationLayerSnapshot {
+    double      fps { 0.0 };
+    std::int32_t frame_count { 0 };
+    double      duration { 0.0 };
+    std::string name;
+    double      rate { 1.0 };
+    double      blend { 1.0 };
+    double      frame { 0.0 };
+    bool        visible { false };
+    bool        playing { false };
+};
+
+struct AnimationLayerControl {
+    std::function<std::optional<AnimationLayerSnapshot>()> snapshot;
+    std::function<void(std::string)>                        set_name;
+    std::function<void(double)>                             set_rate;
+    std::function<void(double)>                             set_blend;
+    std::function<void(bool)>                               set_visible;
+    std::function<void(double)>                             set_frame;
+    std::function<void()>                                   play;
+    std::function<void()>                                   pause;
+    std::function<void()>                                   stop;
+};
+
+using AnimationLayerKey = std::variant<std::size_t, std::string>;
+
+struct CursorProjection {
+    Eigen::Matrix4d model { Eigen::Matrix4d::Identity() };
+    Eigen::Matrix4d model_view_projection { Eigen::Matrix4d::Identity() };
+};
+
 // What kind of value a FieldScript is expected to produce. Set at parse
 // time based on the field name's well-known type — see the per-field-kind
 // table in the API doc.
@@ -188,6 +219,20 @@ public:
         std::function<std::optional<BoneTranslation>(sr::SceneNode*, uint32_t, double)>;
     void SetBoneResolvers(BoneIndexResolver     index_resolver,
                           BoneTransformResolver transform_resolver);
+
+    using AnimationLayerCountResolver = std::function<std::size_t(sr::SceneNode*)>;
+    using AnimationLayerResolver =
+        std::function<std::optional<AnimationLayerControl>(sr::SceneNode*,
+                                                            const AnimationLayerKey&)>;
+    using PlaySingleAnimationResolver =
+        std::function<std::optional<AnimationLayerControl>(sr::SceneNode*, std::string_view)>;
+    void SetAnimationLayerResolvers(AnimationLayerCountResolver count_resolver,
+                                    AnimationLayerResolver      layer_resolver,
+                                    PlaySingleAnimationResolver single_resolver);
+
+    using CursorProjectionResolver =
+        std::function<std::optional<CursorProjection>(sr::SceneNode*)>;
+    void SetCursorProjectionResolver(CursorProjectionResolver resolver);
 
     // Drive every alive FieldScript once. Invokes their cached `update`
     // export and stores the coerced return into FieldScript::last_value().

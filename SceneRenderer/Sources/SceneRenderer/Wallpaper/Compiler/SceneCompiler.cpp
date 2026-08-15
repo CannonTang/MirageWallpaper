@@ -253,6 +253,40 @@ std::shared_ptr<WPPuppetLayer> LookupPuppetLayer(const std::shared_ptr<PuppetLay
     return fallback_it == layers->fallback_by_node.end() ? nullptr : fallback_it->second;
 }
 
+script::AnimationLayerControl
+MakeAnimationLayerControl(std::shared_ptr<WPPuppetLayer> layer,
+                          WPPuppetLayer::AnimationHandle handle) {
+    return script::AnimationLayerControl {
+        .snapshot = [layer, handle]() -> std::optional<script::AnimationLayerSnapshot> {
+            auto state = layer->animationState(handle);
+            if (! state) return std::nullopt;
+            return script::AnimationLayerSnapshot {
+                .fps         = state->fps,
+                .frame_count = state->frame_count,
+                .duration    = state->duration,
+                .name        = state->name,
+                .rate        = state->rate,
+                .blend       = state->blend,
+                .frame       = state->frame,
+                .visible     = state->visible,
+                .playing     = state->playing,
+            };
+        },
+        .set_name = [layer, handle](std::string name) {
+            layer->setAnimationName(handle, std::move(name));
+        },
+        .set_rate = [layer, handle](double rate) { layer->setAnimationRate(handle, rate); },
+        .set_blend = [layer, handle](double blend) { layer->setAnimationBlend(handle, blend); },
+        .set_visible = [layer, handle](bool visible) {
+            layer->setAnimationVisible(handle, visible);
+        },
+        .set_frame = [layer, handle](double frame) { layer->setAnimationFrame(handle, frame); },
+        .play      = [layer, handle] { layer->playAnimation(handle); },
+        .pause     = [layer, handle] { layer->pauseAnimation(handle); },
+        .stop      = [layer, handle] { layer->stopAnimation(handle); },
+    };
+}
+
 SceneNode* RootOf(SceneNode* node) {
     if (! node) return nullptr;
     while (node->Parent()) node = node->Parent();
@@ -462,6 +496,43 @@ script::ScriptScene& EnsureScriptScene(ParseContext& context) {
                 world.matrix()        = node->ModelTrans().cast<float>();
                 Eigen::Vector3f t     = (world * *bone).translation();
                 return script::BoneTranslation { t.x(), t.y(), t.z() };
+            });
+        context.script_scene->runtime().SetAnimationLayerResolvers(
+            [layers](SceneNode* node) -> std::size_t {
+                auto layer = LookupPuppetLayer(layers, node);
+                return layer ? layer->animationLayerCount() : 0;
+            },
+            [layers](SceneNode* node,
+                     const script::AnimationLayerKey& key)
+                -> std::optional<script::AnimationLayerControl> {
+                auto layer = LookupPuppetLayer(layers, node);
+                if (! layer) return std::nullopt;
+                std::optional<WPPuppetLayer::AnimationHandle> handle;
+                if (const auto* index = std::get_if<std::size_t>(&key))
+                    handle = layer->animationLayer(*index);
+                else
+                    handle = layer->animationLayer(std::get<std::string>(key));
+                if (! handle) return std::nullopt;
+                return MakeAnimationLayerControl(std::move(layer), *handle);
+            },
+            [layers](SceneNode* node,
+                     std::string_view name) -> std::optional<script::AnimationLayerControl> {
+                auto layer = LookupPuppetLayer(layers, node);
+                if (! layer) return std::nullopt;
+                auto handle = layer->playSingleAnimation(name);
+                if (! handle) return std::nullopt;
+                return MakeAnimationLayerControl(std::move(layer), *handle);
+            });
+        auto* updater = context.shader_updater;
+        context.script_scene->runtime().SetCursorProjectionResolver(
+            [updater](SceneNode* node) -> std::optional<script::CursorProjection> {
+                if (updater == nullptr) return std::nullopt;
+                auto transform = updater->NodeRenderTransform(node);
+                if (! transform) return std::nullopt;
+                return script::CursorProjection {
+                    .model                 = transform->model,
+                    .model_view_projection = transform->model_view_projection,
+                };
             });
         if (context.user_properties.is_some())
             (*context.user_properties)->iter().for_each([&](auto entry) {
@@ -784,6 +855,20 @@ SceneAnimationCurve ToSceneAnimationCurve(const wpscene::AnimCurve& curve) {
     return out;
 }
 
+std::vector<SceneAnimationEvent> ToSceneAnimationEvents(const Json& events) {
+    std::vector<SceneAnimationEvent> out;
+    auto array = events.as_array();
+    if (array.is_none()) return out;
+    out.reserve((*array)->len());
+    for (const auto& value : **array) {
+        SceneAnimationEvent event;
+        if (! GetJsonValue(value, "name", event.name, false) || event.name.empty()) continue;
+        GetJsonValue(value, "frame", event.frame, false);
+        out.push_back(std::move(event));
+    }
+    return out;
+}
+
 void AssignCurve(SceneAnimationCurve& dst, const wpscene::FieldBindings& bindings,
                  std::string_view field) {
     auto it = bindings.animations.find(std::string(field));
@@ -833,7 +918,8 @@ void AssignNodeFieldAnimations(SceneNode& node, const wpscene::FieldBindings& bi
             curve.mode     = source.options.mode;
             curve.wraploop = source.options.wraploop;
         }
-        if (! source.options.name.empty() || source.options.startpaused) {
+        auto events = ToSceneAnimationEvents(source.options.events);
+        if (! source.options.name.empty() || source.options.startpaused || ! events.empty()) {
             auto& playback = playbacks[root];
             if (! playback) {
                 playback = std::make_shared<SceneAnimationPlayback>(source.options.name,
@@ -841,7 +927,8 @@ void AssignNodeFieldAnimations(SceneNode& node, const wpscene::FieldBindings& bi
                                                                     source.options.length,
                                                                     source.options.mode,
                                                                     source.options.wraploop,
-                                                                    source.options.startpaused);
+                                                                    source.options.startpaused,
+                                                                    std::move(events));
             }
             curve.playback = playback;
         }
@@ -2335,6 +2422,13 @@ void RegisterShaderUserVarIndex(ParseContext& context, SceneNode* owner,
         pScene->shader_user_var_index[wallpaper_key].push_back({ stable_mat, glname });
     }
 
+    if (owner) {
+        for (const auto& [_, animation] : stable_mat->customShader.valueAnimations) {
+            if (animation.curve && animation.curve->playback)
+                owner->RegisterAnimationPlayback(animation.curve->playback);
+        }
+    }
+
     if (! owner || wpmat.constantshadervalues_bindings.scripts.empty()) return;
     auto& scripts = EnsureScriptScene(context);
     for (const auto& [material_key, binding] :
@@ -2537,6 +2631,47 @@ void LoadConstvalue(
     ParseContext& context, SceneMaterial& material, const wpscene::Material& wpmat,
     const WPShaderInfo& info,
     sr::Map<std::string, SceneShaderValueAnimation>* final_quad_shader_values = nullptr) {
+    std::unordered_map<std::string, std::string> parents;
+    for (const auto& [field, animation] : wpmat.constantshadervalues_animations) {
+        if (auto children = animation.options.children.as_array(); children.is_some()) {
+            for (const auto& child : **children) {
+                if (auto key = AnimationLinkKey(child)) parents[*key] = field;
+            }
+        }
+        if (auto parent = AnimationLinkKey(animation.options.parent)) parents[field] = *parent;
+    }
+    auto root_field = [&](std::string field) {
+        std::unordered_set<std::string> visited;
+        while (visited.insert(field).second) {
+            auto it = parents.find(field);
+            if (it == parents.end() ||
+                ! wpmat.constantshadervalues_animations.contains(it->second))
+                break;
+            field = it->second;
+        }
+        return field;
+    };
+    std::unordered_map<std::string, std::shared_ptr<SceneAnimationPlayback>> playbacks;
+    auto playback_for = [&](std::string_view field) -> std::shared_ptr<SceneAnimationPlayback> {
+        auto root = root_field(std::string(field));
+        auto source_it = wpmat.constantshadervalues_animations.find(root);
+        if (source_it == wpmat.constantshadervalues_animations.end()) return nullptr;
+        const auto& source = source_it->second;
+        auto events        = ToSceneAnimationEvents(source.options.events);
+        if (source.options.name.empty() && ! source.options.startpaused && events.empty())
+            return nullptr;
+        auto& playback = playbacks[root];
+        if (! playback) {
+            playback = std::make_shared<SceneAnimationPlayback>(source.options.name,
+                                                                 source.options.fps,
+                                                                 source.options.length,
+                                                                 source.options.mode,
+                                                                 source.options.wraploop,
+                                                                 source.options.startpaused,
+                                                                 std::move(events));
+        }
+        return playback;
+    };
     // load glname from alias and load to constvalue
     for (const auto& cs : wpmat.constantshadervalues) {
         const auto&               name   = cs.first;
@@ -2575,6 +2710,7 @@ void LoadConstvalue(
                 it != wpmat.constantshadervalues_animations.end()) {
                 auto curve =
                     std::make_shared<SceneAnimationCurve>(ToSceneAnimationCurve(it->second));
+                curve->playback = playback_for(name);
                 if (final_quad_value) final_quad_value->curve = curve;
                 if (normalize_position) {
                     curve = std::make_shared<SceneAnimationCurve>(*curve);
@@ -3634,8 +3770,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                     svData.effect_projection_size = { static_cast<float>(effect_extent[0]),
                                                       static_cast<float>(effect_extent[1]) };
                     if (puppet && wpmat.use_puppet) {
-                        svData.puppet_layer =
-                            MakePuppetLayer(puppet->puppet, wpimgobj.puppet_layers);
+                        svData.puppet_layer = image_puppet_layer;
                         RegisterPuppetLayer(context, spEffNode.as_ptr(), svData.puppet_layer);
                     }
                 }

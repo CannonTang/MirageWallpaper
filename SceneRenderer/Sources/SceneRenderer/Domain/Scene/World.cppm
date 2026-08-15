@@ -1048,10 +1048,16 @@ struct SceneAnimationKey {
 
 enum class SceneAnimationPlaybackStatus { Playing, Paused, Stopped, Completed };
 
+struct SceneAnimationEvent {
+    std::int32_t frame { 0 };
+    std::string  name;
+};
+
 class SceneAnimationPlayback {
 public:
     SceneAnimationPlayback(std::string name, float fps, std::int32_t frame_count,
-                           std::string mode, bool wraploop, bool start_paused);
+                           std::string mode, bool wraploop, bool start_paused,
+                           std::vector<SceneAnimationEvent> events = {});
 
     void Tick(double runtime);
     void Play();
@@ -1059,6 +1065,7 @@ public:
     void Pause();
     void SetFrame(double frame);
     void SetRate(double rate);
+    std::vector<SceneAnimationEvent> ConsumeEvents();
 
     float                        Frame() const;
     bool                         IsPlaying() const;
@@ -1081,6 +1088,8 @@ private:
     double                       m_phase_frame { 0.0 };
     std::optional<double>        m_last_runtime;
     SceneAnimationPlaybackStatus m_status { SceneAnimationPlaybackStatus::Playing };
+    std::vector<SceneAnimationEvent> m_events;
+    std::vector<SceneAnimationEvent> m_pending_events;
 };
 
 struct SceneAnimationCurve {
@@ -1338,9 +1347,12 @@ public:
         m_alpha_curve = std::move(curve);
     }
     void TickFieldAnimations(double runtime);
+    void RegisterAnimationPlayback(const std::shared_ptr<SceneAnimationPlayback>& playback);
+    std::vector<SceneAnimationEvent> ConsumeAnimationEvents();
     std::shared_ptr<SceneAnimationPlayback> FindAnimation(std::string_view name) const;
     bool HasFieldAnimations() const {
-        return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve;
+        return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve ||
+               ! m_field_animation_playbacks.empty();
     }
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
 

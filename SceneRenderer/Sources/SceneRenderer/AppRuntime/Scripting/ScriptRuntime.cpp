@@ -543,6 +543,10 @@ struct EngineHostState {
     std::unordered_map<sr::SceneNode*, TextOriginHooks> text_origin_hooks;
     JsRuntime::BoneIndexResolver                        bone_index_resolver;
     JsRuntime::BoneTransformResolver                    bone_transform_resolver;
+    JsRuntime::AnimationLayerCountResolver              animation_layer_count_resolver;
+    JsRuntime::AnimationLayerResolver                   animation_layer_resolver;
+    JsRuntime::PlaySingleAnimationResolver              play_single_animation_resolver;
+    JsRuntime::CursorProjectionResolver                 cursor_projection_resolver;
     sr::SceneNode*                                     scene_root { nullptr };
     // --- untrusted-script sandbox state ------------------------------------
     // Workshop packages ship arbitrary JS, so every host->script call runs
@@ -1153,6 +1157,12 @@ struct CursorWorld {
     double x { 0 }, y { 0 };
 };
 
+struct CursorNodePoint {
+    CursorWorld world;
+    CursorWorld local;
+    bool        inside { false };
+};
+
 CursorWorld CursorToWorld(const FrameInputs& fi) {
     return CursorWorld {
         .x = double(fi.cursor_x) * double(fi.canvas_w),
@@ -1234,10 +1244,101 @@ void UpdateInputObject(JSContext* ctx) {
     JS_FreeValue(ctx, g);
 }
 
-bool HitTestNode(sr::SceneNode* n, const CursorWorld& c) {
-    if (! n) return false;
+CursorNodePoint ResolveCursorNode(EngineHostState* host, sr::SceneNode* n,
+                                  const CursorWorld& fallback) {
+    CursorNodePoint result {
+        .world  = fallback,
+        .local  = fallback,
+        .inside = false,
+    };
+    if (! n) return result;
+
+    if (host != nullptr && host->cursor_projection_resolver) {
+        auto projection = host->cursor_projection_resolver(n);
+        if (projection) {
+            const Eigen::Vector2d point {
+                static_cast<double>(host->inputs.cursor_x) * 2.0 - 1.0,
+                1.0 - static_cast<double>(host->inputs.cursor_y) * 2.0,
+            };
+            Eigen::Vector2f size = n->Size();
+            if (size.x() == 0.0f && size.y() == 0.0f)
+                size = Eigen::Vector2f { 100.0f, 100.0f };
+            const double hx = static_cast<double>(size.x()) * 0.5;
+            const double hy = static_cast<double>(size.y()) * 0.5;
+            const std::array<Eigen::Vector4d, 4> local_corners {
+                Eigen::Vector4d { -hx, -hy, 0.0, 1.0 },
+                Eigen::Vector4d { hx, -hy, 0.0, 1.0 },
+                Eigen::Vector4d { hx, hy, 0.0, 1.0 },
+                Eigen::Vector4d { -hx, hy, 0.0, 1.0 },
+            };
+            std::array<Eigen::Vector2d, 4> screen_corners;
+            bool projected = true;
+            for (std::size_t index = 0; index < local_corners.size(); ++index) {
+                Eigen::Vector4d clip =
+                    projection->model_view_projection * local_corners[index];
+                if (! clip.allFinite() || std::abs(clip.w()) < 1e-12) {
+                    projected = false;
+                    break;
+                }
+                screen_corners[index] = clip.head<2>() / clip.w();
+            }
+            if (projected) {
+                double area = 0.0;
+                for (std::size_t index = 0; index < screen_corners.size(); ++index) {
+                    const auto& a = screen_corners[index];
+                    const auto& b = screen_corners[(index + 1) % screen_corners.size()];
+                    area += a.x() * b.y() - b.x() * a.y();
+                }
+                double sign = 0.0;
+                bool   inside = std::isfinite(area) && std::abs(area) > 1e-10;
+                for (std::size_t index = 0; index < screen_corners.size(); ++index) {
+                    if (! inside) break;
+                    const auto& a = screen_corners[index];
+                    const auto& b = screen_corners[(index + 1) % screen_corners.size()];
+                    const double cross =
+                        (b.x() - a.x()) * (point.y() - a.y()) -
+                        (b.y() - a.y()) * (point.x() - a.x());
+                    if (std::abs(cross) <= 1e-10) continue;
+                    if (sign == 0.0)
+                        sign = cross;
+                    else if ((sign > 0.0) != (cross > 0.0)) {
+                        inside = false;
+                        break;
+                    }
+                }
+                result.inside = inside;
+            }
+
+            const double determinant = projection->model_view_projection.determinant();
+            if (std::isfinite(determinant) && std::abs(determinant) > 1e-12) {
+                const Eigen::Matrix4d inverse = projection->model_view_projection.inverse();
+                auto unproject = [&](double z) -> std::optional<Eigen::Vector3d> {
+                    Eigen::Vector4d local = inverse * Eigen::Vector4d { point.x(), point.y(), z, 1.0 };
+                    if (! local.allFinite() || std::abs(local.w()) < 1e-12) return std::nullopt;
+                    return local.head<3>() / local.w();
+                };
+                auto near = unproject(-1.0);
+                auto far  = unproject(1.0);
+                if (near && far) {
+                    Eigen::Vector3d local = *near;
+                    Eigen::Vector3d ray   = *far - *near;
+                    if (std::abs(ray.z()) > 1e-12) local += ray * (-local.z() / ray.z());
+                    Eigen::Vector4d world =
+                        projection->model * Eigen::Vector4d { local.x(), local.y(), 0.0, 1.0 };
+                    if (world.allFinite() && std::abs(world.w()) > 1e-12) {
+                        world /= world.w();
+                        result.world = CursorWorld { .x = world.x(), .y = world.y() };
+                    }
+                    result.local = CursorWorld { .x = local.x(), .y = local.y() };
+                }
+            }
+            return result;
+        }
+    }
+
     n->UpdateTrans();
     Eigen::Matrix4d m  = n->ModelTrans() * n->GeometryTransform();
+    if (n->Mesh()) m *= n->Mesh()->GeometryTransform();
     Eigen::Vector2f sz = n->Size();
     if (sz.x() == 0.0f && sz.y() == 0.0f) sz = Eigen::Vector2f { 100.0f, 100.0f };
     double          hx = sz.x() * 0.5, hy = sz.y() * 0.5;
@@ -1255,28 +1356,60 @@ bool HitTestNode(sr::SceneNode* n, const CursorWorld& c) {
         miny              = std::min(miny, w.y());
         maxy              = std::max(maxy, w.y());
     }
-    return c.x >= minx && c.x <= maxx && c.y >= miny && c.y <= maxy;
+    result.inside = fallback.x >= minx && fallback.x <= maxx && fallback.y >= miny &&
+                    fallback.y <= maxy;
+    const double determinant = m.determinant();
+    if (std::isfinite(determinant) && std::abs(determinant) > 1e-12) {
+        Eigen::Vector4d local = m.inverse() *
+                                Eigen::Vector4d { fallback.x, fallback.y, 0.0, 1.0 };
+        if (local.allFinite() && std::abs(local.w()) > 1e-12) {
+            local /= local.w();
+            result.local = CursorWorld { .x = local.x(), .y = local.y() };
+        }
+    }
+    return result;
 }
 
 // Build the event object passed to cursor callbacks. WE scripts read
 // event.worldPosition (a Vec2 in scene units) and event.button (0/1/2).
-JSValue MakeCursorEvent(JSContext* ctx, const CursorWorld& c, int button) {
+JSValue MakeCursorEvent(JSContext* ctx, const CursorNodePoint& cursor, int button) {
     JSValue ev   = JS_NewObject(ctx);
     auto*   host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    JSValue wp;
-    if (! JS_IsUndefined(host->vec3_ctor)) {
-        JSValue args[3] { JS_NewFloat64(ctx, c.x), JS_NewFloat64(ctx, c.y), JS_NewFloat64(ctx, 0) };
-        wp = JS_CallConstructor(ctx, host->vec3_ctor, 3, args);
-        for (auto& a : args) JS_FreeValue(ctx, a);
-    } else {
-        wp = JS_NewObject(ctx);
-        JS_DefinePropertyValueStr(ctx, wp, "x", JS_NewFloat64(ctx, c.x), JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, wp, "y", JS_NewFloat64(ctx, c.y), JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, wp, "z", JS_NewFloat64(ctx, 0), JS_PROP_C_W_E);
-    }
-    JS_DefinePropertyValueStr(ctx, ev, "worldPosition", wp, JS_PROP_C_W_E);
+    auto make_position = [&](const CursorWorld& position) {
+        if (! JS_IsUndefined(host->vec3_ctor)) {
+            JSValue args[3] { JS_NewFloat64(ctx, position.x),
+                              JS_NewFloat64(ctx, position.y),
+                              JS_NewFloat64(ctx, 0) };
+            JSValue value = JS_CallConstructor(ctx, host->vec3_ctor, 3, args);
+            for (auto& arg : args) JS_FreeValue(ctx, arg);
+            return value;
+        }
+        JSValue value = JS_NewObject(ctx);
+        JS_DefinePropertyValueStr(
+            ctx, value, "x", JS_NewFloat64(ctx, position.x), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(
+            ctx, value, "y", JS_NewFloat64(ctx, position.y), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, value, "z", JS_NewFloat64(ctx, 0), JS_PROP_C_W_E);
+        return value;
+    };
+    JS_DefinePropertyValueStr(
+        ctx, ev, "worldPosition", make_position(cursor.world), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx, ev, "localPosition", make_position(cursor.local), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx, ev, "button", JS_NewInt32(ctx, button), JS_PROP_C_W_E);
     return ev;
+}
+
+JSValue MakeAnimationEvent(JSContext* ctx, const sr::SceneAnimationEvent& event) {
+    JSValue value = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx,
+                              value,
+                              "name",
+                              JS_NewStringLen(ctx, event.name.data(), event.name.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx, value, "frame", JS_NewInt32(ctx, event.frame), JS_PROP_C_W_E);
+    return value;
 }
 
 // Invoke `name` on the script's module namespace if exported, passing one
@@ -3248,6 +3381,234 @@ JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return object;
 }
 
+static JSClassID s_puppet_animation_class_id = 0;
+
+struct PuppetAnimationHandle {
+    AnimationLayerControl control;
+};
+
+void PuppetAnimationFinalizer(JSRuntime*, JSValue value) {
+    delete static_cast<PuppetAnimationHandle*>(
+        JS_GetOpaque(value, s_puppet_animation_class_id));
+}
+
+JSClassDef s_puppet_animation_class_def {
+    .class_name = "WWPuppetAnimation",
+    .finalizer  = PuppetAnimationFinalizer,
+};
+
+PuppetAnimationHandle* GetPuppetAnimationHandle(JSValueConst value) {
+    return static_cast<PuppetAnimationHandle*>(
+        JS_GetOpaque(value, s_puppet_animation_class_id));
+}
+
+std::optional<AnimationLayerSnapshot> PuppetAnimationSnapshot(JSValueConst value) {
+    auto* handle = GetPuppetAnimationHandle(value);
+    if (handle == nullptr || ! handle->control.snapshot) return std::nullopt;
+    return handle->control.snapshot();
+}
+
+JSValue WrapPuppetAnimation(JSContext* ctx, std::optional<AnimationLayerControl> control) {
+    if (! control) return NodeGetAnimationStub(ctx, JS_UNDEFINED, 0, nullptr);
+    JSValue object = JS_NewObjectClass(ctx, s_puppet_animation_class_id);
+    if (JS_IsException(object)) return object;
+    JS_SetOpaque(object, new PuppetAnimationHandle { .control = std::move(*control) });
+    return object;
+}
+
+JSValue PuppetAnimationGetFps(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewFloat64(ctx, state ? state->fps : 0.0);
+}
+
+JSValue PuppetAnimationGetFrameCount(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewInt32(ctx, state ? state->frame_count : 0);
+}
+
+JSValue PuppetAnimationGetDuration(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewFloat64(ctx, state ? state->duration : 0.0);
+}
+
+JSValue PuppetAnimationGetName(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    if (! state) return JS_NewString(ctx, "");
+    return JS_NewStringLen(ctx, state->name.data(), state->name.size());
+}
+
+JSValue PuppetAnimationSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    auto* handle = GetPuppetAnimationHandle(this_val);
+    if (handle == nullptr || ! handle->control.set_name) return JS_UNDEFINED;
+    const char* name = JS_ToCString(ctx, value);
+    if (name != nullptr) {
+        handle->control.set_name(name);
+        JS_FreeCString(ctx, name);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationGetRate(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewFloat64(ctx, state ? state->rate : 1.0);
+}
+
+JSValue PuppetAnimationSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    auto*  handle = GetPuppetAnimationHandle(this_val);
+    double rate {};
+    if (handle != nullptr && handle->control.set_rate &&
+        JS_ToFloat64(ctx, &rate, value) == 0 && std::isfinite(rate)) {
+        handle->control.set_rate(rate);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationGetBlend(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewFloat64(ctx, state ? state->blend : 0.0);
+}
+
+JSValue PuppetAnimationSetBlend(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    auto*  handle = GetPuppetAnimationHandle(this_val);
+    double blend {};
+    if (handle != nullptr && handle->control.set_blend &&
+        JS_ToFloat64(ctx, &blend, value) == 0 && std::isfinite(blend)) {
+        handle->control.set_blend(blend);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationGetVisible(JSContext* ctx, JSValueConst this_val) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewBool(ctx, state && state->visible);
+}
+
+JSValue PuppetAnimationSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    auto* handle = GetPuppetAnimationHandle(this_val);
+    if (handle != nullptr && handle->control.set_visible) {
+        handle->control.set_visible(JS_ToBool(ctx, value) != 0);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationPlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* handle = GetPuppetAnimationHandle(this_val);
+    if (handle != nullptr && handle->control.play) handle->control.play();
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationPause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* handle = GetPuppetAnimationHandle(this_val);
+    if (handle != nullptr && handle->control.pause) handle->control.pause();
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* handle = GetPuppetAnimationHandle(this_val);
+    if (handle != nullptr && handle->control.stop) handle->control.stop();
+    return JS_UNDEFINED;
+}
+
+JSValue PuppetAnimationIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewBool(ctx, state && state->playing);
+}
+
+JSValue PuppetAnimationGetFrame(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto state = PuppetAnimationSnapshot(this_val);
+    return JS_NewFloat64(ctx, state ? state->frame : 0.0);
+}
+
+JSValue PuppetAnimationSetFrame(JSContext* ctx, JSValueConst this_val, int argc,
+                                JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    auto*  handle = GetPuppetAnimationHandle(this_val);
+    double frame {};
+    if (handle != nullptr && handle->control.set_frame &&
+        JS_ToFloat64(ctx, &frame, argv[0]) == 0 && std::isfinite(frame)) {
+        handle->control.set_frame(frame);
+    }
+    return JS_UNDEFINED;
+}
+
+const JSCFunctionListEntry s_puppet_animation_proto_funcs[] = {
+    JS_CGETSET_DEF("fps", PuppetAnimationGetFps, NodeSetIgnore),
+    JS_CGETSET_DEF("frameCount", PuppetAnimationGetFrameCount, NodeSetIgnore),
+    JS_CGETSET_DEF("duration", PuppetAnimationGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("name", PuppetAnimationGetName, PuppetAnimationSetName),
+    JS_CGETSET_DEF("rate", PuppetAnimationGetRate, PuppetAnimationSetRate),
+    JS_CGETSET_DEF("blend", PuppetAnimationGetBlend, PuppetAnimationSetBlend),
+    JS_CGETSET_DEF("visible", PuppetAnimationGetVisible, PuppetAnimationSetVisible),
+    JS_CFUNC_DEF("play", 0, PuppetAnimationPlay),
+    JS_CFUNC_DEF("pause", 0, PuppetAnimationPause),
+    JS_CFUNC_DEF("stop", 0, PuppetAnimationStop),
+    JS_CFUNC_DEF("isPlaying", 0, PuppetAnimationIsPlaying),
+    JS_CFUNC_DEF("getFrame", 0, PuppetAnimationGetFrame),
+    JS_CFUNC_DEF("setFrame", 1, PuppetAnimationSetFrame),
+};
+
+void InitPuppetAnimationClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_puppet_animation_class_id == 0)
+        JS_NewClassID(rt, &s_puppet_animation_class_id);
+    JS_NewClass(rt, s_puppet_animation_class_id, &s_puppet_animation_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx,
+                               proto,
+                               s_puppet_animation_proto_funcs,
+                               sizeof(s_puppet_animation_proto_funcs) /
+                                   sizeof(s_puppet_animation_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_puppet_animation_class_id, proto);
+}
+
+JSValue NodeGetAnimationLayerCount(JSContext* ctx, JSValueConst this_val, int,
+                                   JSValueConst*) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* node = GetLayerNode(this_val);
+    if (host == nullptr || node == nullptr || ! host->animation_layer_count_resolver)
+        return JS_NewInt32(ctx, 0);
+    return JS_NewInt64(
+        ctx, static_cast<std::int64_t>(host->animation_layer_count_resolver(node)));
+}
+
+std::optional<AnimationLayerKey> ReadAnimationLayerKey(JSContext* ctx, JSValueConst value) {
+    if (JS_IsNumber(value)) {
+        std::int64_t index {};
+        if (JS_ToInt64(ctx, &index, value) != 0 || index < 0) return std::nullopt;
+        return AnimationLayerKey { static_cast<std::size_t>(index) };
+    }
+    const char* name = JS_ToCString(ctx, value);
+    if (name == nullptr) return std::nullopt;
+    AnimationLayerKey key { std::string(name) };
+    JS_FreeCString(ctx, name);
+    return key;
+}
+
+JSValue NodeGetAnimationLayer(JSContext* ctx, JSValueConst this_val, int argc,
+                              JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* node = GetLayerNode(this_val);
+    if (host == nullptr || node == nullptr || argc < 1 || ! host->animation_layer_resolver)
+        return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    auto key = ReadAnimationLayerKey(ctx, argv[0]);
+    if (! key) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    return WrapPuppetAnimation(ctx, host->animation_layer_resolver(node, *key));
+}
+
+JSValue NodePlaySingleAnimation(JSContext* ctx, JSValueConst this_val, int argc,
+                                JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* node = GetLayerNode(this_val);
+    if (host == nullptr || node == nullptr || argc < 1 ||
+        ! host->play_single_animation_resolver) {
+        return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    }
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (name == nullptr) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    auto control = host->play_single_animation_resolver(node, name);
+    JS_FreeCString(ctx, name);
+    return WrapPuppetAnimation(ctx, std::move(control));
+}
+
 static JSClassID s_video_texture_class_id = 0;
 
 struct VideoTextureHandle {
@@ -3403,7 +3764,10 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getTextureAnimation", 0, NodeGetTextureAnimation),
     JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTexture),
     JS_CFUNC_DEF("getAnimation", 1, NodeGetAnimation),
-    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationStub),
+    JS_CFUNC_DEF("getAnimationLayerCount", 0, NodeGetAnimationLayerCount),
+    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationLayer),
+    JS_CFUNC_DEF("createAnimationLayer", 2, NodePlaySingleAnimation),
+    JS_CFUNC_DEF("playSingleAnimation", 2, NodePlaySingleAnimation),
     JS_CFUNC_DEF("createLayer", 1, NodeSceneCreateLayer),
     JS_CFUNC_DEF("destroyLayer", 1, NodeSceneDestroyLayer),
     JS_CFUNC_DEF("getLayerIndex", 1, NodeSceneGetLayerIndex),
@@ -3598,6 +3962,7 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
     InitMaterialClass(m_impl->ctx, m_impl->rt);
     InitTexAnimClass(m_impl->ctx, m_impl->rt);
     InitAnimationClass(m_impl->ctx, m_impl->rt);
+    InitPuppetAnimationClass(m_impl->ctx, m_impl->rt);
     InitVideoTextureClass(m_impl->ctx, m_impl->rt);
     InstallEngineGlobal(m_impl->ctx);
     // Bootstrap created stub `thisLayer` / `thisScene` on globalThis.
@@ -3774,6 +4139,18 @@ void JsRuntime::SetBoneResolvers(BoneIndexResolver     index_resolver,
     m_impl->host.bone_transform_resolver = std::move(transform_resolver);
 }
 
+void JsRuntime::SetAnimationLayerResolvers(AnimationLayerCountResolver count_resolver,
+                                           AnimationLayerResolver      layer_resolver,
+                                           PlaySingleAnimationResolver single_resolver) {
+    m_impl->host.animation_layer_count_resolver = std::move(count_resolver);
+    m_impl->host.animation_layer_resolver       = std::move(layer_resolver);
+    m_impl->host.play_single_animation_resolver = std::move(single_resolver);
+}
+
+void JsRuntime::SetCursorProjectionResolver(CursorProjectionResolver resolver) {
+    m_impl->host.cursor_projection_resolver = std::move(resolver);
+}
+
 void JsRuntime::SetPersistence(std::string path) {
     m_impl->host.ls_path = std::move(path);
     LoadLocalStorage(&m_impl->host);
@@ -3839,6 +4216,28 @@ void JsRuntime::TickAll() {
     ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
     SweepDeferred(ctx, &m_impl->host);
 
+    std::unordered_map<sr::SceneNode*, std::vector<sr::SceneAnimationEvent>> animation_events;
+    for (auto& fs : m_impl->scripts) {
+        auto* node = fs->m_impl->node;
+        if (node == nullptr || animation_events.contains(node)) continue;
+        animation_events.emplace(node, node->ConsumeAnimationEvents());
+    }
+    for (auto& fs : m_impl->scripts) {
+        auto* I = fs->m_impl.get();
+        if (! I->alive || I->node == nullptr) continue;
+        auto it = animation_events.find(I->node);
+        if (it == animation_events.end() || it->second.empty()) continue;
+        BindThisLayer(
+            ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
+        m_impl->host.active_field_script = fs.get();
+        for (const auto& event : it->second) {
+            JSValue value = MakeAnimationEvent(ctx, event);
+            InvokeEventCallback(
+                ctx, I->module_ns, "animationEvent", value, m_impl.get(), I->sha);
+            JS_FreeValue(ctx, value);
+        }
+    }
+
     // Cursor event dispatch. For every script bound to a SceneNode, hit-
     // test the cursor against the node's world AABB and fire any of
     // cursorEnter/Leave/Move/Down/Up/Click that the script's module
@@ -3848,41 +4247,34 @@ void JsRuntime::TickAll() {
     const bool        in_window   = m_impl->host.inputs.cursor_in_window;
     const uint32_t    btn_pressed = m_impl->host.inputs.mouse_buttons_pressed;
     const uint32_t    btn_release = m_impl->host.inputs.mouse_buttons_released;
-    JSValue           ev_shared   = JS_UNDEFINED;
-    auto              ensure_ev   = [&](int button) -> JSValue {
-        if (! JS_IsUndefined(ev_shared)) JS_FreeValue(ctx, ev_shared);
-        ev_shared = MakeCursorEvent(ctx, cursor, button);
-        return ev_shared;
-    };
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
         if (! I->alive || ! I->node) continue;
-        const bool over_node   = in_window && HitTestNode(I->node, cursor);
+        const auto node_cursor = ResolveCursorNode(&m_impl->host, I->node, cursor);
+        const bool over_node   = in_window && node_cursor.inside;
         // Captured buttons keep the node "engaged" for move/up even when the
         // cursor has moved off its bbox mid-drag.
         const bool now_inside  = over_node || I->captured_buttons != 0;
         BindThisLayer(
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
         m_impl->host.active_field_script = fs.get();
+        auto invoke_cursor = [&](const char* name, int button) {
+            JSValue event = MakeCursorEvent(ctx, node_cursor, button);
+            InvokeEventCallback(ctx, I->module_ns, name, event, m_impl.get(), I->sha);
+            JS_FreeValue(ctx, event);
+        };
         if (over_node != I->cursor_inside) {
-            InvokeEventCallback(ctx,
-                                I->module_ns,
-                                over_node ? "cursorEnter" : "cursorLeave",
-                                ensure_ev(-1),
-                                m_impl.get(),
-                                I->sha);
+            invoke_cursor(over_node ? "cursorEnter" : "cursorLeave", -1);
             I->cursor_inside = over_node;
         }
         if (now_inside) {
-            InvokeEventCallback(
-                ctx, I->module_ns, "cursorMove", ensure_ev(-1), m_impl.get(), I->sha);
+            invoke_cursor("cursorMove", -1);
         }
         if (btn_pressed && over_node) {
             for (int b = 0; b < 3; ++b) {
                 if (btn_pressed & (1u << b)) {
                     I->captured_buttons |= (1u << b);
-                    InvokeEventCallback(
-                        ctx, I->module_ns, "cursorDown", ensure_ev(b), m_impl.get(), I->sha);
+                    invoke_cursor("cursorDown", b);
                 }
             }
         }
@@ -3893,18 +4285,15 @@ void JsRuntime::TickAll() {
             const uint32_t ending = btn_release & I->captured_buttons;
             for (int b = 0; b < 3; ++b) {
                 if (ending & (1u << b)) {
-                    InvokeEventCallback(
-                        ctx, I->module_ns, "cursorUp", ensure_ev(b), m_impl.get(), I->sha);
+                    invoke_cursor("cursorUp", b);
                     if (over_node) {
-                        InvokeEventCallback(
-                            ctx, I->module_ns, "cursorClick", ensure_ev(b), m_impl.get(), I->sha);
+                        invoke_cursor("cursorClick", b);
                     }
                 }
             }
             I->captured_buttons &= ~btn_release;
         }
     }
-    if (! JS_IsUndefined(ev_shared)) JS_FreeValue(ctx, ev_shared);
 
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
