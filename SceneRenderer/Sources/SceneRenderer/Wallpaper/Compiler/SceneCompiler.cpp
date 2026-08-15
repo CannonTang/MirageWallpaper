@@ -1073,6 +1073,10 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             // text/color/rate/intensity/... are wired elsewhere or not yet supported.
             continue;
         }
+        if (is_visible && node != nullptr && node->ID() >= 0) {
+            context.scene->EnableRuntimeLayerVisibility(
+                WallpaperLayerId { .value = node->ID() });
+        }
         std::string                  sha = utils::genSha1(std::span<const char>(sb.source));
         std::vector<sr::SceneNode*> clones;
         if (unsigned n = DetectAudioFanoutCount(sb.source); n > 1) {

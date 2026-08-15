@@ -3000,6 +3000,10 @@ public:
          SetMaterialShaderVariant(SceneMaterial& material, SceneShaderVariantMutation mutation);
     void MarkLayerStaticElidable(WallpaperLayerId id);
     void MarkLayerVisibilityElidable(WallpaperLayerId id);
+    void EnableRuntimeLayerVisibility(WallpaperLayerId id);
+    bool RuntimeLayerVisibilityEnabled(WallpaperLayerId id) const {
+        return m_runtime_layer_visibility_ids.count(id.value) != 0;
+    }
     void RegisterRenderGroup(WallpaperLayerId id, std::string camera) {
         m_render_group_cameras[id.value] = std::move(camera);
     }
@@ -3041,6 +3045,7 @@ private:
     SceneResourceIndex                       m_resource_index;
     bool                                     m_render_graph_dirty { false };
     bool                                     m_dynamic_topology_dirty { false };
+    Set<i32>                                 m_runtime_layer_visibility_ids;
     bool                                     m_planar_reflection_enabled { false };
     SceneProjectionKind                      m_projection_kind {
         SceneProjectionKind::OrthographicCanvas

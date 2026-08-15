@@ -463,8 +463,10 @@ static bool CollectEmitSkipSubtrees(SceneNode* node, Scene& scene, const Set<i32
                                     bool                   visibility_hidden_ancestor = false) {
     const i32  nid    = WallpaperId(*node);
     const bool linked = nid >= 0 && linked_ids.count(nid) != 0;
+    const bool runtime_visibility =
+        nid >= 0 && scene.RuntimeLayerVisibilityEnabled(WallpaperLayerId { .value = nid });
     const bool visibility_hidden_self =
-        (! node->Visible() ||
+        ((! node->Visible() && ! runtime_visibility) ||
          (nid >= 0 && scene.visibility_elidable_layer_ids.count(nid) != 0)) &&
         ! linked;
     const bool visibility_hidden = visibility_hidden_ancestor || visibility_hidden_self;

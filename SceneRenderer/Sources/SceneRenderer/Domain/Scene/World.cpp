@@ -1224,8 +1224,16 @@ void Scene::MarkLayerStaticElidable(WallpaperLayerId id) {
 
 void Scene::MarkLayerVisibilityElidable(WallpaperLayerId id) {
     if (id.value < 0) return;
+    if (m_runtime_layer_visibility_ids.count(id.value) != 0) return;
     visibility_elidable_layer_ids.insert(id.value);
     elidable_layer_ids.insert(id.value);
+}
+
+void Scene::EnableRuntimeLayerVisibility(WallpaperLayerId id) {
+    if (id.value < 0) return;
+    m_runtime_layer_visibility_ids.insert(id.value);
+    if (visibility_elidable_layer_ids.erase(id.value) != 0) RebuildElidableLayerIds();
+    m_pending_node_visibility_changes.erase(id.value);
 }
 
 bool Scene::ConsumeRenderGraphDirty() {
@@ -1258,6 +1266,7 @@ bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
         RegisterNode(node);
         return changed;
     }
+    if (m_runtime_layer_visibility_ids.count(id) != 0) return changed;
 
     // Do not mutate visibility_elidable_layer_ids here. A script may set the
     // same layer false and true before the frame is drawn; only its final

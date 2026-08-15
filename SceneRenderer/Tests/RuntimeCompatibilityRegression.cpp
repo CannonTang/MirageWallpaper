@@ -16,6 +16,7 @@ import sr.fs;
 import sr.json;
 import sr.pkg.parse;
 import sr.pkg_fs;
+import sr.script;
 import sr.scene_uniform_updater;
 import sr.spec_texs;
 import sr.types;
@@ -1121,6 +1122,143 @@ void TestMdlv23MultiCurveMorphEvents() {
           "MDMP morph sections align with the MDLA event curves");
 }
 
+void TestWallpaper2887099508Interactions() {
+    const char* assets_root   = std::getenv("SCENERENDERER_ASSETS_DIR");
+    const char* workshop_root = std::getenv("SCENERENDERER_WORKSHOP_DIR");
+    if (assets_root == nullptr || workshop_root == nullptr || assets_root[0] == '\0' ||
+        workshop_root[0] == '\0')
+        return;
+
+    const auto pkg_path = std::filesystem::path(workshop_root) / "2887099508" / "scene.pkg";
+    if (! std::filesystem::exists(pkg_path)) return;
+
+    sr::fs::VFS vfs;
+    Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(assets_root)),
+          "2887099508 mounts the shared assets");
+    auto pkg = sr::fs::WPPkgFs::CreatePkgFs(pkg_path.string());
+    Check(pkg != nullptr, "2887099508 package opens");
+    if (! pkg) return;
+    const auto pkg_version = sr::wpscene::ParsePkgVersionStamp(pkg->pkg_version_stamp());
+    Check(vfs.Mount("/assets", std::move(pkg)), "2887099508 package mounts");
+
+    sr::WPMdl ear_model;
+    Check(sr::WPMdlParser::Parse("models/r ear1_puppet.mdl", vfs, ear_model),
+          "2887099508 ear puppet parses");
+    if (ear_model.puppet) {
+        auto find_animation = [&](std::int32_t id) {
+            return std::find_if(ear_model.puppet->anims.begin(),
+                                ear_model.puppet->anims.end(),
+                                [id](const auto& animation) { return animation.id == id; });
+        };
+        const auto first  = find_animation(445);
+        const auto second = find_animation(572);
+        Check(first != ear_model.puppet->anims.end() &&
+                  first->mode == sr::WPPuppet::PlayMode::Single &&
+                  second != ear_model.puppet->anims.end() &&
+                  second->mode == sr::WPPuppet::PlayMode::Single,
+              "2887099508 ear click guards use completing single animations");
+        sr::WPPuppetLayer ear_layer(ear_model.puppet);
+        std::array<sr::WPPuppetLayer::AnimationLayer, 4> layers {
+            sr::WPPuppetLayer::AnimationLayer {
+                .id = 451, .visible = false, .name = "左下1" },
+            sr::WPPuppetLayer::AnimationLayer {
+                .id = 508, .visible = false, .name = "左上1" },
+            sr::WPPuppetLayer::AnimationLayer {
+                .id = 445, .visible = true, .name = "左弹跳" },
+            sr::WPPuppetLayer::AnimationLayer {
+                .id = 572, .visible = true, .name = "左弹跳2" },
+        };
+        ear_layer.prepared(layers);
+        auto first_handle  = ear_layer.animationLayer("左弹跳");
+        auto second_handle = ear_layer.animationLayer("左弹跳2");
+        (void)ear_layer.genFrame(0.0);
+        (void)ear_layer.genFrame(10.0);
+        const auto first_state = first_handle ? ear_layer.animationState(*first_handle) : std::nullopt;
+        const auto second_state =
+            second_handle ? ear_layer.animationState(*second_handle) : std::nullopt;
+        Check(first_state && ! first_state->playing && second_state && ! second_state->playing,
+              "2887099508 ear click guards clear after authored single animations complete");
+    }
+
+    auto document = sr::wpscene::LoadSceneDocumentFromVfs(vfs, "/assets/scene.json", pkg_version);
+    Check(document.has_value(), "2887099508 scene document loads");
+    if (! document) return;
+    wavsen::audio::SoundManager sound_manager;
+    sr::WPSceneParser           parser;
+    auto scene = parser.Parse("2887099508", *document, vfs, sound_manager);
+    Check(scene != nullptr, "2887099508 scene compiles");
+    if (! scene) return;
+    Check(scene->RuntimeLayerVisibilityEnabled(sr::WallpaperLayerId { .value = 257 }) &&
+              scene->RuntimeLayerVisibilityEnabled(sr::WallpaperLayerId { .value = 384 }) &&
+              ! scene->RuntimeLayerVisibilityEnabled(sr::WallpaperLayerId { .value = 791 }),
+          "2887099508 keeps only scripted book visibility in the static graph");
+
+    auto* updater = static_cast<sr::SceneUniformUpdater*>(scene->shaderValueUpdater.get());
+    auto verify_puppet_layer = [&](std::int32_t id) {
+        auto* node = FindWallpaperNode(scene->sceneGraph.as_ptr(), id);
+        if (node == nullptr || updater == nullptr || node->Camera().empty()) return false;
+        auto logical = updater->PuppetLayerForNode(node);
+        auto camera  = scene->cameras.find(node->Camera());
+        if (! logical || camera == scene->cameras.end() || ! camera->second ||
+            ! camera->second->HasImgEffect())
+            return false;
+        auto effects = camera->second->GetImgEffect();
+        bool found = false;
+        for (std::size_t index = 0; index < effects->EffectCount(); ++index) {
+            auto effect = effects->GetEffect(index);
+            if (! effect) continue;
+            for (const auto& effect_node : effect->nodes) {
+                auto rendered = updater->PuppetLayerForNode(effect_node.sceneNode.as_ptr());
+                if (! rendered) continue;
+                found = true;
+                if (rendered != logical) return false;
+            }
+        }
+        return found;
+    };
+    Check(verify_puppet_layer(162) && verify_puppet_layer(309),
+          "2887099508 scripts and rendered ear and leg passes share puppet playback state");
+
+    auto* page      = FindWallpaperNode(scene->sceneGraph.as_ptr(), 257);
+    auto* first_page = FindWallpaperNode(scene->sceneGraph.as_ptr(), 384);
+    Check(page != nullptr && first_page != nullptr, "2887099508 book nodes exist");
+    if (page == nullptr || first_page == nullptr) return;
+    auto page_animation       = page->FindAnimation("111");
+    auto first_page_animation = first_page->FindAnimation("900");
+    Check(page_animation != nullptr && first_page_animation != nullptr,
+          "2887099508 book material animations are registered on their script nodes");
+    if (! page_animation || ! first_page_animation) return;
+
+    auto snapshot = sr::ExtractRenderSceneSnapshot(*scene);
+    auto graph    = sr::sceneToRenderGraph(*scene, snapshot);
+    Check(graph != nullptr && GraphEmitsLayer(*graph, snapshot, 257) &&
+              GraphEmitsLayer(*graph, snapshot, 384),
+          "2887099508 hidden book pages remain in the scripted static render graph");
+
+    sr::script::FrameInputs inputs;
+    scene->elapsingTime = 0.0;
+    scene->TickNodeFieldAnimations();
+    sr::script::TickSceneScripts(*scene, inputs);
+
+    page->SetVisible(true);
+    sr::script::TickSceneScripts(*scene, inputs);
+    Check(page->Visible(), "2887099508 page remains visible before its marker");
+    page_animation->Play();
+    scene->elapsingTime = 1.1;
+    scene->TickNodeFieldAnimations();
+    sr::script::TickSceneScripts(*scene, inputs);
+    Check(! page->Visible(), "2887099508 page marker hides the completed page");
+
+    first_page->SetVisible(true);
+    sr::script::TickSceneScripts(*scene, inputs);
+    Check(first_page->Visible(), "2887099508 first page remains visible before its marker");
+    first_page_animation->Play();
+    scene->elapsingTime = 2.2;
+    scene->TickNodeFieldAnimations();
+    sr::script::TickSceneScripts(*scene, inputs);
+    Check(! first_page->Visible(), "2887099508 first-page marker hides the completed page");
+}
+
 void TestShaderHlslSemanticCompatibility() {
     sr::SceneShaderVariantDesc desc;
     desc.scene_id    = "hlsl-semantic-compatibility-test";
@@ -1322,6 +1460,7 @@ int main() {
     TestFinalResolvePrecedesLinkPublication();
     TestUserPropertyIndexesOwnTheirTargets();
     TestMdlv23MultiCurveMorphEvents();
+    TestWallpaper2887099508Interactions();
     TestShaderHlslSemanticCompatibility();
     TestMissingTexturePlaceholderSemantics();
     TestParticleRuntimeState();
