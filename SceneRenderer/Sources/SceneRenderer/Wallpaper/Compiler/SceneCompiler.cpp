@@ -4761,6 +4761,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     bool has_text_script      = (text_binding_it != obj.field_bindings.scripts.end());
     auto pointsize_binding_it = obj.field_bindings.scripts.find("pointsize");
     bool has_pointsize_script = (pointsize_binding_it != obj.field_bindings.scripts.end());
+    const bool has_alpha_animation = obj.field_bindings.animations.count("alpha") != 0;
     // Scripts can also drive `text` indirectly: a script attached to any
     // other field (commonly `visible`) writes `thisLayer.text = "..."` from
     // its update() side-effect (e.g. workshop 2283810443's clock). Transform
@@ -4951,7 +4952,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // --- layouter owns the cache (FontFace lifetime) + mesh ref + style.
     text::TextLayoutStyle style;
     style.color                 = { obj.color[0], obj.color[1], obj.color[2] };
-    style.alpha                 = obj.alpha;
+    style.alpha                 = has_alpha_animation ? 1.0f : obj.alpha;
     style.brightness            = obj.brightness;
     style.opaquebackground      = has_bg;
     style.background_color      = { obj.backgroundcolor[0],
