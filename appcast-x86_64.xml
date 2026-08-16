@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.7</title>
+            <pubDate>Sun, 16 Aug 2026 06:38:40 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>343</sparkle:version>
+            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 6ad37044ca60954797a15a4943ccabba4e3ee9ca
+Channel: beta
+
+build(video): export compile commands
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-343-6ad37044ca60-macOS-x86_64.zip" length="236371346" type="application/octet-stream" sparkle:edSignature="TxJLasmZxHJWMYVdB9mS3ZlRKuLm6xxqI23edLdzlE06IVJm/E5UsZg/qUKYEJgNjY9akjbLs4XIi9vyZZkdAw=="/>
+        </item>
+        <item>
+            <title>1.0.7</title>
             <pubDate>Sun, 16 Aug 2026 06:01:58 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -89,23 +106,6 @@ Merge pull request #33 from ccfco/fix/restore-all-displays-on-launch
 fix(app): restore wallpapers on all displays at launch
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-333-d4fb4566a330-macOS-x86_64.zip" length="236297680" type="application/octet-stream" sparkle:edSignature="ETsft0T3hCOApy2tDEommAW8M3fke0dnpyvCs9HJDnp77Jf5hegJ+JvTnYzpMJAA+TjBoet396y8/hHFyG6sAw=="/>
-        </item>
-        <item>
-            <title>1.0.7</title>
-            <pubDate>Sat, 15 Aug 2026 14:04:22 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>330</sparkle:version>
-            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 9d6d1309eaaa5517cfa74eb3668c30ab3678d088
-Channel: beta
-
-Merge pull request #34 from ccfco/fix/audio-spectrum-dft-packing
-
-fix(web): correct vDSP real DFT input packing in audio spectrum
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-330-9d6d1309eaaa-macOS-x86_64.zip" length="236297887" type="application/octet-stream" sparkle:edSignature="FzEaLXv8z5H9wtpeyaevvCDlAsFfHMTm0vbZMi3/EqZLWe9L2s4iB7gl3Fkb0meB7RmhgCPNxCCb5gUecUWjCg=="/>
         </item>
         <item>
             <title>1.0.7</title>
@@ -473,6 +473,6 @@ chore(release): bump version to 1.0.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ekdXpAafDFro5wCRh6XqdrSAWP+Y0gZKlgCR21Ww15jPJxtzMJKw1BKmUbKJBjHMCSVBvWh8dep7oafSTQswBw==
-length: 34663
+edSignature: LL/aao27i18gCBHCWgBHxSqcJVT0Mz65aJf0+FmXZjw4rE0FPUjsNDjyPhjkdoH/UFLIlLUL2+R6W0bqAH9WBA==
+length: 34573
 -->
