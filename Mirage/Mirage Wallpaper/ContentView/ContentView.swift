@@ -306,7 +306,7 @@ struct ContentView: View {
                 .allowsHitTesting(false)
         }
         .environment(\.locale, localization.locale)
-        .frame(minWidth: 1000, minHeight: 640)
+        .frame(minWidth: 1100, minHeight: 640)
         .onChange(of: navigationModel.selection) { _, section in
             loadedSections.insert(section)
         }
