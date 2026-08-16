@@ -261,6 +261,18 @@ extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle) {
     delete display;
 }
 
+extern "C" void* SceneRendererMacMetalTextureRetain(void* texture) {
+    if (texture == nullptr) return nullptr;
+    id object = (__bridge id)texture;
+    return (__bridge void*)[object retain];
+}
+
+extern "C" void SceneRendererMacMetalTextureRelease(void* texture) {
+    if (texture == nullptr) return;
+    id object = (__bridge id)texture;
+    [object release];
+}
+
 extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
                                                  uint32_t source_width,
                                                  uint32_t source_height,
