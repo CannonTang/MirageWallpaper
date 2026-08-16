@@ -757,6 +757,15 @@ sr::SceneNode* FindWallpaperNode(sr::SceneNode* node, std::int32_t id) {
     return nullptr;
 }
 
+sr::SceneNode* FindAnimationOwner(sr::SceneNode* node, std::string_view name) {
+    if (node == nullptr) return nullptr;
+    if (node->FindAnimation(name)) return node;
+    for (auto& child : node->GetChildren()) {
+        if (auto* found = FindAnimationOwner(child.as_ptr(), name)) return found;
+    }
+    return nullptr;
+}
+
 bool GraphEmitsLayer(sr::rg::RenderGraph& graph, const sr::RenderSceneSnapshot& snapshot,
                      std::int32_t id) {
     const auto render_items = snapshot.renderItemsFor(sr::WallpaperLayerId { .value = id });
@@ -1241,6 +1250,83 @@ void TestWallpaper2887099508Interactions() {
     auto* first_page = FindWallpaperNode(scene->sceneGraph.as_ptr(), 384);
     Check(page != nullptr && first_page != nullptr, "2887099508 book nodes exist");
     if (page == nullptr || first_page == nullptr) return;
+    auto* blush_in_owner = FindAnimationOwner(scene->sceneGraph.as_ptr(), "blush1");
+    auto* blush_out_owner = FindAnimationOwner(scene->sceneGraph.as_ptr(), "blush22");
+    auto blush_effect = blush_in_owner != nullptr
+                            ? scene->FindNodeImageEffect(*blush_in_owner, "blush")
+                            : std::nullopt;
+    auto blush_effect_out = blush_out_owner != nullptr
+                                ? scene->FindNodeImageEffect(*blush_out_owner, "blush2")
+                                : std::nullopt;
+    auto blush_in =
+        blush_in_owner != nullptr ? blush_in_owner->FindAnimation("blush1") : nullptr;
+    auto blush_out =
+        blush_out_owner != nullptr ? blush_out_owner->FindAnimation("blush22") : nullptr;
+    Check(blush_effect.has_value() && blush_effect_out.has_value(),
+          "2887099508 hidden blush effects remain available to scripts");
+    Check(blush_in != nullptr && blush_out != nullptr,
+          "2887099508 blush animations remain available to scripts");
+    if (blush_effect && blush_effect_out && blush_in && blush_out) {
+        auto* blush_material = blush_effect->effect->nodes.front().sceneNode->Mesh()->Material();
+        auto* blush_out_material =
+            blush_effect_out->effect->nodes.front().sceneNode->Mesh()->Material();
+        Check(blush_material != nullptr && blush_material->textures.size() > 2 &&
+                  ! blush_material->textures[2].empty() &&
+                  blush_out_material != nullptr && blush_out_material->textures.size() > 2 &&
+                  ! blush_out_material->textures[2].empty(),
+              "2887099508 blush effects retain both authored opacity masks");
+        Check(blush_material != nullptr && blush_material->customShader.variant.has_value() &&
+                  blush_material->customShader.variant->resolved_combos.contains("MASK") &&
+                  blush_material->customShader.variant->resolved_combos.at("MASK") == "1" &&
+                  blush_out_material != nullptr &&
+                  blush_out_material->customShader.variant.has_value() &&
+                  blush_out_material->customShader.variant->resolved_combos.contains("MASK") &&
+                  blush_out_material->customShader.variant->resolved_combos.at("MASK") == "1",
+              "2887099508 blush effects compile masked pulse shader variants");
+        sr::script::JsRuntime blush_runtime;
+        auto* blush_script = blush_runtime.MakeFieldScript(
+            R"JS(
+                export function update() {
+                    const layer = thisScene.getLayer('back leg body');
+                    const effectIn = layer.getEffect('blush');
+                    const effectOut = layer.getEffect('blush2');
+                    const blushIn = thisScene.getAnimation('blush1');
+                    const blushOut = thisScene.getAnimation('blush22');
+                    effectIn.visible = true;
+                    effectOut.visible = true;
+                    blushIn.setFrame(4);
+                    blushOut.setFrame(6);
+                    blushIn.play();
+                    blushOut.play();
+                    return new Vec4(
+                        effectIn.visible ? 1 : 0,
+                        effectOut.visible ? 1 : 0,
+                        blushIn.name === 'blush1' ? 1 : 0,
+                        blushOut.name === 'blush22' ? 1 : 0);
+                }
+            )JS",
+            "test/2887099508_blush_scene_animation_lookup",
+            sr::script::FieldKind::Vec4,
+            Parse("{}"),
+            Parse("\"0 0 0 0\""),
+            blush_in_owner);
+        Check(blush_script != nullptr, "2887099508 blush scene lookup script compiles");
+        if (blush_script) {
+            blush_runtime.SetSceneRoot(scene->sceneGraph.as_ptr());
+            blush_runtime.TickAll();
+            const auto* value =
+                std::get_if<sr::script::Vec4Value>(&blush_script->last_value());
+            Check(value && value->x == 1.0 && value->y == 1.0 && value->z == 1.0 &&
+                      value->w == 1.0 && blush_in->IsPlaying() && blush_out->IsPlaying() &&
+                      std::abs(blush_in->Frame() - 4.0) < 0.001 &&
+                      std::abs(blush_out->Frame() - 6.0) < 0.001,
+                  "2887099508 scripts reveal and control both blush effects");
+        }
+        scene->SetImageEffectRuntimeVisible(*blush_effect, false);
+        scene->SetImageEffectRuntimeVisible(*blush_effect_out, false);
+        blush_in->Stop();
+        blush_out->Stop();
+    }
     auto* tim_logo = FindWallpaperNode(scene->sceneGraph.as_ptr(), 500);
     Check(tim_logo != nullptr && scene->LayerIndex(*tim_logo) == std::optional<std::size_t>(78),
           "2887099508 preserves the authored TIM logo layer index");
@@ -1256,6 +1342,29 @@ void TestWallpaper2887099508Interactions() {
           "2887099508 book material animations are registered on their script nodes");
     if (! page_animation || ! first_page_animation) return;
 
+    sr::script::JsRuntime page_runtime;
+    auto* page_script = page_runtime.MakeFieldScript(
+        R"JS(
+            let started = false;
+            export function update() {
+                if (!started && thisLayer.visible) {
+                    const animation = thisScene.getAnimation('111');
+                    animation.play();
+                    started = true;
+                    return animation.name === '111' ? 1 : 0;
+                }
+                return 0;
+            }
+        )JS",
+        "test/2887099508_page_scene_animation_lookup",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        page);
+    Check(page_script != nullptr, "2887099508 page scene lookup script compiles");
+    if (! page_script) return;
+    page_runtime.SetSceneRoot(scene->sceneGraph.as_ptr());
+
     auto snapshot = sr::ExtractRenderSceneSnapshot(*scene);
     auto graph    = sr::sceneToRenderGraph(*scene, snapshot);
     Check(graph != nullptr && GraphEmitsLayer(*graph, snapshot, 257) &&
@@ -1270,7 +1379,11 @@ void TestWallpaper2887099508Interactions() {
     page->SetVisible(true);
     sr::script::TickSceneScripts(*scene, inputs);
     Check(page->Visible(), "2887099508 page remains visible before its marker");
-    page_animation->Play();
+    page_runtime.TickAll();
+    const auto* page_lookup =
+        std::get_if<sr::script::ScalarValue>(&page_script->last_value());
+    Check(page_lookup && page_lookup->v == 1.0 && page_animation->IsPlaying(),
+          "2887099508 thisScene starts the descendant page animation");
     scene->elapsingTime = 1.1;
     scene->TickNodeFieldAnimations();
     sr::script::TickSceneScripts(*scene, inputs);

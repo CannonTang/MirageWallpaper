@@ -165,6 +165,26 @@ bool SceneHasScripts(std::span<const SceneObjectVar> scene_objs) {
     return false;
 }
 
+bool SceneAccessesEffects(std::span<const SceneObjectVar> scene_objs) {
+    for (const auto& obj : scene_objs) {
+        bool found = false;
+        std::visit(
+            visitor::overload {
+                [&found](const auto& scene_obj) {
+                    for (const auto& [_, binding] : scene_obj.field_bindings.scripts) {
+                        if (binding.source.find("getEffect") != std::string_view::npos) {
+                            found = true;
+                            break;
+                        }
+                    }
+                },
+            },
+            obj);
+        if (found) return true;
+    }
+    return false;
+}
+
 bool SceneUsesAudioScripts(std::span<const SceneObjectVar> scene_objs) {
     for (const auto& obj : scene_objs) {
         bool found = false;
@@ -1779,6 +1799,12 @@ i32 CountVisibleImageEffects(std::span<const wpscene::ImageEffect> effects) {
     return count;
 }
 
+i32 CountRuntimeImageEffects(std::span<const wpscene::ImageEffect> effects,
+                             bool preserve_hidden) {
+    if (! preserve_hidden) return CountVisibleImageEffects(effects);
+    return static_cast<i32>(effects.size());
+}
+
 bool ParseEnabled(std::string_view str) { return str == "enabled"; }
 
 CullMode ParseCullMode(std::string_view str) {
@@ -3043,7 +3069,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         }
     }
 
-    const bool has_author_effect = CountVisibleImageEffects(wpimgobj.effects) > 0;
+    const bool has_author_effect =
+        CountRuntimeImageEffects(wpimgobj.effects, context.scene_accesses_effects) > 0;
     // A solid layer's flat material only produces its source color; a final compositor owns
     // BLENDMODE and the previous-framebuffer input.
     const bool layer_material_is_final =
@@ -3078,7 +3105,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
     }
 
-    bool hasEffect = CountVisibleImageEffects(wpimgobj.effects) > 0;
+    bool hasEffect =
+        CountRuntimeImageEffects(wpimgobj.effects, context.scene_accesses_effects) > 0;
 
     // No-effect fullscreen / compose layers contribute nothing on their own
     // (they just sample `_rt_default` and write it back). Mark as elidable
@@ -3613,7 +3641,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             isPassthrough || ! parse_geometry.requires_source_draw;
         for (const auto& wpeffobj : wpimgobj.effects) {
             i_eff++;
-            if (! wpeffobj.visible && wpeffobj.visible_user.empty()) {
+            if (! wpeffobj.visible && wpeffobj.visible_user.empty() &&
+                ! context.scene_accesses_effects) {
                 i_eff--;
                 continue;
             }
@@ -6735,6 +6764,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
     const auto ortho_extent = ResolveOrthoProjectionExtent(sc, scene_objs);
     auto       context      = BuildContext(vfs, scene_id, sc, ortho_extent, m_user_properties);
     context.scene_has_scripts       = SceneHasScripts(scene_objs);
+    context.scene_accesses_effects  = SceneAccessesEffects(scene_objs);
     context.scene_layer_text_writes = SceneWritesLayerText(scene_objs);
     context.scene->uses_audio_spectrum = SceneUsesAudioScripts(scene_objs);
     context.hidden_link_source_ids =

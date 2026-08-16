@@ -687,6 +687,54 @@ void TestTimelineAnimationCompatibility() {
           "animation stop resets the script-visible frame");
 }
 
+void TestSceneTimelineAnimationCompatibility() {
+    auto root = rstd::sync::Arc<sr::SceneNode>::make();
+    auto owner = rstd::sync::Arc<sr::SceneNode>::make();
+    auto group = rstd::sync::Arc<sr::SceneNode>::make();
+    auto animated = rstd::sync::Arc<sr::SceneNode>::make();
+    group->AppendChild(animated.clone());
+    root->AppendChild(owner.clone());
+    root->AppendChild(group.clone());
+
+    auto playback = std::make_shared<sr::SceneAnimationPlayback>(
+        "face", 10.0f, 10, "single", false, true);
+    animated->RegisterAnimationPlayback(playback);
+
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            export function update() {
+                const sceneAnimation = thisScene.getAnimation('face');
+                const layerAnimation = thisLayer.getAnimation('face');
+                sceneAnimation.rate = 2;
+                sceneAnimation.setFrame(4);
+                sceneAnimation.play();
+                return new Vec4(
+                    sceneAnimation.name === 'face' ? 1 : 0,
+                    sceneAnimation.isPlaying() ? 1 : 0,
+                    sceneAnimation.getFrame(),
+                    layerAnimation.name === '' && !layerAnimation.isPlaying() ? 1 : 0);
+            }
+        )JS",
+        "test/scene_timeline_animation_compatibility",
+        sr::script::FieldKind::Vec4,
+        Parse("{}"),
+        Parse("\"0 0 0 0\""),
+        owner.as_ptr());
+    Check(script != nullptr, "scene timeline animation script compiles");
+    if (! script) return;
+
+    runtime.SetSceneRoot(root.as_ptr());
+    runtime.TickAll();
+    const auto* value = std::get_if<sr::script::Vec4Value>(&script->last_value());
+    Check(value && value->x == 1.0 && value->y == 1.0 && value->z == 4.0 &&
+              value->w == 1.0,
+          "thisScene resolves descendant animations without widening thisLayer lookup");
+    Check(playback->IsPlaying() && std::abs(playback->Rate() - 2.0) < 0.001 &&
+              std::abs(playback->Frame() - 4.0) < 0.001,
+          "thisScene animation controls reach the descendant playback");
+}
+
 void TestCursorClickOrder() {
     sr::SceneNode node({ 960.0f, 540.0f, 0.0f },
                        { 1.0f, 1.0f, 1.0f },
@@ -1344,6 +1392,7 @@ int main() {
     TestParticleInstanceCompatibility();
     TestEffectAndMaterialCompatibility();
     TestTimelineAnimationCompatibility();
+    TestSceneTimelineAnimationCompatibility();
     TestCursorClickOrder();
     TestSolidCursorDispatch();
     TestScalarOriginAssignment();

@@ -132,6 +132,7 @@ struct ParseContext {
     Set<std::int32_t>                             hidden_link_source_ids;
     Set<std::string>                              unresolved_shader_values;
     bool                                          scene_has_scripts { false };
+    bool                                          scene_accesses_effects { false };
     bool                                          scene_layer_text_writes { false };
 
     bool IsLinkedSource(std::int32_t id) const { return linked_source_ids.contains(id); }

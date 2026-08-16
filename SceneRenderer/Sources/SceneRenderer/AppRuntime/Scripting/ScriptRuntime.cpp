@@ -3388,12 +3388,25 @@ void InitAnimationClass(JSContext* ctx, JSRuntime* rt) {
     JS_SetClassProto(ctx, s_animation_class_id, proto);
 }
 
+std::shared_ptr<sr::SceneAnimationPlayback>
+FindSceneAnimation(sr::SceneNode* node, std::string_view name) {
+    if (node == nullptr) return nullptr;
+    if (auto playback = node->FindAnimation(name)) return playback;
+    for (const auto& child : node->GetChildren()) {
+        if (auto playback = FindSceneAnimation(child.as_ptr(), name)) return playback;
+    }
+    return nullptr;
+}
+
 JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* node = GetLayerNode(this_val);
     if (node == nullptr || argc < 1) return NodeGetAnimationStub(ctx, this_val, argc, argv);
     const char* name = JS_ToCString(ctx, argv[0]);
     if (name == nullptr) return NodeGetAnimationStub(ctx, this_val, argc, argv);
     auto playback = node->FindAnimation(name);
+    if (! playback && host != nullptr && node == host->scene_root)
+        playback = FindSceneAnimation(node, name);
     JS_FreeCString(ctx, name);
     if (! playback) return NodeGetAnimationStub(ctx, this_val, argc, argv);
     JSValue object = JS_NewObjectClass(ctx, s_animation_class_id);
