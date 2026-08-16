@@ -305,6 +305,34 @@ int main() {
                 layouter.SetAlpha(0.2f);
                 ok &= Near(vertex.Data()[offset + 3], 0.2f);
             }
+
+            auto background_mesh = std::make_shared<sr::SceneMesh>(true);
+            background_mesh->AddVertexArray(sr::SceneVertexArray(
+                sr::MakeAttrSet({ sr::VAttr::Position, sr::VAttr::TexCoord, sr::VAttr::Color }), 8));
+            background_mesh->AddIndexArray(sr::SceneIndexArray(12));
+            sr::text::TextLayoutStyle background_style;
+            background_style.alpha            = 0.5f;
+            background_style.opaquebackground = true;
+            background_style.background_color = { 0.4f, 0.6f, 0.8f };
+            sr::text::TextLayouter background_layouter(
+                style_face, background_mesh, background_style, 2);
+            background_layouter.SetText("A");
+
+            const auto& background_vertex = background_mesh->GetVertexArray(0);
+            const auto background_attrs = background_vertex.GetAttrOffsetMap();
+            const auto background_color = background_attrs.find("a_Color");
+            if (background_color == background_attrs.end()) {
+                std::cerr << "text background color vertex attribute missing\n";
+                ok = false;
+            } else {
+                const auto background_offset = background_color->second.offset / sizeof(float);
+                const auto glyph_offset = background_offset + 4 * background_vertex.OneSize();
+                ok &= Near(background_vertex.Data()[background_offset + 3], 0.5f);
+                ok &= Near(background_vertex.Data()[glyph_offset + 3], 0.5f);
+                background_layouter.SetAlpha(0.2f);
+                ok &= Near(background_vertex.Data()[background_offset + 3], 0.2f);
+                ok &= Near(background_vertex.Data()[glyph_offset + 3], 0.2f);
+            }
         }
     }
 

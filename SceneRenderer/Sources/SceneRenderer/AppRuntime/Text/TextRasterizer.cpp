@@ -1157,7 +1157,7 @@ void TextLayouter::SetText(std::string_view utf8) {
             im.style.background_color[0] * im.style.background_brightness,
             im.style.background_color[1] * im.style.background_brightness,
             im.style.background_color[2] * im.style.background_brightness,
-            1.0f,
+            im.style.alpha,
         };
         write_quad(q++,
                    -text_w * 0.5f - pad,
