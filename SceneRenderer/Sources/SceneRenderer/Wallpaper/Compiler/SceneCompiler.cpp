@@ -6081,6 +6081,10 @@ std::optional<rstd::sync::Arc<SceneNode>> InstantiateLayerConfiguration(
     wpscene::VisibleUserBinding visible_user;
     wpscene::ReadVisibleProperty(config, visible, visible_user);
     node->SetVisible(visible);
+    if (config.get("solid").is_some()) {
+        bool solid = true;
+        if (sr::GetJsonValue(config, "solid", solid, false)) node->SetSolid(solid);
+    }
     return AttachCreatedLayer(context, owner, std::move(node));
 }
 
@@ -6224,6 +6228,10 @@ private:
         if (parsed == m_context.node_id_map.end() || parsed->second.node.is_none()) return {};
         auto node = (*parsed->second.node).clone();
         m_context.node_id_map.erase(parsed);
+        if (config.get("solid").is_some()) {
+            bool solid = true;
+            if (sr::GetJsonValue(config, "solid", solid, false)) node->SetSolid(solid);
+        }
         InstallAlignmentBinding(node.as_ptr(), image.alignment);
         return node;
     }
@@ -6283,6 +6291,7 @@ private:
         clone->SetGeometryTransform(tmpl->GeometryTransform());
         clone->SetPerspective(tmpl->Perspective());
         clone->SetReflected(tmpl->Reflected());
+        clone->SetSolid(tmpl->Solid());
         clone->SetBaseColor(tmpl->BaseColor(), tmpl->BaseAlpha());
         if (! tmpl->Camera().empty()) clone->SetCamera(tmpl->Camera());
         if (auto control = tmpl->VideoControlHandle()) clone->SetVideoControl(std::move(control));
@@ -6394,6 +6403,13 @@ std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
         auto rit = context.node_id_map.find(id);
         if (rit == context.node_id_map.end() || rit->second.node.is_none()) continue;
         auto&                        ref         = rit->second;
+        if (auto config = context.initial_layer_configs.find(id);
+            config != context.initial_layer_configs.end() && config->second.get("solid").is_some()) {
+            bool solid = true;
+            if (sr::GetJsonValue(config->second, "solid", solid, false)) {
+                (*ref.node)->SetSolid(solid);
+            }
+        }
         context.scene->RegisterNode(
             **ref.node,
             id >= 0 ? std::optional<WallpaperLayerId>(WallpaperLayerId { .value = id })

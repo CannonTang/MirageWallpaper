@@ -1836,6 +1836,7 @@ function __wwCreateNodeStub() {
         size:           new Vec3(100, 100, 0),
         perspective:    false,
         visible:        true,
+        solid:          true,
         verticalalign:  'center',
         horizontalalign:'center',
         alpha:          1,
@@ -2478,6 +2479,15 @@ JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) 
     } else {
         n->SetVisible(visible);
     }
+    return JS_UNDEFINED;
+}
+JSValue NodeGetSolid(JSContext* ctx, JSValueConst this_val) {
+    auto* n = GetLayerNode(this_val);
+    return JS_NewBool(ctx, n ? n->Solid() : true);
+}
+JSValue NodeSetSolid(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* n = GetLayerNode(this_val);
+    if (n) n->SetSolid(JS_ToBool(ctx, val) != 0);
     return JS_UNDEFINED;
 }
 JSValue NodeGetAlpha(JSContext* ctx, JSValueConst this_val) {
@@ -3741,6 +3751,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CGETSET_DEF("angles", NodeGetAngles, NodeSetAngles),
     JS_CGETSET_DEF("size", NodeGetSize, NodeSetIgnore),
     JS_CGETSET_DEF("visible", NodeGetVisible, NodeSetVisible),
+    JS_CGETSET_DEF("solid", NodeGetSolid, NodeSetSolid),
     JS_CGETSET_DEF("alpha", NodeGetAlpha, NodeSetAlpha),
     JS_CGETSET_DEF("brightness", NodeGetBrightness, NodeSetBrightness),
     JS_CGETSET_DEF("color", NodeGetColor, NodeSetColor),
@@ -4253,11 +4264,18 @@ void JsRuntime::TickAll() {
     const bool        in_window   = m_impl->host.inputs.cursor_in_window;
     const uint32_t    btn_pressed = m_impl->host.inputs.mouse_buttons_pressed;
     const uint32_t    btn_release = m_impl->host.inputs.mouse_buttons_released;
+    auto ancestors_visible = [](const sr::SceneNode* node) {
+        for (auto* current = node->Parent(); current != nullptr; current = current->Parent()) {
+            if (! current->Visible()) return false;
+        }
+        return true;
+    };
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
         if (! I->alive || ! I->node) continue;
-        const auto node_cursor = ResolveCursorNode(&m_impl->host, I->node, cursor);
-        const bool over_node   = in_window && node_cursor.inside;
+        const auto current_cursor = ResolveCursorNode(&m_impl->host, I->node, cursor);
+        const bool over_node = in_window && ancestors_visible(I->node) && I->node->Solid() &&
+                               current_cursor.inside;
         // Captured buttons keep the node "engaged" for move/up even when the
         // cursor has moved off its bbox mid-drag.
         const bool now_inside  = over_node || I->captured_buttons != 0;
@@ -4265,7 +4283,7 @@ void JsRuntime::TickAll() {
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
         m_impl->host.active_field_script = fs.get();
         auto invoke_cursor = [&](const char* name, int button) {
-            JSValue event = MakeCursorEvent(ctx, node_cursor, button);
+            JSValue event = MakeCursorEvent(ctx, current_cursor, button);
             InvokeEventCallback(ctx, I->module_ns, name, event, m_impl.get(), I->sha);
             JS_FreeValue(ctx, event);
         };

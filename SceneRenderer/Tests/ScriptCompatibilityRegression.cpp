@@ -692,6 +692,7 @@ void TestCursorClickOrder() {
                        { 1.0f, 1.0f, 1.0f },
                        { 0.0f, 0.0f, 0.0f });
     node.SetSize({ 100.0f, 100.0f });
+    node.SetSolid(true);
 
     sr::script::JsRuntime runtime;
     auto* script = runtime.MakeFieldScript(
@@ -746,6 +747,189 @@ void TestCursorClickOrder() {
     const auto* outside = std::get_if<sr::script::ScalarValue>(&script->last_value());
     Check(outside && outside->v == 12312.0,
           "release outside the pressed node does not dispatch cursorClick");
+}
+
+void TestSolidCursorDispatch() {
+    sr::Scene scene;
+    auto bottom = rstd::sync::Arc<sr::SceneNode>::make(
+        Eigen::Vector3f { 960.0f, 540.0f, 0.0f },
+        Eigen::Vector3f::Ones(),
+        Eigen::Vector3f::Zero(),
+        "bottom");
+    auto top = rstd::sync::Arc<sr::SceneNode>::make(
+        Eigen::Vector3f { 960.0f, 540.0f, 0.0f },
+        Eigen::Vector3f::Ones(),
+        Eigen::Vector3f::Zero(),
+        "top");
+    auto cover = rstd::sync::Arc<sr::SceneNode>::make(
+        Eigen::Vector3f { 960.0f, 540.0f, 0.0f },
+        Eigen::Vector3f::Ones(),
+        Eigen::Vector3f::Zero(),
+        "cover");
+    auto parent = rstd::sync::Arc<sr::SceneNode>::make(
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f::Ones(),
+        Eigen::Vector3f::Zero(),
+        "parent");
+    bottom->SetSize({ 200.0f, 200.0f });
+    top->SetSize({ 200.0f, 200.0f });
+    cover->SetSize({ 200.0f, 200.0f });
+    bottom->SetSolid(true);
+    top->SetSolid(true);
+    scene.AttachRuntimeNode(*scene.sceneGraph, bottom.clone());
+    scene.AttachRuntimeNode(*scene.sceneGraph, parent.clone());
+    scene.AttachRuntimeNode(*parent, top.clone());
+    scene.AttachRuntimeNode(*scene.sceneGraph, cover.clone());
+
+    sr::script::JsRuntime runtime;
+    runtime.SetScene(&scene);
+    auto make_script = [&](std::string_view sha, sr::SceneNode* node) {
+        return runtime.MakeFieldScript(
+            R"JS(
+                let clicks = 0;
+                export function cursorClick() { ++clicks; }
+                export function update() { return clicks; }
+            )JS",
+            sha,
+            sr::script::FieldKind::Scalar,
+            Parse("{}"),
+            Parse("0"),
+            node);
+    };
+    auto* bottom_script = make_script("test/solid_bottom", bottom.as_ptr());
+    auto* top_script    = make_script("test/solid_top", top.as_ptr());
+    auto* cover_script = runtime.MakeFieldScript(
+        "export function update() { return 0; }",
+        "test/non_cursor_cover",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        cover.as_ptr());
+    Check(bottom_script != nullptr && top_script != nullptr && cover_script != nullptr,
+          "overlapping cursor scripts compile");
+    if (bottom_script == nullptr || top_script == nullptr || cover_script == nullptr) return;
+    runtime.SetSceneRoot(scene.sceneGraph.as_ptr());
+
+    auto click = [&]() {
+        sr::script::FrameInputs input;
+        input.cursor_x              = 0.5f;
+        input.cursor_y              = 0.5f;
+        input.cursor_in_window      = true;
+        input.mouse_buttons_down    = 1;
+        input.mouse_buttons_pressed = 1;
+        runtime.SetFrameInputs(input);
+        runtime.TickAll();
+        input.mouse_buttons_down     = 0;
+        input.mouse_buttons_pressed  = 0;
+        input.mouse_buttons_released = 1;
+        runtime.SetFrameInputs(input);
+        runtime.TickAll();
+    };
+
+    click();
+    auto* bottom_clicks = std::get_if<sr::script::ScalarValue>(&bottom_script->last_value());
+    auto* top_clicks    = std::get_if<sr::script::ScalarValue>(&top_script->last_value());
+    Check(bottom_clicks && top_clicks && bottom_clicks->v == 1.0 && top_clicks->v == 1.0,
+          "overlapping visible solid scripts each receive a click");
+
+    top->SetVisible(false);
+    click();
+    bottom_clicks = std::get_if<sr::script::ScalarValue>(&bottom_script->last_value());
+    top_clicks    = std::get_if<sr::script::ScalarValue>(&top_script->last_value());
+    Check(bottom_clicks && top_clicks && bottom_clicks->v == 2.0 && top_clicks->v == 2.0,
+          "an invisible solid cursor layer remains interactive");
+
+    top->SetVisible(true);
+    parent->SetVisible(false);
+    click();
+    bottom_clicks = std::get_if<sr::script::ScalarValue>(&bottom_script->last_value());
+    top_clicks    = std::get_if<sr::script::ScalarValue>(&top_script->last_value());
+    Check(bottom_clicks && top_clicks && bottom_clicks->v == 3.0 && top_clicks->v == 2.0,
+          "a node under an invisible ancestor does not receive cursor input");
+
+    parent->SetVisible(true);
+    top->SetSolid(false);
+    click();
+    bottom_clicks = std::get_if<sr::script::ScalarValue>(&bottom_script->last_value());
+    top_clicks    = std::get_if<sr::script::ScalarValue>(&top_script->last_value());
+    Check(bottom_clicks && top_clicks && bottom_clicks->v == 4.0 && top_clicks->v == 2.0,
+          "a non-solid node does not receive or block cursor input");
+
+    top->SetSolid(true);
+    sr::script::JsRuntime drag_runtime;
+    drag_runtime.SetScene(&scene);
+    auto make_drag_script = [&](std::string_view sha, sr::SceneNode* node) {
+        return drag_runtime.MakeFieldScript(
+            R"JS(
+                let downs = 0;
+                let moves = 0;
+                let ups = 0;
+                export function cursorDown() { ++downs; }
+                export function cursorMove() { ++moves; }
+                export function cursorUp() { ++ups; }
+                export function update() { return downs * 100 + ups * 10 + moves; }
+            )JS",
+            sha,
+            sr::script::FieldKind::Scalar,
+            Parse("{}"),
+            Parse("0"),
+            node);
+    };
+    auto* bottom_drag = make_drag_script("test/drag_bottom", bottom.as_ptr());
+    auto* top_drag    = make_drag_script("test/drag_top", top.as_ptr());
+    Check(bottom_drag != nullptr && top_drag != nullptr,
+          "overlapping drag scripts compile");
+    if (bottom_drag != nullptr && top_drag != nullptr) {
+        drag_runtime.SetSceneRoot(scene.sceneGraph.as_ptr());
+        sr::script::FrameInputs input;
+        input.cursor_x              = 0.5f;
+        input.cursor_y              = 0.5f;
+        input.cursor_in_window      = true;
+        input.mouse_buttons_down    = 1;
+        input.mouse_buttons_pressed = 1;
+        drag_runtime.SetFrameInputs(input);
+        drag_runtime.TickAll();
+
+        input.cursor_x              = 0.0f;
+        input.cursor_y              = 0.0f;
+        input.mouse_buttons_pressed = 0;
+        drag_runtime.SetFrameInputs(input);
+        drag_runtime.TickAll();
+
+        input.mouse_buttons_down     = 0;
+        input.mouse_buttons_released = 1;
+        drag_runtime.SetFrameInputs(input);
+        drag_runtime.TickAll();
+
+        const auto* bottom_value =
+            std::get_if<sr::script::ScalarValue>(&bottom_drag->last_value());
+        const auto* top_value = std::get_if<sr::script::ScalarValue>(&top_drag->last_value());
+        Check(bottom_value && top_value && bottom_value->v == 113.0 && top_value->v == 113.0,
+              "overlapping scripts keep independent drag capture through release outside");
+    }
+
+    sr::SceneNode property_node;
+    Check(property_node.Solid(), "layers without authored solid metadata remain interactive");
+    sr::script::JsRuntime property_runtime;
+    auto* property_script = property_runtime.MakeFieldScript(
+        R"JS(
+            export function update() {
+                thisLayer.solid = false;
+                return thisLayer.solid;
+            }
+        )JS",
+        "test/solid_property",
+        sr::script::FieldKind::Bool,
+        Parse("{}"),
+        Parse("true"),
+        &property_node);
+    Check(property_script != nullptr, "solid property script compiles");
+    if (property_script != nullptr) {
+        property_runtime.TickAll();
+        const auto* value = std::get_if<sr::script::BoolValue>(&property_script->last_value());
+        Check(value && ! value->v && ! property_node.Solid(),
+              "thisLayer.solid reads and writes the live node state");
+    }
 }
 
 void TestWritableScriptProperties() {
@@ -947,6 +1131,7 @@ void TestAnimationEventDispatch() {
 void TestProjectedCursorHit() {
     sr::SceneNode node;
     node.SetSize({ 100.0f, 100.0f });
+    node.SetSolid(true);
 
     sr::script::JsRuntime runtime;
     runtime.SetCursorProjectionResolver([](sr::SceneNode*) {
@@ -997,6 +1182,7 @@ void TestProjectedCursorHit() {
 void TestDegenerateProjectedCursorMisses() {
     sr::SceneNode node;
     node.SetSize({ 100.0f, 100.0f });
+    node.SetSolid(true);
 
     sr::script::JsRuntime runtime;
     runtime.SetCursorProjectionResolver([](sr::SceneNode*) {
@@ -1134,6 +1320,7 @@ int main() {
     TestEffectAndMaterialCompatibility();
     TestTimelineAnimationCompatibility();
     TestCursorClickOrder();
+    TestSolidCursorDispatch();
     TestWritableScriptProperties();
     TestPuppetAnimationCompatibility();
     TestAnimationEventDispatch();

@@ -1312,6 +1312,7 @@ public:
         return alpha;
     }
     bool  Visible() const { return m_visible; }
+    bool  Solid() const { return m_solid; }
     float UserAlpha() const { return m_user_alpha; }
     void  SetVisible(bool v) {
         if (m_sound_control && v != m_visible) {
@@ -1323,6 +1324,7 @@ public:
         m_visible            = v;
         m_visible_overridden = true;
     }
+    void SetSolid(bool v) { m_solid = v; }
     void SetUserAlpha(float v) {
         m_user_alpha       = v;
         m_alpha_overridden = true;
@@ -1569,6 +1571,7 @@ private:
     Eigen::Matrix4d m_geometry_transform { Eigen::Matrix4d::Identity() };
 
     bool                               m_visible { true };
+    bool                               m_solid { true };
     SceneUserVisibilityBinding         m_visible_user_binding {};
     bool                               m_visible_overridden { false };
     float                              m_user_alpha { 1.0f };
