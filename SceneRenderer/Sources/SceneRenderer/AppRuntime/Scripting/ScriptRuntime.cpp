@@ -1605,6 +1605,7 @@ globalThis.createScriptProperties = function () {
   //   after parse propagate.
   builder.finish = function () {
     const _hostValues = builder._hostValues || {};
+    const _scriptValues = Object.create(null);
     const target = {};
     const applyHostScale = (h, value) => {
       if (h && typeof h === 'object' && typeof h.__scriptValueScale === 'number' &&
@@ -1659,9 +1660,14 @@ globalThis.createScriptProperties = function () {
           enumerable: true,
           configurable: true,
           get() {
+            if (Object.prototype.hasOwnProperty.call(_scriptValues, d.name))
+              return _scriptValues[d.name];
             if (Object.prototype.hasOwnProperty.call(_hostValues, d.name))
               return coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]));
             return d.value;
+          },
+          set(value) {
+            _scriptValues[d.name] = coerceDescriptorValue(d, value);
           },
         });
       }

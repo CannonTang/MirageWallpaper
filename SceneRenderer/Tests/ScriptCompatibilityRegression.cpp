@@ -748,6 +748,50 @@ void TestCursorClickOrder() {
           "release outside the pressed node does not dispatch cursorClick");
 }
 
+void TestWritableScriptProperties() {
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            export var scriptProperties = createScriptProperties()
+                .addCheckbox({ name: 'aaa', value: false })
+                .addCheckbox({ name: 'ddd', value: false })
+                .addCheckbox({ name: 'ccc', value: false })
+                .finish();
+            function advance() {
+                if (scriptProperties.aaa) {
+                    scriptProperties.aaa = false;
+                    scriptProperties.ddd = true;
+                    return;
+                }
+                if (scriptProperties.ddd) {
+                    scriptProperties.ddd = false;
+                    scriptProperties.ccc = true;
+                }
+            }
+            export function update() {
+                advance();
+                return scriptProperties.aaa ? 1 : scriptProperties.ddd ? 2 :
+                       scriptProperties.ccc ? 3 : 0;
+            }
+        )JS",
+        "test/writable_script_properties",
+        sr::script::FieldKind::Scalar,
+        Parse(R"({"aaa":true,"ddd":false,"ccc":false})"),
+        Parse("0"));
+    Check(script != nullptr, "writable script properties compile");
+    if (script == nullptr) return;
+
+    runtime.TickAll();
+    const auto* first = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(first && first->v == 2.0,
+          "script property assignment overrides the configured value");
+
+    runtime.TickAll();
+    const auto* second = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(second && second->v == 3.0,
+          "script property assignments persist across updates");
+}
+
 void TestPuppetAnimationCompatibility() {
     struct State {
         sr::script::AnimationLayerSnapshot snapshot;
@@ -1090,6 +1134,7 @@ int main() {
     TestEffectAndMaterialCompatibility();
     TestTimelineAnimationCompatibility();
     TestCursorClickOrder();
+    TestWritableScriptProperties();
     TestPuppetAnimationCompatibility();
     TestAnimationEventDispatch();
     TestProjectedCursorHit();
