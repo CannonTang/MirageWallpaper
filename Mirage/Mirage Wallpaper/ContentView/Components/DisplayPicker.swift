@@ -9,7 +9,6 @@ import SwiftUI
 struct DisplayPicker: View {
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var registry = DisplayRegistryObserver.shared
-    var compact = false
 
     @State private var hovering = false
 
@@ -45,14 +44,7 @@ struct DisplayPicker: View {
                 .disabled(!wallpaperViewModel.hasAnyWallpaper)
             }
         } label: {
-            Group {
-                if compact {
-                    Image(systemName: "display")
-                        .frame(width: 18, height: 18)
-                } else {
-                    Label(label, systemImage: "display")
-                }
-            }
+            Label(label, systemImage: "display")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
@@ -63,7 +55,7 @@ struct DisplayPicker: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(displays.count > 1 ? .visible : .hidden)
-        .fixedSize(horizontal: true, vertical: false)
+        .fixedSize()
         .onHover { hovering = $0 }
         .help(helpText)
     }

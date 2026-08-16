@@ -75,6 +75,7 @@ struct MacDesktopHost {
     id<MTLRenderPipelineState>       present_pipeline { nil };
     id<MTLSamplerState>              present_sampler { nil };
     id<MTLFXSpatialScaler>           spatial_scaler { nil };
+    id<MTLTexture>                   spatial_input { nil };
     id<MTLTexture>                   spatial_output { nil };
     MTLPixelFormat                   scaler_input_format { MTLPixelFormatInvalid };
     MTLPixelFormat                   scaler_output_format { MTLPixelFormatInvalid };
@@ -110,6 +111,10 @@ void ResetSpatialScaler(MacDesktopHost* host) {
     if (host->spatial_scaler != nil) {
         [host->spatial_scaler release];
         host->spatial_scaler = nil;
+    }
+    if (host->spatial_input != nil) {
+        [host->spatial_input release];
+        host->spatial_input = nil;
     }
     if (host->spatial_output != nil) {
         [host->spatial_output release];
@@ -241,6 +246,27 @@ bool EnsureSpatialScaler(MacDesktopHost* host, id<MTLTexture> source,
     return host->spatial_scaler != nil;
 }
 
+id<MTLTexture> EnsureSpatialInput(MacDesktopHost* host, id<MTLTexture> source) {
+    if (host == nullptr || host->spatial_scaler == nil || source == nil) return nil;
+    if (host->spatial_input != nil &&
+        host->spatial_input.pixelFormat == source.pixelFormat &&
+        host->spatial_input.width == source.width &&
+        host->spatial_input.height == source.height) return host->spatial_input;
+    if (host->spatial_input != nil) {
+        [host->spatial_input release];
+        host->spatial_input = nil;
+    }
+    MTLTextureDescriptor* desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:source.pixelFormat
+                                                           width:source.width
+                                                          height:source.height
+                                                       mipmapped:NO];
+    desc.storageMode = MTLStorageModePrivate;
+    desc.usage = host->spatial_scaler.colorTextureUsage;
+    host->spatial_input = [host->presenter_device newTextureWithDescriptor:desc];
+    return host->spatial_input;
+}
+
 id<MTLTexture> EnsureSpatialOutput(MacDesktopHost* host, id<MTLTexture> destination) {
     if (host == nullptr || host->spatial_scaler == nil || destination == nil) return nil;
     if (host->spatial_output != nil &&
@@ -274,6 +300,20 @@ void EncodeTexture(MacDesktopHost* host, id<MTLCommandBuffer> command_buffer,
     [encoder setFragmentTexture:source atIndex:0];
     [encoder setFragmentSamplerState:host->present_sampler atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+}
+
+void CopyTexture(id<MTLCommandBuffer> command_buffer, id<MTLTexture> source,
+                 id<MTLTexture> destination) {
+    id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
+    [encoder copyFromTexture:source
+                 sourceSlice:0
+                 sourceLevel:0
+                toTexture:destination
+                 destinationSlice:0
+                 destinationLevel:0
+                 sliceCount:1
+                 levelCount:1];
     [encoder endEncoding];
 }
 
@@ -845,7 +885,8 @@ extern "C" void SceneRendererMacDesktopPresentMetalFrame(
             EnsureSpatialScaler(host, source, drawable.texture)) {
             const MTLTextureUsage input_usage = host->spatial_scaler.colorTextureUsage;
             const MTLTextureUsage output_usage = host->spatial_scaler.outputTextureUsage;
-            const bool valid_input = (source.usage & input_usage) == input_usage;
+            id<MTLTexture> input = EnsureSpatialInput(host, source);
+            const bool valid_input = input != nil && (input.usage & input_usage) == input_usage;
             id<MTLTexture> output = nil;
             if ((drawable.texture.usage & output_usage) == output_usage &&
                 drawable.texture.storageMode == MTLStorageModePrivate) {
@@ -854,9 +895,10 @@ extern "C" void SceneRendererMacDesktopPresentMetalFrame(
                 output = EnsureSpatialOutput(host, drawable.texture);
             }
             if (valid_input && output != nil) {
+                CopyTexture(command_buffer, source, input);
                 host->spatial_scaler.inputContentWidth = content_width;
                 host->spatial_scaler.inputContentHeight = content_height;
-                host->spatial_scaler.colorTexture = source;
+                host->spatial_scaler.colorTexture = input;
                 host->spatial_scaler.outputTexture = output;
                 [host->spatial_scaler encodeToCommandBuffer:command_buffer];
                 host->spatial_scaler.colorTexture = nil;

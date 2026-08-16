@@ -10,9 +10,9 @@ struct WorkshopFilterSidebar: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
+                VStack(spacing: 30) {
                     Button {
                         workshopViewModel.clearFilters()
                     } label: {
@@ -136,11 +136,9 @@ struct WorkshopFilterSidebar: View {
                     }
                 }
                 .padding(.trailing)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
