@@ -1815,7 +1815,7 @@ class WorkshopViewModel: ObservableObject {
         if !subscriptionSelectedTags.isEmpty,
            !selectableTags.isSubset(of: subscriptionSelectedTags) {
             let itemTags = Set(item.tags.map { $0.lowercased() })
-            guard subscriptionSelectedTags.allSatisfy({ itemTags.contains($0.lowercased()) }) else {
+            guard subscriptionSelectedTags.contains(where: { itemTags.contains($0.lowercased()) }) else {
                 return false
             }
         }
