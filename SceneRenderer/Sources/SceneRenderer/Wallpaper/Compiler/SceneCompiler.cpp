@@ -3098,6 +3098,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                                                                 Vector3f(wpimgobj.scale.data()),
                                                                 Vector3f(wpimgobj.angles.data()),
                                                                 wpimgobj.name);
+    if (! wpimgobj.visible) spImgNode->SetVisible(false);
     const Vector3f alignment_offset =
         wpimgobj.fullscreen
             ? Vector3f::Zero()
@@ -6772,6 +6773,8 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
             std::uint32_t parent = 0;
             sr::GetJsonValue(o, "parent", parent, false);
             context.object_parent_ids[id] = parent;
+            context.scene->RegisterAuthoredLayer(
+                WallpaperLayerId { .value = id }, static_cast<i32>(parent));
             bool solid                    = false;
             sr::GetJsonValue(o, "solid", solid, false);
             if (solid) context.solid_layer_ids.insert(id);

@@ -1079,9 +1079,28 @@ void Scene::AttachRuntimeNode(SceneNode& parent, rstd::sync::Arc<SceneNode> node
     m_render_graph_dirty = true;
 }
 
+void Scene::RegisterAuthoredLayer(WallpaperLayerId id, i32 parent_id) {
+    if (id.value < 0 || m_authored_layer_parents.contains(id.value)) return;
+    m_authored_layer_order[parent_id].push_back(id.value);
+    m_authored_layer_parents[id.value] = parent_id;
+}
+
 std::optional<std::size_t> Scene::LayerIndex(const SceneNode& node) const {
     auto* parent = node.Parent();
     if (parent == nullptr || ! node.SceneScriptLayer()) return std::nullopt;
+    if (auto wallpaper = node.WallpaperIdentity()) {
+        auto parent_id = m_authored_layer_parents.find(wallpaper->value);
+        if (parent_id != m_authored_layer_parents.end()) {
+            auto siblings = m_authored_layer_order.find(parent_id->second);
+            if (siblings != m_authored_layer_order.end()) {
+                std::size_t index = 0;
+                for (i32 sibling : siblings->second) {
+                    if (sibling == wallpaper->value) return index;
+                    ++index;
+                }
+            }
+        }
+    }
     std::size_t index = 0;
     for (const auto& child : parent->m_children) {
         if (! child->SceneScriptLayer()) continue;

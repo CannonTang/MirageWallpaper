@@ -1056,6 +1056,24 @@ void TestFinalResolvePrecedesLinkPublication() {
           "link consumer samples the version published after explicit final-resolve");
 }
 
+void TestAuthoredLayerOrdering() {
+    sr::Scene scene;
+    scene.RegisterAuthoredLayer(sr::WallpaperLayerId { .value = 10 }, 0);
+    scene.RegisterAuthoredLayer(sr::WallpaperLayerId { .value = 11 }, 0);
+    scene.RegisterAuthoredLayer(sr::WallpaperLayerId { .value = 12 }, 0);
+
+    auto first = rstd::sync::Arc<sr::SceneNode>::make();
+    auto third = rstd::sync::Arc<sr::SceneNode>::make();
+    scene.RegisterNode(*first, sr::WallpaperLayerId { .value = 10 });
+    scene.RegisterNode(*third, sr::WallpaperLayerId { .value = 12 });
+    scene.sceneGraph->AppendChild(first.clone());
+    scene.sceneGraph->AppendChild(third.clone());
+
+    Check(scene.LayerIndex(*first) == std::optional<std::size_t>(0) &&
+              scene.LayerIndex(*third) == std::optional<std::size_t>(2),
+          "script layer indexes preserve omitted authored siblings");
+}
+
 void TestUserPropertyIndexesOwnTheirTargets() {
     sr::Scene scene;
     std::weak_ptr<sr::SceneMaterial> material_weak;
@@ -1223,6 +1241,15 @@ void TestWallpaper2887099508Interactions() {
     auto* first_page = FindWallpaperNode(scene->sceneGraph.as_ptr(), 384);
     Check(page != nullptr && first_page != nullptr, "2887099508 book nodes exist");
     if (page == nullptr || first_page == nullptr) return;
+    auto* tim_logo = FindWallpaperNode(scene->sceneGraph.as_ptr(), 500);
+    Check(tim_logo != nullptr && scene->LayerIndex(*tim_logo) == std::optional<std::size_t>(78),
+          "2887099508 preserves the authored TIM logo layer index");
+    Check(FindWallpaperNode(scene->sceneGraph.as_ptr(), 495) == nullptr,
+          "2887099508 does not load the omitted hidden particle renderer");
+    Check(! page->Visible() && ! first_page->Visible(),
+          "2887099508 book pages start hidden");
+    Check(page->Solid() && first_page->Solid() && tim_logo != nullptr && tim_logo->Solid(),
+          "2887099508 interactive layers retain authored solid state");
     auto page_animation       = page->FindAnimation("111");
     auto first_page_animation = first_page->FindAnimation("900");
     Check(page_animation != nullptr && first_page_animation != nullptr,
@@ -1458,6 +1485,7 @@ int main() {
     TestCompositeLayerElisionAndPhysicalExtent();
     TestDynamicCopySnapshotMatchesSourceRequest();
     TestFinalResolvePrecedesLinkPublication();
+    TestAuthoredLayerOrdering();
     TestUserPropertyIndexesOwnTheirTargets();
     TestMdlv23MultiCurveMorphEvents();
     TestWallpaper2887099508Interactions();

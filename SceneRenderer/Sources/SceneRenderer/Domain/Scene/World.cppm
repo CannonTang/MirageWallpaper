@@ -3031,6 +3031,7 @@ public:
     void                      RegisterScriptLayer(SceneNode& node);
     void                      AttachRuntimeNode(SceneNode& parent,
                                                 rstd::sync::Arc<SceneNode> node);
+    void                      RegisterAuthoredLayer(WallpaperLayerId id, i32 parent_id);
     std::optional<std::size_t> LayerIndex(const SceneNode& node) const;
     bool                       SortLayer(SceneNode& node, std::size_t index);
     SceneResourceIndex&       ResourceIndex() { return m_resource_index; }
@@ -3045,6 +3046,8 @@ private:
     uint32_t                                 m_resource_generation { 0 };
     uint32_t                                 m_next_node_index { 0 };
     std::unordered_map<i32, SceneNodeId>     m_wallpaper_node_ids;
+    Map<i32, std::vector<i32>>               m_authored_layer_order;
+    Map<i32, i32>                            m_authored_layer_parents;
     SceneResourceIndex                       m_resource_index;
     bool                                     m_render_graph_dirty { false };
     bool                                     m_dynamic_topology_dirty { false };
