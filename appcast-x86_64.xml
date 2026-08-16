@@ -24,6 +24,23 @@ build(video): export compile commands
         </item>
         <item>
             <title>1.0.7</title>
+            <pubDate>Sun, 16 Aug 2026 06:54:01 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>342</sparkle:version>
+            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: b03fc597950dfd2a6d84099853714218f31530ff
+Channel: beta
+
+fix(scene): support scalar layer origins
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-342-b03fc597950d-macOS-x86_64.zip" length="236371540" type="application/octet-stream" sparkle:edSignature="Dl7YXYspn5PHV3IC4RpNIbWoETKSRNkCMFhPZr1BZAWrlQJAIVCCAh8oTRbEi+KtLq37oZNsiRCWqfINDW/GCQ=="/>
+        </item>
+        <item>
+            <title>1.0.7</title>
             <pubDate>Sun, 16 Aug 2026 06:01:58 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -89,23 +106,6 @@ fix(scene): resolve workshop font paths
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-335-3511db723c63-macOS-x86_64.zip" length="236310295" type="application/octet-stream" sparkle:edSignature="9CVStB/EtfzPsN7XAr78sa/Pks/swcPFStTzNNLR+etN+pm/VPprO0ZLrGM95sFdI33TctQ1W/rv/6x0KDDTCg=="/>
-        </item>
-        <item>
-            <title>1.0.7</title>
-            <pubDate>Sat, 15 Aug 2026 14:21:32 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>333</sparkle:version>
-            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: d4fb4566a33024cf630229b7beb30b23487927b0
-Channel: beta
-
-Merge pull request #33 from ccfco/fix/restore-all-displays-on-launch
-
-fix(app): restore wallpapers on all displays at launch
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-333-d4fb4566a330-macOS-x86_64.zip" length="236297680" type="application/octet-stream" sparkle:edSignature="ETsft0T3hCOApy2tDEommAW8M3fke0dnpyvCs9HJDnp77Jf5hegJ+JvTnYzpMJAA+TjBoet396y8/hHFyG6sAw=="/>
         </item>
         <item>
             <title>1.0.7</title>
@@ -473,6 +473,6 @@ chore(release): bump version to 1.0.2
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: LL/aao27i18gCBHCWgBHxSqcJVT0Mz65aJf0+FmXZjw4rE0FPUjsNDjyPhjkdoH/UFLIlLUL2+R6W0bqAH9WBA==
-length: 34573
+edSignature: qexd9JaQY3DFExD5u6ko0hYL0x3Lf/07qUio2X8Sv7/e4DcibNeHyaZmIX7IZZyg6xq3YYtd5ObAxKADTGBfCw==
+length: 34491
 -->
