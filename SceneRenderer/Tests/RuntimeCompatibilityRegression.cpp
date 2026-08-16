@@ -197,6 +197,13 @@ void TestAnimatedSceneZoom() {
     scene.TickCameraPaths();
     Check(Near(global->Width(), 600.0f) && Near(global->Height(), 300.0f),
           "root zoom baseline recapture does not apply the animated ratio twice");
+
+    scene.cameras["global_perspective"] = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakePerspective(16.0 / 9.0, 0.1, 100.0, 50.0));
+    sr::vulkan::UpdateCameraFillModeForExtent(
+        scene, sr::FillMode::ASPECTCROP, 1920, 1080);
+    Check(Near(global->Width(), 1920.0f) && Near(global->Height(), 1080.0f),
+          "fill mode refresh preserves the current animated scene zoom");
 }
 
 void TestAnimatedSceneZoomWithCameraPath() {

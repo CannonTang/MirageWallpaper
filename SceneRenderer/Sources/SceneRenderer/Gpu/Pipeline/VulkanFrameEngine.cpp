@@ -1663,6 +1663,7 @@ void sr::vulkan::UpdateCameraFillModeForExtent(sr::Scene& scene, sr::FillMode fi
     gPerCam.Update();
     scene.UpdateLinkedCamera("global");
     scene.CaptureCameraPathViewports();
+    scene.TickCameraPaths();
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fillmode) {
