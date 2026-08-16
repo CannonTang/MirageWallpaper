@@ -2406,7 +2406,12 @@ JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
-    if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
+    if (JS_IsNumber(val)) {
+        if (JS_ToFloat64(ctx, &x, val) != 0 || ! std::isfinite(x)) return JS_UNDEFINED;
+        y = z = x;
+    } else if (! ReadXYZ(ctx, val, x, y, z)) {
+        return JS_UNDEFINED;
+    }
     // Route through the text-origin hook when present so a script drag updates
     // the layer's logical origin (and re-anchors), instead of writing a raw
     // translate the per-frame text layout would immediately overwrite.

@@ -932,6 +932,31 @@ void TestSolidCursorDispatch() {
     }
 }
 
+void TestScalarOriginAssignment() {
+    sr::SceneNode node(
+        { 100.0f, 200.0f, 3.0f }, Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero());
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            export function update() {
+                thisLayer.origin = (-1000, -1000, 0);
+                return thisLayer.origin;
+            }
+        )JS",
+        "test/scalar_origin_assignment",
+        sr::script::FieldKind::Vec3,
+        Parse("{}"),
+        Parse("\"100 200 3\""),
+        &node);
+    Check(script != nullptr, "scalar origin assignment script compiles");
+    if (script == nullptr) return;
+    runtime.TickAll();
+    const auto* value = std::get_if<sr::script::Vec3Value>(&script->last_value());
+    Check(value && value->x == 0.0 && value->y == 0.0 && value->z == 0.0 &&
+              node.Translate() == Eigen::Vector3f::Zero(),
+          "a numeric origin assignment splats to all three components");
+}
+
 void TestWritableScriptProperties() {
     sr::script::JsRuntime runtime;
     auto* script = runtime.MakeFieldScript(
@@ -1321,6 +1346,7 @@ int main() {
     TestTimelineAnimationCompatibility();
     TestCursorClickOrder();
     TestSolidCursorDispatch();
+    TestScalarOriginAssignment();
     TestWritableScriptProperties();
     TestPuppetAnimationCompatibility();
     TestAnimationEventDispatch();
