@@ -1403,6 +1403,7 @@ std::optional<ImageParameters> TextureCache::Query(std::string_view key, Texture
         } else {
             query.share_ready = false;
             query.persist     = persist;
+            query.query_keys.insert(query_key);
 
             return ToImageParameters(query.image);
         }
@@ -1443,7 +1444,6 @@ void TextureCache::MarkShareReady(std::string_view key) {
         if (query->persist) return;
         query->query_keys.erase(std::string(key));
         query->share_ready = query->query_keys.empty();
-        m_query_map.erase(it);
     }
 }
 
