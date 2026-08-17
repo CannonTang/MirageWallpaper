@@ -493,7 +493,7 @@ struct RenderOptions: Equatable {
     var fillMode: FillMode = .cover
     var enableSpectrum: Bool = true
     var renderScale: Double = 1.0
-    var enableMetalFX: Bool = true
+    var enableMetalFX: Bool = false
     var msaaSamples: Int = 1
     var loadFromMemory: Bool = false
     var enableHDRVideo: Bool = false

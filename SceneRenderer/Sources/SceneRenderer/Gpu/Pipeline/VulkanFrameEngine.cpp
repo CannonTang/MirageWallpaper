@@ -872,7 +872,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     std::vector<Extension> inst_exts { base_inst_exts.begin(), base_inst_exts.end() };
     std::vector<Extension> device_exts { base_device_exts.begin(), base_device_exts.end() };
-    if (info.metal_frame_callback) {
+    if (m_metal_frame_cb) {
         for (auto& extension : device_exts) {
             if (extension.name == "VK_EXT_metal_objects") extension.required = true;
         }

@@ -100,7 +100,7 @@ struct GlobalSettings: Codable, Equatable {
     var antiAliasing = GSAntiAliasingQuality.msaa_x2
     var postProcessing = GSPostProcessingQuality.disabled
     var textureResolution = GSTextureResolutionQuality.automatic
-    var metalFXEnabled: Bool? = true
+    var metalFXEnabled: Bool? = false
     // Optional keeps settings written by older Mirage versions decodable.
     var wallpaperLoadSource: GSWallpaperLoadSource? = .disk
     var animatedPreviewPlayback: GSAnimatedPreviewPlayback? = .hover
@@ -112,7 +112,7 @@ struct GlobalSettings: Codable, Equatable {
     }
 
     var shouldEnableMetalFX: Bool {
-        metalFXEnabled ?? true
+        metalFXEnabled ?? false
     }
     
     // MARK: Automatic Setup

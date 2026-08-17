@@ -840,9 +840,15 @@ extern "C" bool SceneRendererMacDesktopPrepareMetalFX(void* handle) {
     if (host == nullptr || host->surface_layer == nil || host->surface_layer.device == nil)
         return false;
     std::scoped_lock lock(host->present_mutex);
+    const bool ready = BuildPresenter(host, host->surface_layer.device) && host->metalfx_supported;
+    if (! ready) {
+        host->metal_presenter_enabled.store(false);
+        host->surface_layer.framebufferOnly = YES;
+        ReleasePresenter(host);
+        return false;
+    }
     host->surface_layer.framebufferOnly = NO;
-    const bool ready = BuildPresenter(host, host->surface_layer.device);
-    host->metal_presenter_enabled.store(ready);
+    host->metal_presenter_enabled.store(true);
     if (ready) {
         NSLog(@"SceneRenderer MetalFX presenter prepared on %@, supported=%@",
               host->surface_layer.device.name,
@@ -879,13 +885,18 @@ extern "C" void SceneRendererMacDesktopPresentMetalFrame(
         const NSUInteger content_height =
             std::min<NSUInteger>(source_height == 0 ? source.height : source_height, source.height);
         bool used_metalfx = false;
+        bool used_direct_input = false;
         if (content_width > 0 && content_height > 0 &&
             drawable.texture.width >= content_width &&
             drawable.texture.height >= content_height &&
             EnsureSpatialScaler(host, source, drawable.texture)) {
             const MTLTextureUsage input_usage = host->spatial_scaler.colorTextureUsage;
             const MTLTextureUsage output_usage = host->spatial_scaler.outputTextureUsage;
-            id<MTLTexture> input = EnsureSpatialInput(host, source);
+            const bool source_is_valid_input =
+                source.storageMode == MTLStorageModePrivate &&
+                (source.usage & input_usage) == input_usage;
+            id<MTLTexture> input =
+                source_is_valid_input ? source : EnsureSpatialInput(host, source);
             const bool valid_input = input != nil && (input.usage & input_usage) == input_usage;
             id<MTLTexture> output = nil;
             if ((drawable.texture.usage & output_usage) == output_usage &&
@@ -895,7 +906,11 @@ extern "C" void SceneRendererMacDesktopPresentMetalFrame(
                 output = EnsureSpatialOutput(host, drawable.texture);
             }
             if (valid_input && output != nil) {
-                CopyTexture(command_buffer, source, input);
+                if (input != source) {
+                    CopyTexture(command_buffer, source, input);
+                } else {
+                    used_direct_input = true;
+                }
                 host->spatial_scaler.inputContentWidth = content_width;
                 host->spatial_scaler.inputContentHeight = content_height;
                 host->spatial_scaler.colorTexture = input;
@@ -915,9 +930,9 @@ extern "C" void SceneRendererMacDesktopPresentMetalFrame(
 
         if (used_metalfx && ! host->logged_metalfx) {
             host->logged_metalfx = true;
-            NSLog(@"SceneRenderer MetalFX Spatial active: %lux%lu -> %lux%lu",
+            NSLog(@"SceneRenderer MetalFX Spatial active: %lux%lu -> %lux%lu, input=%@",
                   content_width, content_height, drawable.texture.width,
-                  drawable.texture.height);
+                  drawable.texture.height, used_direct_input ? @"direct" : @"copy");
         } else if (! used_metalfx && ! host->logged_linear) {
             host->logged_linear = true;
             NSLog(@"SceneRenderer MetalFX Spatial unavailable for this frame; using linear fallback");
