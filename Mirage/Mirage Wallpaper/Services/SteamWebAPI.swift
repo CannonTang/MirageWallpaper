@@ -115,9 +115,9 @@ final class SteamWebAPI {
         let activeSelectedTags = selectableTags.isSubset(of: selectedSelectableTags)
             ? Set<String>()
             : selectedSelectableTags
-        let filterTagsLocally = activeSelectedTags.count > 1
         let selectedTagKeys = Set(activeSelectedTags.map { $0.lowercased() })
-        var allTags = tags.filter { !selectableTags.contains($0) }
+        let baseTags = tags.filter { !selectableTags.contains($0) }
+        var allTags = baseTags
         if activeSelectedTags.count == 1, let selectedTag = activeSelectedTags.first {
             allTags.append(selectedTag)
         }
@@ -171,11 +171,51 @@ final class SteamWebAPI {
         }) {
             allTags.append(tag)
         }
+        let filterTagsLocally = activeSelectedTags.count > 1 && !allTags.isEmpty
         for (index, tag) in allTags.enumerated() {
             params["requiredtags[\(index)]"] = tag
         }
         let requestedPage = max(1, page)
         let requestedPageSize = max(1, perPage)
+        if filterTagsLocally {
+            var mergedItems: [WorkshopItem] = []
+            var seenIDs = Set<String>()
+            var total = 0
+            for tag in activeSelectedTags.sorted() {
+                let result = try await queryFiles(
+                    searchText: normalizedSearchText,
+                    tags: baseTags + [tag],
+                    sortOrder: sortOrder,
+                    typeFilters: typeFilters,
+                    ageRating: ageRating,
+                    widescreenResolution: widescreenResolution,
+                    ultraWidescreenResolution: ultraWidescreenResolution,
+                    dualscreenResolution: dualscreenResolution,
+                    triplescreenResolution: triplescreenResolution,
+                    portraitResolution: portraitResolution,
+                    miscResolution: miscResolution,
+                    showOnly: showOnly,
+                    favoriteIDs: favoriteIDs,
+                    page: requestedPage,
+                    perPage: requestedPageSize,
+                    trendDays: trendDays,
+                    enrichCreatorProfiles: false
+                )
+                total += result.total
+                for item in result.items where seenIDs.insert(item.publishedFileId).inserted {
+                    mergedItems.append(item)
+                }
+            }
+            let pageItems = Array(mergedItems.prefix(requestedPageSize))
+            let items = enrichCreatorProfiles ? await enrichCreators(in: pageItems) : pageItems
+            return (items, total)
+        }
+        if activeSelectedTags.count > 1 {
+            params["match_all_tags"] = "false"
+            for (index, tag) in activeSelectedTags.sorted().enumerated() {
+                params["requiredtags[\(index)]"] = tag
+            }
+        }
         let resultItems: [WorkshopItem]
         let resultTotal: Int
         if filterTagsLocally || filterTypesLocally || filterRatingsLocally || filterResolutionLocally || filterFavoritesLocally {
