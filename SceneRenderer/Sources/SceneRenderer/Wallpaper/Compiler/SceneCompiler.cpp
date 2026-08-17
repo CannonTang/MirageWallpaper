@@ -3553,7 +3553,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                 [effect_camera_anchor](double) { (void)effect_camera_anchor; });
         }
         // set camera to attatch effect
-        if (isPassthrough && wpimgobj.fullscreen) {
+        if (isPassthrough) {
             scene.cameras[nodeAddr] = std::make_shared<SceneCamera>(SceneCamera::MakeOrthographic(
                 scene.activeCamera->Width(), scene.activeCamera->Height(), -1.0, 1.0));
             auto attached = scene.activeCamera->GetAttachedNode();
@@ -3621,7 +3621,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             } else if (wpimgobj.composite_layer) {
                 scene.renderTargets[effect_ppong_a].bind = {
                     .enable = true,
-                    .name   = nodeAddr,
+                    .name   = nodeAddr + "_group",
                     .screen = true,
                 };
             }
