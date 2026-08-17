@@ -1738,7 +1738,6 @@ void VulkanRender::Impl::refreshPreparedResources(Scene&                     sce
         scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
-    m_device->tex_cache().BeginVideoTextureActivity();
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
     m_program.rebuildScopes();
 

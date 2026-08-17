@@ -1264,6 +1264,7 @@ void SceneRenderController::on(RenderDraw&&) {
 }
 
 void SceneRenderController::on(RenderSetFillMode&& m) {
+    if (m.mode == m_fillmode) return;
     m_fillmode = m.mode;
     if (m_scene && renderInited()) {
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
