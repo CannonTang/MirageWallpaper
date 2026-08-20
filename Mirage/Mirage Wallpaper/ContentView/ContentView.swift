@@ -66,6 +66,7 @@ struct ContentView: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
+    @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
     @State private var loadedSections: Set<MainSection>
 
@@ -246,6 +247,9 @@ struct ContentView: View {
                 message: Text(feedback.message),
                 dismissButton: .default(Text("好"))
             )
+        }
+        .sheet(isPresented: $dynamicLockScreenManager.isConfirmationPresented) {
+            DynamicLockScreenConfirmationSheet(manager: dynamicLockScreenManager)
         }
         .alert(
             "Steam 收藏",

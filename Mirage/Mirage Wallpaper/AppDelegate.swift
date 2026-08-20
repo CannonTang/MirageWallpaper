@@ -25,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var developerLogWindowWasOpened = false
     private var localizationObserver: NSObjectProtocol?
     private var openWindowObserver: NSObjectProtocol?
+    private var dynamicLockScreenSessionObservers: [NSObjectProtocol] = []
 
     static var shared = AppDelegate()
 
@@ -57,6 +58,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.openMainWindow()
         }
 
+        let lockCenter = DistributedNotificationCenter.default()
+        dynamicLockScreenSessionObservers = [
+            lockCenter.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, DynamicLockScreenManager.shared.isEnabled, DynamicLockScreenManager.shared.isConfigured else { return }
+                    self.wallpaperViewModel.setDynamicLockScreenPaused(true)
+                    self.postDynamicLockScreenState(locked: true)
+                }
+            },
+            lockCenter.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, DynamicLockScreenManager.shared.isEnabled, DynamicLockScreenManager.shared.isConfigured else { return }
+                    self.wallpaperViewModel.setDynamicLockScreenPaused(false)
+                    self.postDynamicLockScreenState(locked: false)
+                }
+            }
+        ]
+
         wallpaperViewModel.renderer.onProcessExit = { [weak self] screen, abnormal in
             guard abnormal, screen == 0 else { return }
             NSLog("[Mirage] 渲染子进程异常退出（屏幕 \(screen)）")
@@ -86,6 +105,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func postDynamicLockScreenState(locked: Bool) {
+        let name = locked ? "cn.laobamac.Mirage.dynamicLockScreen.locked" : "cn.laobamac.Mirage.dynamicLockScreen.unlocked"
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(name as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before any wallpaper is applied and before the screen-saver check can
         // restart WallpaperAgent: undoes an override the previous run died
@@ -97,6 +127,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         SteamServiceManager.shared.start()
+
+        if DynamicLockScreenManager.shared.isEnabled {
+            DynamicLockScreenManager.shared.setEnabled(true)
+        }
 
         if wallpaperViewModel.hasAnyWallpaper {
             wallpaperViewModel.restoreAllDisplays()

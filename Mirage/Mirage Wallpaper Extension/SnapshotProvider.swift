@@ -1,0 +1,79 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
+import AVFoundation
+import CoreGraphics
+import Foundation
+@preconcurrency import IOSurface
+import ImageIO
+
+enum MirageSnapshotProvider {
+    static func installEncodingCompatibility() {
+        guard let snapshotClass = NSClassFromString("WallpaperSnapshotXPC"),
+              let method = class_getInstanceMethod(snapshotClass, NSSelectorFromString("encodeWithCoder:")),
+              let coderClass = NSClassFromString("NSXPCCoder") else { return }
+        let selector = NSSelectorFromString("encodeWithCoder:")
+        let original = method_getImplementation(method)
+        typealias Encode = @convention(c) (AnyObject, Selector, NSCoder) -> Void
+        let originalFunction = unsafeBitCast(original, to: Encode.self)
+        let block: @convention(block) (AnyObject, NSCoder) -> Void = { object, coder in
+            let originalClass = object_getClass(coder)
+            object_setClass(coder, coderClass)
+            originalFunction(object, selector, coder)
+            if let originalClass { object_setClass(coder, originalClass) }
+        }
+        method_setImplementation(method, imp_implementationWithBlock(block))
+    }
+
+    static func makeSnapshot(from configuration: MirageLockConfiguration?) -> AnyObject? {
+        guard let display = configuration?.displays.values.first else { return nil }
+        let image = display.previewPath.flatMap(loadImage)
+            ?? (display.kind == "video" ? loadVideoFrame(at: URL(fileURLWithPath: display.entryPath)) : nil)
+        guard let image else { return nil }
+        return makeSnapshot(from: image)
+    }
+
+    private static func loadImage(_ path: String) -> CGImage? {
+        let url = URL(fileURLWithPath: path)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    private static func loadVideoFrame(at url: URL) -> CGImage? {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        return try? generator.copyCGImage(at: .zero, actualTime: nil)
+    }
+
+    private static func makeSnapshot(from image: CGImage) -> AnyObject? {
+        let properties: [IOSurfacePropertyKey: any Sendable] = [
+            .width: image.width,
+            .height: image.height,
+            .bytesPerElement: 4,
+            .pixelFormat: 0x42475241
+        ]
+        guard let surface = IOSurface(properties: properties),
+              let snapshotClass = NSClassFromString("WallpaperSnapshotXPC"),
+              let instance = class_createInstance(snapshotClass, 0),
+              class_getInstanceSize(snapshotClass) >= 16,
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: surface.baseAddress,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: surface.bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+              ) else { return nil }
+        surface.lock(options: [], seed: nil)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        surface.unlock(options: [], seed: nil)
+        let retainedSurface = Unmanaged.passRetained(surface).toOpaque()
+        Unmanaged.passUnretained(instance as AnyObject).toOpaque().advanced(by: 8).storeBytes(of: retainedSurface, as: UnsafeMutableRawPointer.self)
+        return instance as AnyObject
+    }
+}

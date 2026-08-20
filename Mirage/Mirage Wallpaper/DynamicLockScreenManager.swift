@@ -1,0 +1,346 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
+import AppKit
+import CryptoKit
+import Foundation
+
+struct DynamicLockScreenDisplayConfiguration: Codable {
+    let displayID: UInt32
+    let wallpaperID: String
+    let title: String
+    let kind: String
+    let renderDirectory: String
+    let entryPath: String
+    let previewPath: String?
+    let assetOverlays: [String]
+    let properties: [String: AnyCodableValue]
+    let rawProperties: [String: AnyCodableValue]
+    let fps: Int
+    let fillMode: String
+    let enableHDRVideo: Bool
+}
+
+struct DynamicLockScreenConfiguration: Codable {
+    let version: Int
+    let displays: [String: DynamicLockScreenDisplayConfiguration]
+}
+
+enum AnyCodableValue: Codable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: AnyCodableValue])
+    case array([AnyCodableValue])
+    case null
+
+    init(_ value: Any) {
+        switch value {
+        case let value as String: self = .string(value)
+        case let value as NSString: self = .string(value as String)
+        case let value as Bool: self = .bool(value)
+        case let value as NSNumber: self = .number(value.doubleValue)
+        case let value as [String: Any]: self = .object(value.mapValues(AnyCodableValue.init))
+        case let value as [Any]: self = .array(value.map(AnyCodableValue.init))
+        default: self = .null
+        }
+    }
+
+    func value() -> Any {
+        switch self {
+        case .string(let value): return value
+        case .number(let value): return value
+        case .bool(let value): return value
+        case .object(let value): return value.mapValues { $0.value() }
+        case .array(let value): return value.map { $0.value() }
+        case .null: return NSNull()
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { self = .null; return }
+        if let value = try? container.decode(Bool.self) { self = .bool(value); return }
+        if let value = try? container.decode(Double.self) { self = .number(value); return }
+        if let value = try? container.decode(String.self) { self = .string(value); return }
+        if let value = try? container.decode([String: AnyCodableValue].self) { self = .object(value); return }
+        self = .array(try container.decode([AnyCodableValue].self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+}
+
+@MainActor
+final class DynamicLockScreenManager: ObservableObject {
+    static let shared = DynamicLockScreenManager()
+
+    @Published private(set) var isEnabled: Bool
+    @Published var isConfirmationPresented = false
+
+    private let enabledKey = "Mirage.DynamicLockScreen.Enabled"
+    private let confirmationKey = "Mirage.DynamicLockScreen.Confirmed"
+    private let appGroupID = "group.cn.laobamac.Mirage"
+    private let configurationName = "dynamic-lock-screen.json"
+
+    private init() {
+        isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
+    }
+
+    var isAvailable: Bool {
+        if #available(macOS 26.0, *) { return true }
+        return false
+    }
+
+    var hasConfirmedWarning: Bool {
+        UserDefaults.standard.bool(forKey: confirmationKey)
+    }
+
+    var canUse: Bool {
+        isAvailable && isEnabled && hasConfirmedWarning && sharedContainerURL != nil
+    }
+
+    var isConfigured: Bool {
+        guard let url = configurationURL,
+              let data = try? Data(contentsOf: url),
+              let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else { return false }
+        return !configuration.displays.isEmpty && configuration.displays.values.allSatisfy { $0.kind == WallpaperKind.video.rawValue }
+    }
+
+    var configurationURL: URL? {
+        sharedContainerURL?.appendingPathComponent(configurationName)
+    }
+
+    var configuredWallpaperTitle: String? {
+        guard let url = configurationURL,
+              let data = try? Data(contentsOf: url),
+              let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else { return nil }
+        return configuration.displays.values.first?.title
+    }
+
+    func requestEnable() {
+        guard isAvailable else { return }
+        isConfirmationPresented = true
+    }
+
+    func confirmAndEnable(input: String) -> Bool {
+        guard input == "我同意" || input.caseInsensitiveCompare("Agree") == .orderedSame else { return false }
+        UserDefaults.standard.set(true, forKey: confirmationKey)
+        UserDefaults.standard.set(true, forKey: enabledKey)
+        isEnabled = true
+        isConfirmationPresented = false
+        registerExtension()
+        return true
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        guard enabled else {
+            isEnabled = false
+            UserDefaults.standard.set(false, forKey: enabledKey)
+            clearConfiguration()
+            return
+        }
+        guard hasConfirmedWarning else {
+            requestEnable()
+            return
+        }
+        guard isAvailable else { return }
+        isEnabled = true
+        UserDefaults.standard.set(true, forKey: enabledKey)
+        registerExtension()
+    }
+
+    func configureCurrentWallpaper(_ wallpaper: WEWallpaper,
+                                   runtime: WallpaperRuntimeState,
+                                   properties: [String: WEProjectProperty],
+                                   fps: Int,
+                                   displayIDs: [UInt32]) throws {
+        guard canUse else { throw DynamicLockScreenError.notEnabled }
+        guard wallpaper.isValid else { throw DynamicLockScreenError.noWallpaper }
+        guard wallpaper.kind == .video else { throw DynamicLockScreenError.videoOnly }
+        guard let container = sharedContainerURL else { throw DynamicLockScreenError.appGroupUnavailable }
+
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        let deployment = try deploy(wallpaper: wallpaper, in: container)
+        var propertyValues: [String: Any] = [:]
+        var rawPropertyValues: [String: Any] = [:]
+        for (key, property) in properties {
+            switch property.value {
+            case .bool(let value): propertyValues[key] = ["value": value]
+            case .number(let value): propertyValues[key] = ["value": value]
+            case .string(let value): propertyValues[key] = ["value": value]
+            }
+            switch property.propertyType {
+            case .color:
+                rawPropertyValues[key] = ["type": "color", "value": property.value.stringValue]
+            case .bool:
+                rawPropertyValues[key] = property.value.boolValue
+            case .slider:
+                rawPropertyValues[key] = property.value.doubleValue
+            case .scenetexture, .file:
+                rawPropertyValues[key] = ["type": "scenetexture", "value": property.value.stringValue]
+            case .combo:
+                rawPropertyValues[key] = property.value.jsonObjectValue
+            default:
+                rawPropertyValues[key] = property.value.stringValue
+            }
+        }
+        let configuration = DynamicLockScreenConfiguration(
+            version: 1,
+            displays: Dictionary(uniqueKeysWithValues: displayIDs.map { displayID in
+                let record = DynamicLockScreenDisplayConfiguration(
+                    displayID: displayID,
+                    wallpaperID: wallpaper.id,
+                    title: wallpaper.project.title,
+                    kind: wallpaper.kind.rawValue,
+                    renderDirectory: deployment.renderDirectory.path,
+                    entryPath: deployment.entryURL.path,
+                    previewPath: deployment.previewURL?.path,
+                    assetOverlays: deployment.overlays.map(\.path),
+                    properties: propertyValues.mapValues(AnyCodableValue.init),
+                    rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
+                    fps: min(max(fps, 10), 60),
+                    fillMode: runtime.fillMode.rawValue,
+                    enableHDRVideo: AppDelegate.shared.globalSettingsViewModel.settings.shouldEnableHDRVideo
+                )
+                return ("display-\(displayID)", record)
+            })
+        )
+        let data = try JSONEncoder().encode(configuration)
+        try data.write(to: container.appendingPathComponent(configurationName), options: .atomic)
+        notifyConfigurationChanged()
+        cleanupDeployments(except: deployment.root)
+    }
+
+    func clearConfiguration() {
+        if let url = configurationURL { try? FileManager.default.removeItem(at: url) }
+        notifyConfigurationChanged()
+    }
+
+    func openSystemSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private var sharedContainerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+    }
+
+    private func playableEntryURL(for wallpaper: WEWallpaper) -> URL {
+        let source = wallpaper.resolvedEntryURL.resolvingSymlinksInPath()
+        guard wallpaper.kind == .video else { return source }
+        let digest = SHA256.hash(data: Data(source.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        let cache = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Mirage/VideoCache", isDirectory: true)
+            .appendingPathComponent("\(digest).mp4")
+        return FileManager.default.fileExists(atPath: cache.path) ? cache : source
+    }
+
+    private func deploy(wallpaper: WEWallpaper, in container: URL) throws -> (root: URL, renderDirectory: URL, entryURL: URL, overlays: [URL], previewURL: URL?) {
+        let deployments = container.appendingPathComponent("DynamicLockScreen/Deployments", isDirectory: true)
+        try FileManager.default.createDirectory(at: deployments, withIntermediateDirectories: true)
+        let modificationDate = (try? wallpaper.resolvedEntryURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
+        let sourceKey = "\(wallpaper.id)|\(wallpaper.resolvedEntryURL.path)|\(modificationDate)"
+        let digest = SHA256.hash(data: Data(sourceKey.utf8)).map { String(format: "%02x", $0) }.joined()
+        let root = deployments.appendingPathComponent(digest, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let source = playableEntryURL(for: wallpaper)
+        let renderDirectory = root.appendingPathComponent("render", isDirectory: true)
+        try FileManager.default.createDirectory(at: renderDirectory, withIntermediateDirectories: true)
+        let entryURL = renderDirectory.appendingPathComponent(source.lastPathComponent)
+        if !FileManager.default.fileExists(atPath: entryURL.path) {
+            try linkOrCopy(source, to: entryURL)
+        }
+        let previewURL = try deployPreview(for: wallpaper, in: root)
+        return (root, renderDirectory, entryURL, [], previewURL)
+    }
+
+    private func deployPreview(for wallpaper: WEWallpaper, in root: URL) throws -> URL? {
+        let source = wallpaper.previewURL.resolvingSymlinksInPath()
+        guard !source.hasDirectoryPath, FileManager.default.fileExists(atPath: source.path) else { return nil }
+        let extensionName = source.pathExtension.isEmpty ? "jpg" : source.pathExtension
+        let destination = root.appendingPathComponent("preview.\(extensionName)")
+        if !FileManager.default.fileExists(atPath: destination.path) {
+            try linkOrCopy(source, to: destination)
+        }
+        return destination
+    }
+
+    private func linkOrCopy(_ source: URL, to destination: URL) throws {
+        do {
+            try FileManager.default.linkItem(at: source, to: destination)
+        } catch {
+            try FileManager.default.copyItem(at: source, to: destination)
+        }
+    }
+
+    private func cleanupDeployments(except active: URL) {
+        let directory = active.deletingLastPathComponent()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+            for entry in entries where entry.standardizedFileURL != active.standardizedFileURL {
+                try? FileManager.default.removeItem(at: entry)
+            }
+        }
+    }
+
+    private func registerExtension() {
+        guard let appURL = Bundle.main.bundleURL as URL? else { return }
+        let extensionURL = appURL.appendingPathComponent("Contents/Extensions/MirageWallpaperExtension.appex")
+        guard FileManager.default.fileExists(atPath: extensionURL.path) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let add = Process()
+            add.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+            add.arguments = ["-a", extensionURL.path]
+            try? add.run()
+            add.waitUntilExit()
+            let enable = Process()
+            enable.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+            enable.arguments = ["-e", "use", "-i", "cn.laobamac.Mirage.WallpaperExtension"]
+            try? enable.run()
+            enable.waitUntilExit()
+        }
+    }
+
+    private func notifyConfigurationChanged() {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterPostNotification(
+            center,
+            CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.configurationChanged" as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+}
+
+enum DynamicLockScreenError: LocalizedError {
+    case notEnabled
+    case noWallpaper
+    case unsupportedWallpaper
+    case videoOnly
+    case appGroupUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .notEnabled: return L("请先开启动态锁屏并完成确认")
+        case .noWallpaper: return L("请先播放一张壁纸")
+        case .unsupportedWallpaper: return L("当前壁纸不能用作动态锁屏")
+        case .videoOnly: return L("动态锁屏目前仅支持视频壁纸")
+        case .appGroupUnavailable: return L("动态锁屏共享容器不可用")
+        }
+    }
+}

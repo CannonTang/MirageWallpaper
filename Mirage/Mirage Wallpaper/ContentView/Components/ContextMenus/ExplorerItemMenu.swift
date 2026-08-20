@@ -60,6 +60,11 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
                 .disabled(!canApply)
+
+                Button(action: setAsDynamicLockScreen) {
+                    Label("设为动态锁屏", systemImage: "lock.rectangle")
+                }
+                .disabled(!canApply || hoveredWallpaper.kind != .video)
             }
 
             Section {
@@ -274,6 +279,49 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     )
                 }
             }
+        }
+    }
+
+    private func setAsDynamicLockScreen() {
+        let manager = DynamicLockScreenManager.shared
+        guard manager.isAvailable else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: "动态锁屏不可用",
+                message: "动态锁屏需要 macOS 26 或更高版本。"
+            )
+            return
+        }
+        guard manager.canUse else {
+            manager.requestEnable()
+            return
+        }
+        guard hoveredWallpaper.kind == .video else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: "设置动态锁屏失败",
+                message: "动态锁屏目前仅支持视频壁纸"
+            )
+            return
+        }
+        let displayIDs = displays.compactMap { DisplayRegistry.shared.displayID(for: $0.key) }
+        let runtime = wallpaperViewModel.loadRuntime(for: hoveredWallpaper)
+        let properties = wallpaperViewModel.effectiveProperties(for: hoveredWallpaper, runtime: runtime)
+        do {
+            try manager.configureCurrentWallpaper(
+                hoveredWallpaper,
+                runtime: runtime,
+                properties: properties,
+                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps),
+                displayIDs: displayIDs
+            )
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: "已设为动态锁屏",
+                message: "“\(hoveredWallpaper.project.title)”已部署到锁屏扩展。"
+            )
+        } catch {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: "设置动态锁屏失败",
+                message: error.localizedDescription
+            )
         }
     }
 }

@@ -77,6 +77,7 @@ class WallpaperViewModel: ObservableObject {
     private var propertyCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
     private var pendingPropertyCommands: [DisplayKey: [String: WEProjectProperty]] = [:]
     private var sessionPaused = false
+    private var dynamicLockScreenPaused = false
     private var sessionMuted = false
 
     static var invalidWallpaper: WEWallpaper {
@@ -243,7 +244,7 @@ class WallpaperViewModel: ObservableObject {
     }
 
     private func isPaused(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
-        sessionPaused || state.speed == 0 || action == .pause
+        sessionPaused || dynamicLockScreenPaused || state.speed == 0 || action == .pause
     }
 
     private func isMuted(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
@@ -1235,6 +1236,14 @@ class WallpaperViewModel: ObservableObject {
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
         syncStatusItems()
+    }
+
+    func setDynamicLockScreenPaused(_ paused: Bool) {
+        guard dynamicLockScreenPaused != paused else { return }
+        dynamicLockScreenPaused = paused
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
     }
 
     private func clearSessionPlaybackOverrides() {
