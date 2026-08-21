@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.9</title>
+            <pubDate>Fri, 21 Aug 2026 19:17:42 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>366</sparkle:version>
+            <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 0e31b763f6099d878da3511dbd56c1f0010767b4
+Channel: beta
+
+fix(app): keep dynamic lock screen active after quit
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-366-0e31b763f609-macOS-x86_64.zip" length="304974537" type="application/octet-stream" sparkle:edSignature="fXre5fDRgTMTLregl5auL00Cltld1sAj08aMhF7EsdrDIcaJYrvUFRomkgYra7HV+Danlz/dmvosJNtua//SAw=="/>
+        </item>
+        <item>
+            <title>1.0.9</title>
             <pubDate>Fri, 21 Aug 2026 19:05:14 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -521,6 +538,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ms6WJa4UhStyLSAl/l7IMhBYgBCOmdCS45y/jc3rpbzN/VbOxQ8ne/a1i4b/TW4uV1nEqv0201A4cG2f+QpbCA==
-length: 39982
+edSignature: a0ZtxdzGyN1JFO/Ojv5XATHL2OM4ObCGbiYFRS+KhYmhejUZ/B49DhQWysocDn4lmYNr9C7xyPjMVNiMbJYNDg==
+length: 40940
 -->
