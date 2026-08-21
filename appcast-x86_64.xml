@@ -13,14 +13,14 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>362</sparkle:version>
             <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: ed0514c3a6981007f8f743c33c5b9333b3fc0cdd
+            <description sparkle:format="plain-text"><![CDATA[Commit: 589c01ba486d973452c6222048fbf47124c135b4
 Channel: beta
 
-feat: add video dynamic lock screen support
+feat(app): add video dynamic lock screen support
 
 
 ]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-362-ed0514c3a698-macOS-x86_64.zip" length="236606512" type="application/octet-stream" sparkle:edSignature="2NHoXug3o1ljRWACQTDK0GH7X5hQel4rCxPFHfZmQ0YlcoxFcrZhsm9eIhG+6aWX8bGaYXoZk4pp2gEtQ1SzCQ=="/>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-362-589c01ba486d-macOS-x86_64.zip" length="236606512" type="application/octet-stream" sparkle:edSignature="1+aZSwjlemgBw9q9CfSmOXYYjHDBqKBmNYE5Olggm9geeS9NJ15sW9gUHOXdCsiQ/RjfaLuv7JVnnVznffYpAw=="/>
         </item>
         <item>
             <title>1.0.9</title>
@@ -470,6 +470,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: BVTDGda2BayS4tOwmLVQzuQ9PZb3yz0t2gDuUPg0SXV5J7BlJcbYJ0GV7MfDV2/5UzI2/5ToMJ5RuLBpTuSLAQ==
-length: 37092
+edSignature: nLUm04QTQ+LGDpNcYBxpuMoJvF2n3vJnm4olMxcGoDKoy16pcPMd4AKNQ3UiKuMCFtIZb77WWTKECUb5s27kBA==
+length: 37097
 -->
