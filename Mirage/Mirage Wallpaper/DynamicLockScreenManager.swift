@@ -347,6 +347,7 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     private func deployDesktopFallback(source: URL, displayID: UInt32, in container: URL) throws -> URL {
+        let source = source.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else {

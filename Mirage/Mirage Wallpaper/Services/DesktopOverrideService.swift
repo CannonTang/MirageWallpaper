@@ -88,6 +88,18 @@ final class DesktopOverrideService {
         AppDelegate.shared.globalSettingsViewModel.settings.shouldOverrideWallpaper
     }
 
+    private var preserveForDynamicLockScreen: Bool {
+        guard UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Enabled"),
+              let container = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage"),
+              let data = try? Data(contentsOf: container.appendingPathComponent(
+                "dynamic-lock-screen.json")),
+              let configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data)
+        else { return false }
+        return configuration.enabled != false && !configuration.displays.isEmpty
+    }
+
     // MARK: - Launch recovery
 
     /// Must run before anything that can restart WallpaperAgent (i.e. before the
@@ -101,7 +113,7 @@ final class DesktopOverrideService {
         migrateLegacyPlaceholders()
         migrateLegacyBackup()
 
-        if mode == .transient {
+        if mode == .transient && !preserveForDynamicLockScreen {
             // A transient marker cannot legitimately survive its own process:
             // the previous run was killed before it could restore.
             NSLog("[Mirage] 检测到上次运行未正常还原桌面图片，正在还原")
@@ -348,6 +360,7 @@ final class DesktopOverrideService {
     /// alone would restore an override the user asked to keep if the two ever
     /// disagreed.
     func restoreIfTransient() {
+        guard !preserveForDynamicLockScreen else { return }
         guard !isEnabled else {
             // Leave the desktop alone, but make sure what the next launch finds
             // says "keep", so recovery does not undo a wanted override.
