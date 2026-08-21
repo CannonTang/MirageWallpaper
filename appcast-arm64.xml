@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.9</title>
+            <pubDate>Fri, 21 Aug 2026 19:05:30 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>365</sparkle:version>
+            <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 876bfc1590f0293bbafd2c8ae6d54b0caf6b553c
+Channel: beta
+
+fix(app): prevent dynamic lock screen leaking onto desktop
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-365-876bfc1590f0-macOS-arm64.zip" length="295146450" type="application/octet-stream" sparkle:edSignature="F0bh4+Wi3ngIzE4EMlXiYCCV5uXaBWVtDvobZyoR4759ZRUI0a6tG35hj4MXz+WjBCN9//2RKwSHvTy4mpw0Bw=="/>
+        </item>
+        <item>
+            <title>1.0.9</title>
             <pubDate>Fri, 21 Aug 2026 18:49:23 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -514,6 +532,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: umAkY6gTbl2eZhrfGnUJ4vaCDZiUY7JuNWfsF1fUXVXChPkrtqbc4hQfrkdH74UsbqQpYP3NUn4dR65DseYZBQ==
-length: 39798
+edSignature: Zi+BiyE105tgNmnDhnT0ETQuTvD9HBgp6B4l8U11IIJXpLJOT6KvzRyLZ+mmwDUJCG7gK4PUKuDQyleFHdW4Ag==
+length: 40840
 -->
