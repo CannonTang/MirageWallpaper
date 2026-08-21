@@ -16,12 +16,9 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     let renderDirectory: String
     let entryPath: String
     let previewPath: String?
-    let assetOverlays: [String]
-    let properties: [String: AnyCodableValue]
     let rawProperties: [String: AnyCodableValue]
     let fps: Int
     let fillMode: String
-    let enableHDRVideo: Bool
 }
 
 struct DynamicLockScreenConfiguration: Codable {
@@ -46,17 +43,6 @@ enum AnyCodableValue: Codable {
         case let value as [String: Any]: self = .object(value.mapValues(AnyCodableValue.init))
         case let value as [Any]: self = .array(value.map(AnyCodableValue.init))
         default: self = .null
-        }
-    }
-
-    func value() -> Any {
-        switch self {
-        case .string(let value): return value
-        case .number(let value): return value
-        case .bool(let value): return value
-        case .object(let value): return value.mapValues { $0.value() }
-        case .array(let value): return value.map { $0.value() }
-        case .null: return NSNull()
         }
     }
 
@@ -97,6 +83,7 @@ final class DynamicLockScreenManager: ObservableObject {
 
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
+        discardUnsupportedConfiguration()
     }
 
     var isAvailable: Bool {
@@ -116,7 +103,9 @@ final class DynamicLockScreenManager: ObservableObject {
         guard let url = configurationURL,
               let data = try? Data(contentsOf: url),
               let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else { return false }
-        return !configuration.displays.isEmpty && configuration.displays.values.allSatisfy { $0.kind == WallpaperKind.video.rawValue }
+        return !configuration.displays.isEmpty && configuration.displays.values.allSatisfy {
+            $0.kind == WallpaperKind.video.rawValue || $0.kind == WallpaperKind.scene.rawValue
+        }
     }
 
     var configurationURL: URL? {
@@ -169,19 +158,19 @@ final class DynamicLockScreenManager: ObservableObject {
                                    displayIDs: [UInt32]) throws {
         guard canUse else { throw DynamicLockScreenError.notEnabled }
         guard wallpaper.isValid else { throw DynamicLockScreenError.noWallpaper }
-        guard wallpaper.kind == .video else { throw DynamicLockScreenError.videoOnly }
+        guard wallpaper.kind == .video || wallpaper.kind == .scene else {
+            throw DynamicLockScreenError.unsupportedWallpaper
+        }
         guard let container = sharedContainerURL else { throw DynamicLockScreenError.appGroupUnavailable }
 
         try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
         let deployment = try deploy(wallpaper: wallpaper, in: container)
-        var propertyValues: [String: Any] = [:]
+        var keepDeployment = false
+        defer {
+            if !keepDeployment { try? FileManager.default.removeItem(at: deployment.root) }
+        }
         var rawPropertyValues: [String: Any] = [:]
-        for (key, property) in properties {
-            switch property.value {
-            case .bool(let value): propertyValues[key] = ["value": value]
-            case .number(let value): propertyValues[key] = ["value": value]
-            case .string(let value): propertyValues[key] = ["value": value]
-            }
+        for (key, property) in properties where wallpaper.kind == .scene {
             switch property.propertyType {
             case .color:
                 rawPropertyValues[key] = ["type": "color", "value": property.value.stringValue]
@@ -190,7 +179,8 @@ final class DynamicLockScreenManager: ObservableObject {
             case .slider:
                 rawPropertyValues[key] = property.value.doubleValue
             case .scenetexture, .file:
-                rawPropertyValues[key] = ["type": "scenetexture", "value": property.value.stringValue]
+                let value = try deployPropertyAsset(property.value.stringValue, key: key, in: deployment.root)
+                rawPropertyValues[key] = ["type": "scenetexture", "value": value]
             case .combo:
                 rawPropertyValues[key] = property.value.jsonObjectValue
             default:
@@ -208,24 +198,25 @@ final class DynamicLockScreenManager: ObservableObject {
                     renderDirectory: deployment.renderDirectory.path,
                     entryPath: deployment.entryURL.path,
                     previewPath: deployment.previewURL?.path,
-                    assetOverlays: deployment.overlays.map(\.path),
-                    properties: propertyValues.mapValues(AnyCodableValue.init),
                     rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
                     fps: min(max(fps, 10), 60),
-                    fillMode: runtime.fillMode.rawValue,
-                    enableHDRVideo: AppDelegate.shared.globalSettingsViewModel.settings.shouldEnableHDRVideo
+                    fillMode: runtime.fillMode.rawValue
                 )
                 return ("display-\(displayID)", record)
             })
         )
         let data = try JSONEncoder().encode(configuration)
         try data.write(to: container.appendingPathComponent(configurationName), options: .atomic)
+        keepDeployment = true
         notifyConfigurationChanged()
         cleanupDeployments(except: deployment.root)
     }
 
     func clearConfiguration() {
         if let url = configurationURL { try? FileManager.default.removeItem(at: url) }
+        if let container = sharedContainerURL {
+            try? FileManager.default.removeItem(at: container.appendingPathComponent("DynamicLockScreen/Deployments", isDirectory: true))
+        }
         notifyConfigurationChanged()
     }
 
@@ -248,24 +239,51 @@ final class DynamicLockScreenManager: ObservableObject {
         return FileManager.default.fileExists(atPath: cache.path) ? cache : source
     }
 
-    private func deploy(wallpaper: WEWallpaper, in container: URL) throws -> (root: URL, renderDirectory: URL, entryURL: URL, overlays: [URL], previewURL: URL?) {
+    private func deploy(wallpaper: WEWallpaper, in container: URL) throws -> (root: URL, renderDirectory: URL, entryURL: URL, previewURL: URL?) {
         let deployments = container.appendingPathComponent("DynamicLockScreen/Deployments", isDirectory: true)
         try FileManager.default.createDirectory(at: deployments, withIntermediateDirectories: true)
-        let modificationDate = (try? wallpaper.resolvedEntryURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
-        let sourceKey = "\(wallpaper.id)|\(wallpaper.resolvedEntryURL.path)|\(modificationDate)"
-        let digest = SHA256.hash(data: Data(sourceKey.utf8)).map { String(format: "%02x", $0) }.joined()
-        let root = deployments.appendingPathComponent(digest, isDirectory: true)
+        let root = deployments.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let source = playableEntryURL(for: wallpaper)
         let renderDirectory = root.appendingPathComponent("render", isDirectory: true)
-        try FileManager.default.createDirectory(at: renderDirectory, withIntermediateDirectories: true)
-        let entryURL = renderDirectory.appendingPathComponent(source.lastPathComponent)
-        if !FileManager.default.fileExists(atPath: entryURL.path) {
-            try linkOrCopy(source, to: entryURL)
+        do {
+            let entryURL: URL
+            if wallpaper.kind == .scene {
+                let sourceRoot = wallpaper.renderDirectory.resolvingSymlinksInPath()
+                try FileManager.default.copyItem(at: sourceRoot, to: renderDirectory)
+                let relativeEntry = source.path.hasPrefix(sourceRoot.path + "/")
+                    ? String(source.path.dropFirst(sourceRoot.path.count + 1))
+                    : source.lastPathComponent
+                entryURL = renderDirectory.appendingPathComponent(relativeEntry)
+                if !FileManager.default.fileExists(atPath: entryURL.path) {
+                    try FileManager.default.createDirectory(at: entryURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try linkOrCopy(source, to: entryURL)
+                }
+            } else {
+                try FileManager.default.createDirectory(at: renderDirectory, withIntermediateDirectories: true)
+                entryURL = renderDirectory.appendingPathComponent(source.lastPathComponent)
+                try linkOrCopy(source, to: entryURL)
+            }
+            let previewURL = try deployPreview(for: wallpaper, in: root)
+            return (root, renderDirectory, entryURL, previewURL)
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
         }
-        let previewURL = try deployPreview(for: wallpaper, in: root)
-        return (root, renderDirectory, entryURL, [], previewURL)
+    }
+
+    private func deployPropertyAsset(_ path: String, key: String, in root: URL) throws -> String {
+        guard !path.isEmpty, (path as NSString).isAbsolutePath else { return path }
+        let source = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        guard FileManager.default.fileExists(atPath: source.path) else { return path }
+        let digest = SHA256.hash(data: Data("\(key)|\(source.path)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let directory = root.appendingPathComponent("property-assets/\(digest)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(source.lastPathComponent, isDirectory: source.hasDirectoryPath)
+        try FileManager.default.copyItem(at: source, to: destination)
+        return destination.path
     }
 
     private func deployPreview(for wallpaper: WEWallpaper, in root: URL) throws -> URL? {
@@ -291,7 +309,21 @@ final class DynamicLockScreenManager: ObservableObject {
         let directory = active.deletingLastPathComponent()
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) {
             guard let entries = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-            for entry in entries where entry.standardizedFileURL != active.standardizedFileURL {
+            guard let configurationURL = self.configurationURL,
+                  let data = try? Data(contentsOf: configurationURL),
+                  let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else {
+                return
+            }
+            let configuredRoots = Set(configuration.displays.values.map {
+                URL(fileURLWithPath: $0.renderDirectory).deletingLastPathComponent().standardizedFileURL.path
+            })
+            let activePath = active.standardizedFileURL.path
+            let cutoff = Date().addingTimeInterval(-30)
+            for entry in entries {
+                let entryPath = entry.standardizedFileURL.path
+                guard entryPath != activePath, !configuredRoots.contains(entryPath) else { continue }
+                let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                guard modified.map({ $0 < cutoff }) ?? true else { continue }
                 try? FileManager.default.removeItem(at: entry)
             }
         }
@@ -315,6 +347,22 @@ final class DynamicLockScreenManager: ObservableObject {
         }
     }
 
+    private func discardUnsupportedConfiguration() {
+        guard let url = configurationURL,
+              let data = try? Data(contentsOf: url),
+              let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else { return }
+        let supported = !configuration.displays.isEmpty && configuration.displays.values.allSatisfy {
+            $0.kind == WallpaperKind.video.rawValue || $0.kind == WallpaperKind.scene.rawValue
+        }
+        if !supported {
+            try? FileManager.default.removeItem(at: url)
+            if let container = sharedContainerURL {
+                try? FileManager.default.removeItem(at: container.appendingPathComponent("DynamicLockScreen/Deployments", isDirectory: true))
+            }
+            notifyConfigurationChanged()
+        }
+    }
+
     private func notifyConfigurationChanged() {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterPostNotification(
@@ -331,7 +379,6 @@ enum DynamicLockScreenError: LocalizedError {
     case notEnabled
     case noWallpaper
     case unsupportedWallpaper
-    case videoOnly
     case appGroupUnavailable
 
     var errorDescription: String? {
@@ -339,7 +386,6 @@ enum DynamicLockScreenError: LocalizedError {
         case .notEnabled: return L("请先开启动态锁屏并完成确认")
         case .noWallpaper: return L("请先播放一张壁纸")
         case .unsupportedWallpaper: return L("当前壁纸不能用作动态锁屏")
-        case .videoOnly: return L("动态锁屏目前仅支持视频壁纸")
         case .appGroupUnavailable: return L("动态锁屏共享容器不可用")
         }
     }

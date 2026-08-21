@@ -89,6 +89,6 @@ private func mirageLoadConfiguration() -> MirageStoredConfiguration? {
           let data = try? Data(contentsOf: container.appendingPathComponent("dynamic-lock-screen.json")),
           let decoded = try? JSONDecoder().decode(MirageStoredConfiguration.self, from: data) else { return nil }
     guard !decoded.displays.isEmpty,
-          decoded.displays.values.allSatisfy({ $0.kind == "video" }) else { return nil }
+          decoded.displays.values.allSatisfy({ $0.kind == "video" || $0.kind == "scene" }) else { return nil }
     return decoded
 }

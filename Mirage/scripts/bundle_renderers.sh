@@ -39,6 +39,8 @@ SCENE_SAVER_LIB="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneScreenSaver/
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
 ASSETS_DIR="$ROOT/assets"
+EXTENSION="$CONTENTS/Extensions/MirageWallpaperExtension.appex"
+EXTENSION_FRAMEWORKS="$EXTENSION/Contents/Frameworks"
 
 BREW_PREFIX="$(brew --prefix)"
 MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
@@ -225,6 +227,51 @@ if [ -d "$SAVER" ]; then
 EOF
 fi
 
+if [ -d "$EXTENSION" ]; then
+    EXTENSION_RESOURCES="$EXTENSION/Contents/Resources"
+    EXTENSION_VK_ICD_DIR="$EXTENSION_RESOURCES/vulkan/icd.d"
+    mkdir -p "$EXTENSION_FRAMEWORKS" "$EXTENSION_RESOURCES"
+    rm -f "$EXTENSION_FRAMEWORKS"/*.dylib
+    cp -f "$SCENE_SAVER_LIB" "$EXTENSION_FRAMEWORKS/libMirageSceneSaver.dylib"
+    chmod u+w "$EXTENSION_FRAMEWORKS/libMirageSceneSaver.dylib"
+    for lib in "$FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        cp -f "$lib" "$EXTENSION_FRAMEWORKS/$(basename "$lib")"
+    done
+    for lib in "$EXTENSION_FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        retarget_lib "$lib"
+        install_name_tool -add_rpath "@loader_path" "$lib" 2>/dev/null || true
+    done
+    rm -rf "$EXTENSION_RESOURCES/assets"
+    cp -R "$ASSETS_DIR" "$EXTENSION_RESOURCES/assets"
+    mkdir -p "$EXTENSION_VK_ICD_DIR"
+    cat > "$EXTENSION_VK_ICD_DIR/MoltenVK_icd.json" <<EOF
+{
+    "file_format_version" : "1.0.0",
+    "ICD": {
+        "library_path" : "../../../Frameworks/$MVK_BASE",
+        "api_version" : "1.4.0",
+        "is_portability_driver" : true
+    }
+}
+EOF
+    echo "[bundle] 已生成扩展内嵌 ICD"
+    for lib in "$EXTENSION_FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        sign_item "$lib"
+    done
+    for executable in "$EXTENSION/Contents/MacOS"/*.dylib; do
+        [ -f "$executable" ] || continue
+        sign_item "$executable"
+    done
+    for executable in "$EXTENSION/Contents/MacOS/MirageWallpaperExtension"; do
+        [ -f "$executable" ] || continue
+        sign_item "$executable"
+    done
+    codesign --force "${SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.entitlements" --sign "$SIGN_IDENTITY" "$EXTENSION"
+fi
+
 echo "[bundle] 重新签名..."
 for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
@@ -248,6 +295,18 @@ if [ -d "${SAVER:-}" ]; then
     done
     sign_bundle "$SAVER"
 fi
+LOGIN_ITEM="$APP/Contents/Library/LoginItems/Mirage Login Item.app"
+if [ -d "$LOGIN_ITEM" ]; then
+    for executable in "$LOGIN_ITEM/Contents/MacOS"/*.dylib; do
+        [ -f "$executable" ] || continue
+        sign_item "$executable"
+    done
+    sign_bundle "$LOGIN_ITEM"
+fi
+for executable in "$APP/Contents/MacOS"/*.dylib; do
+    [ -f "$executable" ] || continue
+    sign_item "$executable"
+done
 codesign --force "${SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements" --sign "$SIGN_IDENTITY" "$APP"
 
 echo "[bundle] 完成"

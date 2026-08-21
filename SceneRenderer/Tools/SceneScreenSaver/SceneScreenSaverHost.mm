@@ -6,6 +6,8 @@
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view);
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSViewWithDrawableSize(
     void* ns_view, std::uint32_t width, std::uint32_t height);
+extern "C" void* SceneRendererMacMetalDisplayCreateForCALayerWithDrawableSize(
+    void* ca_layer, std::uint32_t width, std::uint32_t height);
 extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle);
 extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
                                                  std::uint32_t width, std::uint32_t height,
@@ -36,6 +38,26 @@ extern "C" void* MirageSceneSaverHostCreate(void* ns_view, std::uint32_t drawabl
             ? SceneRendererMacMetalDisplayCreateForNSViewWithDrawableSize(
                   ns_view, drawable_width, drawable_height)
             : SceneRendererMacMetalDisplayCreateForNSView(ns_view);
+        if (host->display == nullptr) {
+            delete host;
+            return nullptr;
+        }
+        host->reference = [MirageSaverHostReference new];
+        host->reference.host = host;
+        return host;
+    };
+    if (NSThread.isMainThread) return create();
+    __block void* result = nullptr;
+    dispatch_sync(dispatch_get_main_queue(), ^{ result = create(); });
+    return result;
+}
+
+extern "C" void* MirageSceneDesktopHostCreate(void* ca_layer, std::uint32_t drawable_width,
+                                                std::uint32_t drawable_height) {
+    auto create = ^void* {
+        auto* host = new SaverHost();
+        host->display = SceneRendererMacMetalDisplayCreateForCALayerWithDrawableSize(
+            ca_layer, drawable_width, drawable_height);
         if (host->display == nullptr) {
             delete host;
             return nullptr;

@@ -90,18 +90,18 @@ struct ScreenSaverPage: SettingsPage {
                 ))
                 .disabled(!dynamicLockScreenManager.isAvailable)
                 if !dynamicLockScreenManager.isAvailable {
-                    Text("动态锁屏需要 macOS 26 或更高版本。")
+                    Text(LocalizedStringKey("动态锁屏需要 macOS 26 或更高版本。"))
                         .foregroundStyle(.secondary)
                 } else {
                     LabeledContent("锁屏壁纸", value: dynamicLockScreenManager.configuredWallpaperTitle ?? "尚未设置")
                     Button("将正在播放的壁纸设为动态锁屏") {
                         perform { try configureCurrentDynamicLockScreen() }
                     }
-                    .disabled(!dynamicLockScreenManager.canUse || !wallpaper.isValid || wallpaper.kind != .video)
+                    .disabled(!dynamicLockScreenManager.canUse || !wallpaper.isValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
                     Button("打开系统墙纸设置") {
                         dynamicLockScreenManager.openSystemSettings()
                     }
-                    Text("动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。目前仅支持视频壁纸实时渲染。")
+                    Text(LocalizedStringKey("动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。动态锁屏支持视频和场景壁纸。"))
                         .foregroundStyle(.secondary)
                 }
             } header: {
@@ -129,7 +129,9 @@ struct ScreenSaverPage: SettingsPage {
     }
 
     private func configureCurrentDynamicLockScreen() throws {
-        guard wallpaper.kind == .video else { throw DynamicLockScreenError.videoOnly }
+        guard wallpaper.kind == .video || wallpaper.kind == .scene else {
+            throw DynamicLockScreenError.unsupportedWallpaper
+        }
         let displayIDs = wallpaperViewModel.connectedDisplays.compactMap { DisplayRegistry.shared.displayID(for: $0.key) }
         try dynamicLockScreenManager.configureCurrentWallpaper(
             wallpaperViewModel.currentWallpaper,

@@ -64,7 +64,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 Button(action: setAsDynamicLockScreen) {
                     Label("设为动态锁屏", systemImage: "lock.rectangle")
                 }
-                .disabled(!canApply || hoveredWallpaper.kind != .video)
+                .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
             }
 
             Section {
@@ -286,8 +286,8 @@ struct ExplorerItemMenu: SubviewOfContentView {
         let manager = DynamicLockScreenManager.shared
         guard manager.isAvailable else {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: "动态锁屏不可用",
-                message: "动态锁屏需要 macOS 26 或更高版本。"
+                title: L("动态锁屏不可用"),
+                message: L("动态锁屏需要 macOS 26 或更高版本。")
             )
             return
         }
@@ -295,10 +295,10 @@ struct ExplorerItemMenu: SubviewOfContentView {
             manager.requestEnable()
             return
         }
-        guard hoveredWallpaper.kind == .video else {
+        guard hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene else {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: "设置动态锁屏失败",
-                message: "动态锁屏目前仅支持视频壁纸"
+                title: L("设置动态锁屏失败"),
+                message: L("当前壁纸不能用作动态锁屏")
             )
             return
         }
@@ -314,12 +314,12 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 displayIDs: displayIDs
             )
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: "已设为动态锁屏",
-                message: "“\(hoveredWallpaper.project.title)”已部署到锁屏扩展。"
+                title: L("已设为动态锁屏"),
+                message: L("“%@”已部署到锁屏扩展。", hoveredWallpaper.project.title)
             )
         } catch {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: "设置动态锁屏失败",
+                title: L("设置动态锁屏失败"),
                 message: error.localizedDescription
             )
         }

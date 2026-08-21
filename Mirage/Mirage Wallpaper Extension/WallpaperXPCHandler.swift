@@ -34,6 +34,9 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
 
     override init() {
         super.init()
+        if let locked = Self.currentScreenLockState() {
+            isLocked = locked
+        }
         let retained = Unmanaged.passRetained(self).toOpaque()
         observer = retained
         let center = CFNotificationCenterGetDarwinNotifyCenter()
@@ -96,7 +99,13 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         }
         let size = geometry.size ?? CGSize(width: CGDisplayBounds(displayID).width, height: CGDisplayBounds(displayID).height)
         let scale = geometry.scale ?? 1
+        let presentationMode = Self.enumCase(named: "presentationMode", in: request)
         let work = {
+            if let presentationMode {
+                self.isLocked = presentationMode == "locked"
+            } else if let locked = Self.currentScreenLockState() {
+                self.isLocked = locked
+            }
             let options: [String: Any] = ["displayId": NSNumber(value: displayID)]
             guard let context = CAContext.perform(NSSelectorFromString("remoteContextWithOptions:"), with: options)?.takeUnretainedValue() as? CAContext,
                   context.contextId != 0,
@@ -127,7 +136,9 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     }
 
     func update(withId id: Any?, request: Any?, reply: @escaping ((any Error)?) -> Void) {
-        reloadContexts()
+        if let mode = Self.enumCase(named: "presentationMode", in: request) {
+            setLocked(mode == "locked")
+        }
         reply(nil)
     }
 
@@ -195,8 +206,11 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             }
             return
         }
+        values.forEach {
+            $0.renderer?.stop()
+            $0.renderer = nil
+        }
         values.forEach { context in
-            context.renderer?.stop()
             let renderer = Self.renderer(for: context.displayID, rootLayer: context.rootLayer, size: context.rootLayer.bounds.size, scale: context.rootLayer.contentsScale, configuration: configuration)
             if !isLocked { renderer?.pause() }
             lock.lock()
@@ -259,6 +273,15 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         return ids.first
     }
 
+    private static func currentScreenLockState() -> Bool? {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return nil }
+        for key in ["CGSSessionScreenIsLocked", "kCGSSessionScreenIsLocked"] {
+            if let value = session[key] as? NSNumber { return value.boolValue }
+            if let value = session[key] as? Bool { return value }
+        }
+        return false
+    }
+
     private static func uint32(from value: Any?) -> UInt32? {
         if let number = value as? NSNumber { return number.uint32Value }
         let text = String(describing: value ?? "")
@@ -292,5 +315,22 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             w > 0 && h > 0 ? CGSize(width: w, height: h) : nil
         } }
         return (displayID, size, scale)
+    }
+
+    private static func enumCase(named name: String, in value: Any?) -> String? {
+        guard let value else { return nil }
+        func find(_ value: Any, depth: Int) -> Any? {
+            guard depth < 6 else { return nil }
+            let mirror = Mirror(reflecting: value)
+            for child in mirror.children {
+                if child.label == name { return child.value }
+                if let found = find(child.value, depth: depth + 1) { return found }
+            }
+            return nil
+        }
+        guard let found = find(value, depth: 0) else { return nil }
+        let mirror = Mirror(reflecting: found)
+        if mirror.displayStyle == .enum, let label = mirror.children.first?.label { return label }
+        return String(describing: found).split(separator: "(").first.map(String.init)
     }
 }

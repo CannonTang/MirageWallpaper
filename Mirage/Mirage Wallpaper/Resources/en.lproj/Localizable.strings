@@ -906,13 +906,12 @@
 "输入“我同意”或“Agree”" = "Enter “我同意” or “Agree”";
 "请输入“我同意”或“Agree”" = "Enter “我同意” or “Agree”";
 "确认开启" = "Enable";
-"动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。目前仅支持视频壁纸实时渲染。" = "Dynamic Lock Screen uses a reverse-engineered system API and may stop working after macOS updates. Only video wallpapers are currently rendered in real time.";
+"动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。动态锁屏支持视频和场景壁纸。" = "Dynamic Lock Screen uses a reverse-engineered system API and may stop working after macOS updates. Dynamic Lock Screen supports video and scene wallpapers.";
 "已设为动态锁屏" = "Dynamic Lock Screen Set";
 "“%@”已部署到锁屏扩展。" = "“%@” was deployed to the lock screen extension.";
 "设置动态锁屏失败" = "Could Not Set Dynamic Lock Screen";
 "请先开启动态锁屏并完成确认" = "Enable Dynamic Lock Screen and complete confirmation first";
 "当前壁纸不能用作动态锁屏" = "The current wallpaper cannot be used as Dynamic Lock Screen";
-"动态锁屏目前仅支持视频壁纸" = "Dynamic Lock Screen currently supports video wallpapers only";
 "动态锁屏共享容器不可用" = "Dynamic Lock Screen shared container is unavailable";
 "打开系统墙纸设置" = "Open System Wallpaper Settings";
 "Mirage 动态锁屏显示器实例" = "Mirage Dynamic Lock Screen Display Instance";

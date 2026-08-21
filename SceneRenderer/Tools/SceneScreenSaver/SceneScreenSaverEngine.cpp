@@ -15,6 +15,8 @@ extern "C" void SceneRendererSetLiveMetalFrameCallback(
     void (*cb)(void*, std::uint32_t, std::uint32_t, void*), void* userdata);
 extern "C" void* MirageSceneSaverHostCreate(void* ns_view, std::uint32_t drawable_width,
                                                std::uint32_t drawable_height);
+extern "C" void* MirageSceneDesktopHostCreate(void* ca_layer, std::uint32_t drawable_width,
+                                                std::uint32_t drawable_height);
 extern "C" void MirageSceneSaverHostDestroy(void* host);
 extern "C" void MirageSceneSaverHostPresent(void* host, void* texture, std::uint32_t width,
                                                std::uint32_t height);
@@ -24,6 +26,7 @@ namespace {
 struct SaverEngine {
     sr::SceneWallpaper wallpaper;
     std::vector<void*> hosts;
+    std::string configuration_key;
 };
 
 struct SaverInstance {
@@ -59,15 +62,10 @@ bool LoadProperties(const char* json, sr::SceneWallpaperConfig& config) {
     return true;
 }
 
-}
-
-extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
-                                          const char* scene_pkg, const char* properties_json,
-                                          std::uint32_t width, std::uint32_t height,
-                                          std::uint32_t drawable_width,
-                                          std::uint32_t drawable_height,
-                                          std::uint32_t fps) {
-    if (ns_view == nullptr || assets_dir == nullptr || scene_pkg == nullptr) return nullptr;
+void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
+                     const char* properties_json, std::uint32_t width,
+                     std::uint32_t height, std::uint32_t fps) {
+    if (host == nullptr || assets_dir == nullptr || scene_pkg == nullptr) return nullptr;
     static rstd::log::EnvLogger logger;
     static bool logger_set = false;
     if (!logger_set) {
@@ -75,36 +73,45 @@ extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
         rstd::log::set_max_level(logger.filter());
         logger_set = true;
     }
-
-    void* host = MirageSceneSaverHostCreate(ns_view, drawable_width, drawable_height);
-    if (host == nullptr) return nullptr;
+    const std::string configuration_key =
+        std::string(assets_dir) + "\n" + scene_pkg + "\n" +
+        (properties_json == nullptr ? "" : properties_json) + "\n" + std::to_string(fps);
     std::unique_lock lock(g_engine_mutex);
-    if (g_engine != nullptr) {
+    if (g_engine != nullptr && g_engine->configuration_key == configuration_key) {
         auto* instance = new SaverInstance { g_engine, host, false };
         g_engine->hosts.push_back(host);
         g_instances.push_back(instance);
         return instance;
     }
+    SaverEngine* retired_engine = g_engine;
+    if (retired_engine != nullptr) {
+        SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
+        g_engine = nullptr;
+        retired_engine->hosts.clear();
+        for (auto* instance : g_instances) {
+            if (instance->engine == retired_engine) instance->engine = nullptr;
+        }
+        g_instances.clear();
+    }
     lock.unlock();
-
+    delete retired_engine;
     auto engine = std::make_unique<SaverEngine>();
     engine->hosts.push_back(host);
+    engine->configuration_key = configuration_key;
     if (!engine->wallpaper.init()) {
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
-
     sr::SceneWallpaperConfig config;
     config.assets_dir = assets_dir;
     config.source_pkg_path = scene_pkg;
-    config.cache_dir = sr::platform::GetCachePath("MirageScreenSaver");
+    config.cache_dir = sr::platform::GetCachePath("MirageDynamicWallpaper");
     config.fps = std::clamp<std::uint32_t>(fps, 10u, 60u);
     config.muted = true;
     if (!LoadProperties(properties_json, config)) {
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
-
     SceneRendererSetLiveMetalFrameCallback(Present, engine.get());
     sr::RenderInitInfo info;
     info.offscreen = true;
@@ -113,7 +120,7 @@ extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
     info.msaa_samples = 1;
     engine->wallpaper.configure(std::move(config));
     engine->wallpaper.initVulkan(std::move(info));
-    if (!engine->wallpaper.waitVulkanInited(5000)) {
+    if (!engine->wallpaper.waitVulkanInited(30000)) {
         SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
         MirageSceneSaverHostDestroy(host);
         return nullptr;
@@ -123,6 +130,26 @@ extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
     auto* instance = new SaverInstance { g_engine, host, false };
     g_instances.push_back(instance);
     return instance;
+}
+
+}
+
+extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
+                                          const char* scene_pkg, const char* properties_json,
+                                          std::uint32_t width, std::uint32_t height,
+                                          std::uint32_t drawable_width,
+                                          std::uint32_t drawable_height,
+                                          std::uint32_t fps) {
+    void* host = MirageSceneSaverHostCreate(ns_view, drawable_width, drawable_height);
+    return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps);
+}
+
+extern "C" void* MirageSceneDesktopCreate(void* ca_layer, const char* assets_dir,
+                                            const char* scene_pkg, const char* properties_json,
+                                            std::uint32_t width, std::uint32_t height,
+                                            std::uint32_t fps) {
+    void* host = MirageSceneDesktopHostCreate(ca_layer, width, height);
+    return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps);
 }
 
 extern "C" void MirageSceneSaverSetPaused(void* handle, int paused) {
@@ -135,6 +162,10 @@ extern "C" void MirageSceneSaverSetPaused(void* handle, int paused) {
     });
     if (all_paused) g_engine->wallpaper.pause();
     else g_engine->wallpaper.play();
+}
+
+extern "C" void MirageSceneDesktopSetPaused(void* handle, int paused) {
+    MirageSceneSaverSetPaused(handle, paused);
 }
 
 extern "C" void MirageSceneSaverDestroy(void* handle) {
@@ -154,4 +185,8 @@ extern "C" void MirageSceneSaverDestroy(void* handle) {
     lock.unlock();
     if (last) delete engine;
     MirageSceneSaverHostDestroy(host);
+}
+
+extern "C" void MirageSceneDesktopDestroy(void* handle) {
+    MirageSceneSaverDestroy(handle);
 }
