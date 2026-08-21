@@ -75,6 +75,7 @@ func buildMirageSettingsViewModels() -> AnyObject? {
 
 private struct MirageStoredConfiguration: Codable {
     let version: Int
+    let enabled: Bool?
     let displays: [String: MirageStoredDisplay]
 }
 
@@ -88,7 +89,8 @@ private func mirageLoadConfiguration() -> MirageStoredConfiguration? {
     guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage"),
           let data = try? Data(contentsOf: container.appendingPathComponent("dynamic-lock-screen.json")),
           let decoded = try? JSONDecoder().decode(MirageStoredConfiguration.self, from: data) else { return nil }
-    guard !decoded.displays.isEmpty,
+    guard decoded.enabled != false,
+          !decoded.displays.isEmpty,
           decoded.displays.values.allSatisfy({ $0.kind == "video" || $0.kind == "scene" }) else { return nil }
     return decoded
 }

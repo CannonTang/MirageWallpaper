@@ -16,6 +16,7 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     let renderDirectory: String
     let entryPath: String
     let previewPath: String?
+    var desktopFallbackPath: String?
     let rawProperties: [String: AnyCodableValue]
     let fps: Int
     let fillMode: String
@@ -23,7 +24,8 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
 
 struct DynamicLockScreenConfiguration: Codable {
     let version: Int
-    let displays: [String: DynamicLockScreenDisplayConfiguration]
+    var enabled: Bool?
+    var displays: [String: DynamicLockScreenDisplayConfiguration]
 }
 
 enum AnyCodableValue: Codable {
@@ -103,7 +105,7 @@ final class DynamicLockScreenManager: ObservableObject {
         guard let url = configurationURL,
               let data = try? Data(contentsOf: url),
               let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else { return false }
-        return !configuration.displays.isEmpty && configuration.displays.values.allSatisfy {
+        return configuration.enabled != false && !configuration.displays.isEmpty && configuration.displays.values.allSatisfy {
             $0.kind == WallpaperKind.video.rawValue || $0.kind == WallpaperKind.scene.rawValue
         }
     }
@@ -130,6 +132,7 @@ final class DynamicLockScreenManager: ObservableObject {
         UserDefaults.standard.set(true, forKey: enabledKey)
         isEnabled = true
         isConfirmationPresented = false
+        activateStoredConfiguration()
         registerExtension()
         return true
     }
@@ -148,6 +151,7 @@ final class DynamicLockScreenManager: ObservableObject {
         guard isAvailable else { return }
         isEnabled = true
         UserDefaults.standard.set(true, forKey: enabledKey)
+        activateStoredConfiguration()
         registerExtension()
     }
 
@@ -188,8 +192,14 @@ final class DynamicLockScreenManager: ObservableObject {
             }
         }
         let configuration = DynamicLockScreenConfiguration(
-            version: 1,
+            version: 2,
+            enabled: true,
             displays: Dictionary(uniqueKeysWithValues: displayIDs.map { displayID in
+                let fallbackSource = DesktopOverrideService.shared.dynamicLockScreenFallbackURL(
+                    forDisplay: displayID)
+                let fallbackURL = fallbackSource.flatMap {
+                    try? deployDesktopFallback(source: $0, displayID: displayID, in: container)
+                }
                 let record = DynamicLockScreenDisplayConfiguration(
                     displayID: displayID,
                     wallpaperID: wallpaper.id,
@@ -198,6 +208,7 @@ final class DynamicLockScreenManager: ObservableObject {
                     renderDirectory: deployment.renderDirectory.path,
                     entryPath: deployment.entryURL.path,
                     previewPath: deployment.previewURL?.path,
+                    desktopFallbackPath: fallbackURL?.path,
                     rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
                     fps: min(max(fps, 10), 60),
                     fillMode: runtime.fillMode.rawValue
@@ -210,12 +221,50 @@ final class DynamicLockScreenManager: ObservableObject {
         keepDeployment = true
         notifyConfigurationChanged()
         cleanupDeployments(except: deployment.root)
+        cleanupDesktopFallbacks()
+    }
+
+    func refreshDesktopFallback(forDisplay displayID: UInt32) {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data),
+              var record = configuration.displays["display-\(displayID)"],
+              let container = sharedContainerURL,
+              let source = DesktopOverrideService.shared.dynamicLockScreenFallbackURL(forDisplay: displayID),
+              let fallback = try? deployDesktopFallback(source: source, displayID: displayID, in: container)
+        else { return }
+        record.desktopFallbackPath = fallback.path
+        configuration.displays["display-\(displayID)"] = record
+        guard let updated = try? JSONEncoder().encode(configuration),
+              (try? updated.write(to: configurationURL, options: .atomic)) != nil else {
+            try? FileManager.default.removeItem(at: fallback)
+            return
+        }
+        notifyDesktopFallbackChanged()
+        cleanupDesktopFallbacks()
+    }
+
+    func refreshDesktopFallbacks() {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data)
+        else { return }
+        configuration.displays.values.forEach { refreshDesktopFallback(forDisplay: $0.displayID) }
     }
 
     func clearConfiguration() {
-        if let url = configurationURL { try? FileManager.default.removeItem(at: url) }
-        if let container = sharedContainerURL {
-            try? FileManager.default.removeItem(at: container.appendingPathComponent("DynamicLockScreen/Deployments", isDirectory: true))
+        refreshDesktopFallbacks()
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data)
+        else {
+            notifyConfigurationChanged()
+            return
+        }
+        configuration.enabled = false
+        if let updated = try? JSONEncoder().encode(configuration) {
+            try? updated.write(to: configurationURL, options: .atomic)
         }
         notifyConfigurationChanged()
     }
@@ -297,6 +346,21 @@ final class DynamicLockScreenManager: ObservableObject {
         return destination
     }
 
+    private func deployDesktopFallback(source: URL, displayID: UInt32, in container: URL) throws -> URL {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        let directory = container.appendingPathComponent("DynamicLockScreen/DesktopFallbacks", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let extensionName = source.pathExtension.isEmpty ? "png" : source.pathExtension
+        let destination = directory.appendingPathComponent(
+            "display-\(displayID)-\(UUID().uuidString.lowercased()).\(extensionName)")
+        try FileManager.default.copyItem(at: source, to: destination)
+        return destination
+    }
+
     private func linkOrCopy(_ source: URL, to destination: URL) throws {
         do {
             try FileManager.default.linkItem(at: source, to: destination)
@@ -307,9 +371,10 @@ final class DynamicLockScreenManager: ObservableObject {
 
     private func cleanupDeployments(except active: URL) {
         let directory = active.deletingLastPathComponent()
+        let configurationURL = configurationURL
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) {
             guard let entries = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-            guard let configurationURL = self.configurationURL,
+            guard let configurationURL,
                   let data = try? Data(contentsOf: configurationURL),
                   let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else {
                 return
@@ -324,6 +389,27 @@ final class DynamicLockScreenManager: ObservableObject {
                 guard entryPath != activePath, !configuredRoots.contains(entryPath) else { continue }
                 let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
                 guard modified.map({ $0 < cutoff }) ?? true else { continue }
+                try? FileManager.default.removeItem(at: entry)
+            }
+        }
+    }
+
+    private func cleanupDesktopFallbacks() {
+        guard let container = sharedContainerURL else { return }
+        let directory = container.appendingPathComponent("DynamicLockScreen/DesktopFallbacks", isDirectory: true)
+        let configurationURL = configurationURL
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 30) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
+            ), let configurationURL,
+                  let data = try? Data(contentsOf: configurationURL),
+                  let configuration = try? JSONDecoder().decode(
+                    DynamicLockScreenConfiguration.self, from: data)
+            else { return }
+            let keep = Set(configuration.displays.values.compactMap(\.desktopFallbackPath).map {
+                URL(fileURLWithPath: $0).standardizedFileURL.path
+            })
+            for entry in entries where !keep.contains(entry.standardizedFileURL.path) {
                 try? FileManager.default.removeItem(at: entry)
             }
         }
@@ -347,6 +433,20 @@ final class DynamicLockScreenManager: ObservableObject {
         }
     }
 
+    private func activateStoredConfiguration() {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data)
+        else { return }
+        configuration.enabled = true
+        guard let updated = try? JSONEncoder().encode(configuration),
+              (try? updated.write(to: configurationURL, options: .atomic)) != nil
+        else { return }
+        refreshDesktopFallbacks()
+        notifyConfigurationChanged()
+    }
+
     private func discardUnsupportedConfiguration() {
         guard let url = configurationURL,
               let data = try? Data(contentsOf: url),
@@ -368,6 +468,16 @@ final class DynamicLockScreenManager: ObservableObject {
         CFNotificationCenterPostNotification(
             center,
             CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.configurationChanged" as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
+    private func notifyDesktopFallbackChanged() {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.desktopFallbackChanged" as CFString),
             nil,
             nil,
             true

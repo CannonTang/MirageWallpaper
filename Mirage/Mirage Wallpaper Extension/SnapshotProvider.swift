@@ -30,10 +30,42 @@ enum MirageSnapshotProvider {
 
     static func makeSnapshot(from configuration: MirageLockConfiguration?) -> AnyObject? {
         guard let display = configuration?.displays.values.first else { return nil }
-        let image = display.previewPath.flatMap(loadImage)
-            ?? (display.kind == "video" ? loadVideoFrame(at: URL(fileURLWithPath: display.entryPath)) : nil)
+        let locked = currentScreenLockState()
+        let image: CGImage?
+        if locked && configuration?.enabled != false {
+            image = display.previewPath.flatMap(loadImage)
+                ?? (display.kind == "video" ? loadVideoFrame(at: URL(fileURLWithPath: display.entryPath)) : nil)
+        } else {
+            image = display.desktopFallbackPath.flatMap(loadImage)
+                ?? systemFallbackImage()
+        }
         guard let image else { return nil }
         return makeSnapshot(from: image)
+    }
+
+    private static func currentScreenLockState() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        for key in ["CGSSessionScreenIsLocked", "kCGSSessionScreenIsLocked"] {
+            if let value = session[key] as? NSNumber { return value.boolValue }
+            if let value = session[key] as? Bool { return value }
+        }
+        return false
+    }
+
+    private static func systemFallbackImage() -> CGImage? {
+        let directories = [
+            URL(fileURLWithPath: "/System/Library/Desktop Pictures", isDirectory: true),
+            URL(fileURLWithPath: "/System/Library/CoreServices", isDirectory: true)
+        ]
+        for directory in directories {
+            let candidates = (try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
+            )) ?? []
+            for candidate in candidates.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                if let image = loadImage(candidate.path) { return image }
+            }
+        }
+        return nil
     }
 
     private static func loadImage(_ path: String) -> CGImage? {

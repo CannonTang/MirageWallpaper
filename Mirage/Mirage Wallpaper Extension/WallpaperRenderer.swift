@@ -6,8 +6,11 @@
 
 import AVFoundation
 import AppKit
+import CoreMedia
+import CoreVideo
 import Darwin
 import Foundation
+import ImageIO
 
 enum MirageLockAnyValue: Codable {
     case string(String)
@@ -59,6 +62,7 @@ struct MirageLockDisplayConfiguration: Codable {
     let renderDirectory: String
     let entryPath: String
     let previewPath: String?
+    let desktopFallbackPath: String?
     let rawProperties: [String: MirageLockAnyValue]
     let fps: Int
     let fillMode: String
@@ -66,6 +70,7 @@ struct MirageLockDisplayConfiguration: Codable {
 
 struct MirageLockConfiguration: Codable {
     let version: Int
+    let enabled: Bool?
     let displays: [String: MirageLockDisplayConfiguration]
 }
 
@@ -105,21 +110,33 @@ final class MirageLockRenderer {
     private let rootLayer: CALayer
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
+    private var desktopLayer: AVSampleBufferDisplayLayer?
+    private var desktopFallbackPath: String?
     private var endObserver: NSObjectProtocol?
     private var isPaused = false
+    private var isLocked: Bool
+    private let dynamicEnabled: Bool
     private var sceneLibrary: MirageSceneLibrary?
     private var sceneEngine: UnsafeMutableRawPointer?
 
-    init(rootLayer: CALayer, size: CGSize, scale: CGFloat, configuration: MirageLockDisplayConfiguration) {
+    init(rootLayer: CALayer, size: CGSize, scale: CGFloat,
+         configuration: MirageLockDisplayConfiguration, locked: Bool,
+         dynamicEnabled: Bool) {
         self.rootLayer = rootLayer
+        self.isLocked = locked && dynamicEnabled
+        self.dynamicEnabled = dynamicEnabled
         rootLayer.frame = CGRect(origin: .zero, size: size)
         rootLayer.contentsScale = scale
         rootLayer.masksToBounds = true
-        switch configuration.kind {
-        case "video": loadVideo(configuration)
-        case "scene": loadScene(configuration, size: size)
-        default: break
+        if dynamicEnabled {
+            switch configuration.kind {
+            case "video": loadVideo(configuration)
+            case "scene": loadScene(configuration, size: size)
+            default: break
+            }
         }
+        updateDesktopFallback(path: configuration.desktopFallbackPath)
+        setLocked(locked && dynamicEnabled)
     }
 
     private func loadVideo(_ configuration: MirageLockDisplayConfiguration) {
@@ -187,6 +204,45 @@ final class MirageLockRenderer {
         if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 0) }
     }
 
+    func setLocked(_ locked: Bool) {
+        let effectiveLocked = locked && dynamicEnabled
+        isLocked = effectiveLocked
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if effectiveLocked {
+            resume()
+            desktopLayer?.opacity = 0
+        } else {
+            desktopLayer?.opacity = 1
+        }
+        CATransaction.commit()
+        CATransaction.flush()
+        if !effectiveLocked { pause() }
+    }
+
+    func updateDesktopFallback(path: String?) {
+        guard desktopFallbackPath != path || desktopLayer == nil else { return }
+        let image = path.flatMap(Self.loadImage) ?? Self.systemFallbackImage() ?? Self.solidImage()
+        guard let image, let sample = Self.makeStillSampleBuffer(from: image) else { return }
+        let layer: AVSampleBufferDisplayLayer
+        if let existing = desktopLayer {
+            layer = existing
+        } else {
+            layer = AVSampleBufferDisplayLayer()
+            layer.frame = rootLayer.bounds
+            layer.contentsScale = rootLayer.contentsScale
+            layer.videoGravity = .resizeAspectFill
+            layer.isOpaque = true
+            layer.zPosition = 1_000_000
+            layer.opacity = isLocked ? 0 : 1
+            rootLayer.addSublayer(layer)
+            desktopLayer = layer
+        }
+        Self.setDisplayImmediately(sample)
+        layer.sampleBufferRenderer.enqueue(sample)
+        desktopFallbackPath = path
+    }
+
     func stop() {
         player?.pause()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
@@ -196,5 +252,115 @@ final class MirageLockRenderer {
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
         player = nil
+        desktopLayer?.sampleBufferRenderer.flush()
+        desktopLayer?.removeFromSuperlayer()
+        desktopLayer = nil
+    }
+
+    private static func loadImage(_ path: String) -> CGImage? {
+        let url = URL(fileURLWithPath: path)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    private static func systemFallbackImage() -> CGImage? {
+        let directories = [
+            URL(fileURLWithPath: "/System/Library/Desktop Pictures", isDirectory: true),
+            URL(fileURLWithPath: "/System/Library/CoreServices", isDirectory: true)
+        ]
+        for directory in directories {
+            let candidates = (try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
+            )) ?? []
+            for candidate in candidates.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                if let image = loadImage(candidate.path) { return image }
+            }
+        }
+        return nil
+    }
+
+    private static func solidImage() -> CGImage? {
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: 2,
+                height: 2,
+                bitsPerComponent: 8,
+                bytesPerRow: 8,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.setFillColor(NSColor.black.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        return context.makeImage()
+    }
+
+    private static func makeStillSampleBuffer(from image: CGImage) -> CMSampleBuffer? {
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:],
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ]
+        var pixelBuffer: CVPixelBuffer?
+        guard CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            image.width,
+            image.height,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &pixelBuffer
+        ) == kCVReturnSuccess, let pixelBuffer else { return nil }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: baseAddress,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+              ) else {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            return nil
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        var formatDescription: CMVideoFormatDescription?
+        guard CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescriptionOut: &formatDescription
+        ) == noErr, let formatDescription else { return nil }
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: .zero,
+            decodeTimeStamp: .invalid
+        )
+        var sampleBuffer: CMSampleBuffer?
+        guard CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescription: formatDescription,
+            sampleTiming: &timing,
+            sampleBufferOut: &sampleBuffer
+        ) == noErr else { return nil }
+        return sampleBuffer
+    }
+
+    private static func setDisplayImmediately(_ sampleBuffer: CMSampleBuffer) {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+            sampleBuffer, createIfNecessary: true
+        ) else { return }
+        for index in 0 ..< CFArrayGetCount(attachments) {
+            let dictionary = unsafeBitCast(
+                CFArrayGetValueAtIndex(attachments, index), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                dictionary,
+                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
+        }
     }
 }

@@ -14,13 +14,16 @@ private final class MirageLockContext {
     let rootLayer: CALayer
     var renderer: MirageLockRenderer?
     let displayID: UInt32
+    var isLocked: Bool
 
-    init(id: UInt32, context: CAContext, rootLayer: CALayer, renderer: MirageLockRenderer?, displayID: UInt32) {
+    init(id: UInt32, context: CAContext, rootLayer: CALayer,
+         renderer: MirageLockRenderer?, displayID: UInt32, isLocked: Bool) {
         self.id = id
         self.context = context
         self.rootLayer = rootLayer
         self.renderer = renderer
         self.displayID = displayID
+        self.isLocked = isLocked
     }
 }
 
@@ -46,6 +49,10 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         }, "cn.laobamac.Mirage.dynamicLockScreen.configurationChanged" as CFString, nil, .deliverImmediately)
         CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
             guard let object else { return }
+            Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().reloadDesktopFallbacks()
+        }, "cn.laobamac.Mirage.dynamicLockScreen.desktopFallbackChanged" as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
+            guard let object else { return }
             Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().setLocked(true)
         }, "cn.laobamac.Mirage.dynamicLockScreen.locked" as CFString, nil, .deliverImmediately)
         CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
@@ -66,6 +73,7 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     deinit {
         if let observer {
             CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.configurationChanged" as CFString), nil)
+            CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.desktopFallbackChanged" as CFString), nil)
             CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.locked" as CFString), nil)
             CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.unlocked" as CFString), nil)
             Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(observer).release()
@@ -122,9 +130,12 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             context.layer = rootLayer
             CATransaction.commit()
             CATransaction.flush()
-            let renderer = Self.renderer(for: displayID, rootLayer: rootLayer, size: size, scale: scale)
-            if !self.isLocked { renderer?.pause() }
-            let active = MirageLockContext(id: context.contextId, context: context, rootLayer: rootLayer, renderer: renderer, displayID: displayID)
+            let renderer = Self.renderer(
+                for: displayID, rootLayer: rootLayer, size: size,
+                scale: scale, locked: self.isLocked)
+            let active = MirageLockContext(
+                id: context.contextId, context: context, rootLayer: rootLayer,
+                renderer: renderer, displayID: displayID, isLocked: self.isLocked)
             self.lock.lock()
             let previous = self.contexts[context.contextId]?.renderer
             self.contexts[context.contextId] = active
@@ -137,7 +148,7 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
 
     func update(withId id: Any?, request: Any?, reply: @escaping ((any Error)?) -> Void) {
         if let mode = Self.enumCase(named: "presentationMode", in: request) {
-            setLocked(mode == "locked")
+            setLocked(mode == "locked", contextID: Self.uint32(from: id))
         }
         reply(nil)
     }
@@ -196,13 +207,8 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         lock.unlock()
         guard let configuration = Self.loadConfiguration() else {
             values.forEach {
-                $0.renderer?.stop()
-                $0.renderer = nil
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                $0.rootLayer.sublayers = nil
-                $0.rootLayer.backgroundColor = NSColor.black.cgColor
-                CATransaction.commit()
+                $0.isLocked = false
+                $0.renderer?.setLocked(false)
             }
             return
         }
@@ -211,11 +217,35 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             $0.renderer = nil
         }
         values.forEach { context in
-            let renderer = Self.renderer(for: context.displayID, rootLayer: context.rootLayer, size: context.rootLayer.bounds.size, scale: context.rootLayer.contentsScale, configuration: configuration)
-            if !isLocked { renderer?.pause() }
+            let renderer = Self.renderer(
+                for: context.displayID, rootLayer: context.rootLayer,
+                size: context.rootLayer.bounds.size,
+                scale: context.rootLayer.contentsScale,
+                configuration: configuration,
+                locked: context.isLocked && configuration.enabled != false)
             lock.lock()
             context.renderer = renderer
             lock.unlock()
+        }
+    }
+
+    private func reloadDesktopFallbacks() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.reloadDesktopFallbacks() }
+            return
+        }
+        guard let configuration = Self.loadConfiguration() else { return }
+        lock.lock()
+        let values = Array(contexts.values)
+        lock.unlock()
+        values.forEach { context in
+            let entry = configuration.displays["display-\(context.displayID)"]
+                ?? configuration.displays.values.first
+            context.renderer?.updateDesktopFallback(path: entry?.desktopFallbackPath)
+            if configuration.enabled == false {
+                context.isLocked = false
+                context.renderer?.setLocked(false)
+            }
         }
     }
 
@@ -225,23 +255,35 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         proxy.updateSettingsViewModels(models) { _ in }
     }
 
-    private func setLocked(_ locked: Bool) {
+    private func setLocked(_ locked: Bool, contextID: UInt32? = nil) {
         guard Thread.isMainThread else {
-            DispatchQueue.main.async { [weak self] in self?.setLocked(locked) }
+            DispatchQueue.main.async { [weak self] in
+                self?.setLocked(locked, contextID: contextID)
+            }
             return
         }
-        guard isLocked != locked else { return }
-        isLocked = locked
+        let effectiveLocked = locked && Self.loadConfiguration()?.enabled != false
+        isLocked = effectiveLocked
         lock.lock()
-        let values = Array(contexts.values)
+        let values = contextID.flatMap { identifier in
+            contexts[identifier].map { [$0] }
+        } ?? Array(contexts.values)
+        values.forEach { $0.isLocked = effectiveLocked }
         lock.unlock()
-        values.forEach { locked ? $0.renderer?.resume() : $0.renderer?.pause() }
+        values.forEach { $0.renderer?.setLocked(effectiveLocked) }
     }
 
-    private static func renderer(for displayID: UInt32, rootLayer: CALayer, size: CGSize, scale: CGFloat, configuration: MirageLockConfiguration? = nil) -> MirageLockRenderer? {
+    private static func renderer(for displayID: UInt32, rootLayer: CALayer,
+                                 size: CGSize, scale: CGFloat,
+                                 configuration: MirageLockConfiguration? = nil,
+                                 locked: Bool) -> MirageLockRenderer? {
         let config = configuration ?? loadConfiguration()
         guard let entry = config?.displays["display-\(displayID)"] ?? config?.displays.values.first else { return nil }
-        return MirageLockRenderer(rootLayer: rootLayer, size: size, scale: scale, configuration: entry)
+        return MirageLockRenderer(
+            rootLayer: rootLayer, size: size, scale: scale,
+            configuration: entry,
+            locked: locked && config?.enabled != false,
+            dynamicEnabled: config?.enabled != false)
     }
 
     private static func loadConfiguration() -> MirageLockConfiguration? {
@@ -283,10 +325,22 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     }
 
     private static func uint32(from value: Any?) -> UInt32? {
+        guard let value else { return nil }
         if let number = value as? NSNumber { return number.uint32Value }
-        let text = String(describing: value ?? "")
-        let digits = text.split { !$0.isNumber }.last
-        return digits.flatMap { UInt32($0) }
+        func find(_ value: Any, depth: Int) -> UInt32? {
+            guard depth < 5 else { return nil }
+            if let number = value as? NSNumber { return number.uint32Value }
+            let mirror = Mirror(reflecting: value)
+            for child in mirror.children {
+                if ["box", "contextId", "contextID"].contains(child.label ?? ""),
+                   let number = child.value as? NSNumber {
+                    return number.uint32Value
+                }
+                if let found = find(child.value, depth: depth + 1) { return found }
+            }
+            return nil
+        }
+        return find(value, depth: 0)
     }
 
     private static func geometry(from request: Any?) -> (displayID: UInt32?, size: CGSize?, scale: CGFloat?) {

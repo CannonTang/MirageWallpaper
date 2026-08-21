@@ -316,6 +316,9 @@ final class DesktopOverrideService {
         pendingTargets.remove(url)
         installedByScreen[displayID] = url
         captureRequests[displayID] = nil
+        Task { @MainActor in
+            DynamicLockScreenManager.shared.refreshDesktopFallback(forDisplay: displayID)
+        }
         verifyDesktopImage(url, forDisplay: displayID, screen: screen)
     }
 
@@ -454,6 +457,31 @@ final class DesktopOverrideService {
         storedBackups()[backupKey(for: displayID)]
     }
 
+    func dynamicLockScreenFallbackURL(forDisplay displayID: CGDirectDisplayID) -> URL? {
+        if isEnabled,
+           let installed = installedByScreen[displayID],
+           FileManager.default.fileExists(atPath: installed.path) {
+            return installed
+        }
+        if !isEnabled, let backup = backupURL(for: displayID) {
+            return backup
+        }
+        if let screen = screen(for: displayID),
+           let current = NSWorkspace.shared.desktopImageURL(for: screen) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: current.path, isDirectory: &isDirectory),
+               !isDirectory.boolValue,
+               isEnabled || !isMirageGenerated(current) {
+                return current
+            }
+        }
+        let fallback = Self.systemFallbackPicture()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: fallback.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return nil }
+        return fallback
+    }
+
     private func storedOverrideDisplayKeys() -> Set<String> {
         Set(defaults.stringArray(forKey: Key.displays) ?? [])
     }
@@ -576,6 +604,9 @@ final class DesktopOverrideService {
     func didChangeEnabled(_ enabled: Bool) {
         if mode != .none {
             mode = enabled ? .persistent : .transient
+        }
+        Task { @MainActor in
+            DynamicLockScreenManager.shared.refreshDesktopFallbacks()
         }
         guard enabled else { return }
         scheduleCaptureForAllScreens()
