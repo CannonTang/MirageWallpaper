@@ -20,6 +20,7 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     let rawProperties: [String: AnyCodableValue]
     let fps: Int
     let fillMode: String
+    var loadFromMemory: Bool?
 }
 
 struct DynamicLockScreenConfiguration: Codable {
@@ -211,7 +212,8 @@ final class DynamicLockScreenManager: ObservableObject {
                     desktopFallbackPath: fallbackURL?.path,
                     rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
                     fps: min(max(fps, 10), 60),
-                    fillMode: runtime.fillMode.rawValue
+                    fillMode: runtime.fillMode.rawValue,
+                    loadFromMemory: (AppDelegate.shared.globalSettingsViewModel.settings.wallpaperLoadSource ?? .disk) == .memory
                 )
                 return ("display-\(displayID)", record)
             })
@@ -222,6 +224,21 @@ final class DynamicLockScreenManager: ObservableObject {
         notifyConfigurationChanged()
         cleanupDeployments(except: deployment.root)
         cleanupDesktopFallbacks()
+    }
+
+    func updateLoadFromMemory(_ enabled: Bool) {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data)
+        else { return }
+        for key in configuration.displays.keys {
+            configuration.displays[key]?.loadFromMemory = enabled
+        }
+        guard let updated = try? JSONEncoder().encode(configuration),
+              (try? updated.write(to: configurationURL, options: .atomic)) != nil
+        else { return }
+        notifyConfigurationChanged()
     }
 
     func refreshDesktopFallback(forDisplay displayID: UInt32) {

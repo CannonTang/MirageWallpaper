@@ -215,12 +215,25 @@ final class ScreenSaverManager {
             "fps": min(max(fps, 10), 60),
             "fillMode": runtime.fillMode.rawValue,
             "enableHDRVideo": AppDelegate.shared.globalSettingsViewModel.settings.shouldEnableHDRVideo,
+            "loadFromMemory": (AppDelegate.shared.globalSettingsViewModel.settings.wallpaperLoadSource ?? .disk) == .memory,
             "language": MirageLocalization.shared.locale.identifier
         ]
         guard JSONSerialization.isValidJSONObject(object) else { throw MirageScreenSaverError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try fm.createDirectory(at: configurationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: configurationURL, options: .atomic)
+    }
+
+    func updateLoadFromMemory(_ enabled: Bool) {
+        guard let data = try? Data(contentsOf: configurationURL),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        object["loadFromMemory"] = enabled
+        guard JSONSerialization.isValidJSONObject(object),
+              let updated = try? JSONSerialization.data(
+                withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        else { return }
+        try? updated.write(to: configurationURL, options: .atomic)
     }
 
     func configuredWallpaperID() -> String? {

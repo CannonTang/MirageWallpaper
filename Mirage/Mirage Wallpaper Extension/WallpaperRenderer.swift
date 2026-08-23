@@ -66,6 +66,7 @@ struct MirageLockDisplayConfiguration: Codable {
     let rawProperties: [String: MirageLockAnyValue]
     let fps: Int
     let fillMode: String
+    let loadFromMemory: Bool?
 }
 
 struct MirageLockConfiguration: Codable {
@@ -108,14 +109,20 @@ private final class MirageSceneLibrary {
 
 final class MirageLockRenderer {
     private let rootLayer: CALayer
-    private var player: AVPlayer?
+    private var player: AVQueuePlayer?
+    private var looper: AVPlayerLooper?
+    private var memoryAssetLoader: MirageMemoryVideoAssetLoader?
     private var playerLayer: AVPlayerLayer?
     private var desktopLayer: AVSampleBufferDisplayLayer?
     private var desktopFallbackPath: String?
-    private var endObserver: NSObjectProtocol?
+    private var readyObservation: NSKeyValueObservation?
+    private var videoLoadTask: Task<Void, Never>?
+    private var videoLoadID = UUID()
+    private var videoReady = false
     private var isPaused = false
     private var isLocked: Bool
     private let dynamicEnabled: Bool
+    private let isVideo: Bool
     private var sceneLibrary: MirageSceneLibrary?
     private var sceneEngine: UnsafeMutableRawPointer?
 
@@ -125,6 +132,7 @@ final class MirageLockRenderer {
         self.rootLayer = rootLayer
         self.isLocked = locked && dynamicEnabled
         self.dynamicEnabled = dynamicEnabled
+        self.isVideo = configuration.kind == "video"
         rootLayer.frame = CGRect(origin: .zero, size: size)
         rootLayer.contentsScale = scale
         rootLayer.masksToBounds = true
@@ -140,21 +148,73 @@ final class MirageLockRenderer {
     }
 
     private func loadVideo(_ configuration: MirageLockDisplayConfiguration) {
-        let item = AVPlayerItem(url: URL(fileURLWithPath: configuration.entryPath))
-        let player = AVPlayer(playerItem: item)
-        player.isMuted = true
-        let layer = AVPlayerLayer(player: player)
-        layer.frame = rootLayer.bounds
-        layer.videoGravity = configuration.fillMode == "contain" ? .resizeAspect : configuration.fillMode == "stretch" ? .resize : .resizeAspectFill
-        rootLayer.addSublayer(layer)
-        self.player = player
-        self.playerLayer = layer
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            guard let self, !self.isPaused else { return }
-            self.player?.seek(to: .zero)
-            self.player?.play()
+        videoLoadTask?.cancel()
+        let loadID = UUID()
+        videoLoadID = loadID
+        let entryURL = URL(fileURLWithPath: configuration.entryPath)
+        let loadFromMemory = configuration.loadFromMemory ?? false
+        let fillMode = configuration.fillMode
+        videoLoadTask = Task { [weak self] in
+            let loader: MirageMemoryVideoAssetLoader?
+            let asset: AVURLAsset
+            if loadFromMemory {
+                do {
+                    let candidate = try MirageMemoryVideoAssetLoader(fileURL: entryURL)
+                    loader = candidate
+                    asset = candidate.makeAsset()
+                } catch {
+                    NSLog("[MirageLock] in-memory video load failed: %@", error.localizedDescription)
+                    loader = nil
+                    asset = AVURLAsset(url: entryURL)
+                }
+            } else {
+                loader = nil
+                asset = AVURLAsset(url: entryURL)
+            }
+
+            guard let playable = try? await asset.load(.isPlayable), playable,
+                  let duration = try? await asset.load(.duration),
+                  duration.isNumeric, CMTimeCompare(duration, .zero) > 0,
+                  let tracks = try? await asset.loadTracks(withMediaType: .video),
+                  !tracks.isEmpty else {
+                NSLog("[MirageLock] video asset is not playable: %@", entryURL.path)
+                return
+            }
+            for track in tracks {
+                guard let decodable = try? await track.load(.isDecodable), decodable else {
+                    NSLog("[MirageLock] video track is not decodable: %@", entryURL.path)
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.videoLoadID == loadID else { return }
+                let item = AVPlayerItem(asset: asset)
+                let player = AVQueuePlayer()
+                player.automaticallyWaitsToMinimizeStalling = true
+                player.isMuted = true
+                let looper = AVPlayerLooper(player: player, templateItem: item)
+                let layer = AVPlayerLayer(player: player)
+                layer.frame = self.rootLayer.bounds
+                layer.videoGravity = fillMode == "contain" ? .resizeAspect : fillMode == "stretch" ? .resize : .resizeAspectFill
+                self.rootLayer.addSublayer(layer)
+                self.player = player
+                self.looper = looper
+                self.memoryAssetLoader = loader
+                self.playerLayer = layer
+                self.readyObservation = layer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+                    guard layer.isReadyForDisplay else { return }
+                    DispatchQueue.main.async { self?.videoDidBecomeReady() }
+                }
+                if !self.isPaused { player.play() }
+            }
         }
-        player.play()
+    }
+
+    private func videoDidBecomeReady() {
+        guard !videoReady else { return }
+        videoReady = true
+        updateDesktopLayerVisibility()
     }
 
     private func loadScene(_ configuration: MirageLockDisplayConfiguration, size: CGSize) {
@@ -207,17 +267,20 @@ final class MirageLockRenderer {
     func setLocked(_ locked: Bool) {
         let effectiveLocked = locked && dynamicEnabled
         isLocked = effectiveLocked
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         if effectiveLocked {
             resume()
-            desktopLayer?.opacity = 0
         } else {
-            desktopLayer?.opacity = 1
+            pause()
         }
+        updateDesktopLayerVisibility()
+    }
+
+    private func updateDesktopLayerVisibility() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        desktopLayer?.opacity = !isLocked || (isVideo && !videoReady) ? 1 : 0
         CATransaction.commit()
         CATransaction.flush()
-        if !effectiveLocked { pause() }
     }
 
     func updateDesktopFallback(path: String?) {
@@ -234,7 +297,7 @@ final class MirageLockRenderer {
             layer.videoGravity = .resizeAspectFill
             layer.isOpaque = true
             layer.zPosition = 1_000_000
-            layer.opacity = isLocked ? 0 : 1
+            layer.opacity = !isLocked || (isVideo && !videoReady) ? 1 : 0
             rootLayer.addSublayer(layer)
             desktopLayer = layer
         }
@@ -244,8 +307,16 @@ final class MirageLockRenderer {
     }
 
     func stop() {
+        videoLoadID = UUID()
+        videoLoadTask?.cancel()
+        videoLoadTask = nil
+        readyObservation?.invalidate()
+        readyObservation = nil
         player?.pause()
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        looper?.disableLooping()
+        player?.removeAllItems()
+        looper = nil
+        memoryAssetLoader = nil
         if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
         sceneEngine = nil
         sceneLibrary = nil

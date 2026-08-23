@@ -25,6 +25,7 @@ private struct MirageSaverConfiguration {
     let fps: Int
     let fillMode: String
     let enableHDRVideo: Bool
+    let loadFromMemory: Bool
     let language: String
 
     static func load() -> Self? {
@@ -70,6 +71,7 @@ private struct MirageSaverConfiguration {
             fps: max(10, min(object["fps"] as? Int ?? 30, 60)),
             fillMode: object["fillMode"] as? String ?? "cover",
             enableHDRVideo: object["enableHDRVideo"] as? Bool ?? false,
+            loadFromMemory: object["loadFromMemory"] as? Bool ?? false,
             language: object["language"] as? String ?? Locale.preferredLanguages.first ?? "en"
         )
     }
@@ -318,12 +320,13 @@ private final class MirageWebViewDelegate: NSObject, WKNavigationDelegate {
 
 @objc(MirageScreenSaverView)
 final class MirageScreenSaverView: ScreenSaverView {
-    private var player: AVPlayer?
+    private var player: AVQueuePlayer?
+    private var looper: AVPlayerLooper?
+    private var memoryAssetLoader: MirageMemoryVideoAssetLoader?
     private var playerLayer: AVPlayerLayer?
     private var webView: WKWebView?
     private var webViewDelegate: MirageWebViewDelegate?
     private var schemeHandler: MirageWallpaperSchemeHandler?
-    private var endObserver: NSObjectProtocol?
     private var messageLabel: NSTextField?
     private var configuration: MirageSaverConfiguration?
     private var sceneLibrary: MirageSceneLibrary?
@@ -361,8 +364,11 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     deinit {
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         player?.pause()
+        looper?.disableLooping()
+        player?.removeAllItems()
+        looper = nil
+        memoryAssetLoader = nil
         videoLoadTask?.cancel()
         webView?.stopLoading()
         if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
@@ -493,9 +499,27 @@ final class MirageScreenSaverView: ScreenSaverView {
             let candidates = [configuration.playbackEntryURL, configuration.fallbackEntryURL]
                 .compactMap { $0 }
             var playableAsset: AVURLAsset?
+            var playableLoader: MirageMemoryVideoAssetLoader?
             for url in candidates {
-                let asset = AVURLAsset(url: url)
+                let loader: MirageMemoryVideoAssetLoader?
+                let asset: AVURLAsset
+                if configuration.loadFromMemory {
+                    do {
+                        let candidateLoader = try MirageMemoryVideoAssetLoader(fileURL: url)
+                        loader = candidateLoader
+                        asset = candidateLoader.makeAsset()
+                    } catch {
+                        screenSaverLogger.error("In-memory video load failed: \(error.localizedDescription, privacy: .public)")
+                        loader = nil
+                        asset = AVURLAsset(url: url)
+                    }
+                } else {
+                    loader = nil
+                    asset = AVURLAsset(url: url)
+                }
                 guard let playable = try? await asset.load(.isPlayable), playable,
+                      let duration = try? await asset.load(.duration),
+                      duration.isNumeric, CMTimeCompare(duration, .zero) > 0,
                       let tracks = try? await asset.loadTracks(withMediaType: .video),
                       !tracks.isEmpty else { continue }
                 var decodable = true
@@ -507,6 +531,7 @@ final class MirageScreenSaverView: ScreenSaverView {
                 }
                 if decodable {
                     playableAsset = asset
+                    playableLoader = loader
                     break
                 }
             }
@@ -521,8 +546,10 @@ final class MirageScreenSaverView: ScreenSaverView {
             await MainActor.run {
                 guard let self, self.videoLoadID == loadID else { return }
                 let item = AVPlayerItem(asset: asset)
-                let player = AVPlayer(playerItem: item)
+                let player = AVQueuePlayer()
+                player.automaticallyWaitsToMinimizeStalling = true
                 player.isMuted = true
+                let looper = AVPlayerLooper(player: player, templateItem: item)
                 let playerLayer = AVPlayerLayer(player: player)
                 playerLayer.frame = self.presentationBounds
                 playerLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
@@ -534,14 +561,9 @@ final class MirageScreenSaverView: ScreenSaverView {
                 self.applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
                 self.layer?.addSublayer(playerLayer)
                 self.player = player
+                self.looper = looper
+                self.memoryAssetLoader = playableLoader
                 self.playerLayer = playerLayer
-                self.endObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-                ) { [weak self] _ in
-                    guard let self else { return }
-                    self.player?.seek(to: .zero)
-                    if self.isAnimatingWallpaper { self.player?.play() }
-                }
                 if self.isAnimatingWallpaper { player.play() }
             }
         }

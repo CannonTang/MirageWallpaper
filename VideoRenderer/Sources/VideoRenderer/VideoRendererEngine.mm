@@ -181,7 +181,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
         _player = [AVQueuePlayer queuePlayerWithItems:@[]];
         _player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
-        _player.automaticallyWaitsToMinimizeStalling = !config.loadFromMemory;
+        _player.automaticallyWaitsToMinimizeStalling = YES;
         _player.volume = VRClampVolume(config.initialVolume);
         _player.muted = config.muted;
 

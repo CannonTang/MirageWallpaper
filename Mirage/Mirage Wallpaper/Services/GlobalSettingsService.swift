@@ -719,6 +719,11 @@ class GlobalSettingsViewModel: ObservableObject {
     func save() {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         UserDefaults.standard.set(data, forKey: "GlobalSettings")
+        let loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
+        ScreenSaverManager.shared.updateLoadFromMemory(loadFromMemory)
+        Task { @MainActor in
+            DynamicLockScreenManager.shared.updateLoadFromMemory(loadFromMemory)
+        }
         if savedSettings != settings {
             savedSettings = settings
         }
