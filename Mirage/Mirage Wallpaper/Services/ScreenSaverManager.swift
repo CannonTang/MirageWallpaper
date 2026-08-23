@@ -92,15 +92,19 @@ final class ScreenSaverManager {
     /// alone cannot update an already installed saver. Keep an existing user
     /// installation aligned with the newly updated app on the next launch.
     func refreshInstalledVersionIfNeeded() {
+        discardUnsupportedConfiguration()
         guard isInstalled,
               let bundledURL = bundledSaverURL,
-              let installedBundle = Bundle(url: installedURL),
               let bundledBundle = Bundle(url: bundledURL),
-              let installedBuild = installedBundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-              let bundledBuild = bundledBundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-              installedBuild != bundledBuild else { return }
+              let bundledBuild = bundledBundle.object(
+                forInfoDictionaryKey: "CFBundleVersion") as? String else { return }
 
         do {
+            let bundledFingerprint = try validatedFingerprint(of: bundledURL)
+            if let installedFingerprint = try? validatedFingerprint(of: installedURL),
+               installedFingerprint == bundledFingerprint {
+                return
+            }
             try install()
             NSLog("[Mirage] 已将已安装屏保组件更新至构建 %@", bundledBuild)
         } catch {
@@ -123,6 +127,13 @@ final class ScreenSaverManager {
             }
             hasher.update(data: Data(relativePath.utf8))
             hasher.update(data: try Data(contentsOf: fileURL, options: [.mappedIfSafe]))
+        }
+        let codeResourcesPath = "Contents/_CodeSignature/CodeResources"
+        let codeResourcesURL = saverURL.appending(path: codeResourcesPath)
+        if fm.isReadableFile(atPath: codeResourcesURL.path) {
+            hasher.update(data: Data(codeResourcesPath.utf8))
+            hasher.update(data: try Data(
+                contentsOf: codeResourcesURL, options: [.mappedIfSafe]))
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
@@ -168,18 +179,12 @@ final class ScreenSaverManager {
     func configure(with wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
                    properties: [String: WEProjectProperty], fps: Int) throws {
         guard wallpaper.isValid else { throw MirageScreenSaverError.noWallpaper }
-        guard wallpaper.kind != .unsupported else { throw MirageScreenSaverError.unsupportedWallpaper }
+        guard wallpaper.kind == .video || wallpaper.kind == .scene else {
+            throw MirageScreenSaverError.unsupportedWallpaper
+        }
 
-        var propertyValues: [String: Any] = [:]
         var rawPropertyValues: [String: Any] = [:]
         for (key, property) in properties {
-            let value: Any
-            switch property.value {
-            case .bool(let bool): value = bool
-            case .number(let number): value = number
-            case .string(let string): value = string
-            }
-            propertyValues[key] = ["value": value]
             switch property.propertyType {
             case .color:
                 rawPropertyValues[key] = ["type": "color", "value": property.value.stringValue]
@@ -201,16 +206,8 @@ final class ScreenSaverManager {
             "wallpaperID": wallpaper.id,
             "title": wallpaper.project.title,
             "kind": wallpaper.kind.rawValue,
-            // Both paths must share one shape: the screen saver derives the
-            // entry's relative path by stripping this prefix from entryPath,
-            // and resolvedEntryURL is symlink-resolved by PathContainment.
-            // Resolving here keeps that derivation working when any component
-            // of the wallpaper directory is a symlink.
-            "renderDirectory": wallpaper.renderDirectory.resolvingSymlinksInPath().path,
             "entryPath": wallpaper.resolvedEntryURL.path,
             "playableEntryPath": playableVideoCacheURL(for: wallpaper.resolvedEntryURL).path,
-            "assetOverlays": wallpaper.assetOverlayDirectories.map(\.path),
-            "properties": propertyValues,
             "rawProperties": rawPropertyValues,
             "fps": min(max(fps, 10), 60),
             "fillMode": runtime.fillMode.rawValue,
@@ -237,9 +234,7 @@ final class ScreenSaverManager {
     }
 
     func configuredWallpaperID() -> String? {
-        guard let data = try? Data(contentsOf: configurationURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object["wallpaperID"] as? String
+        supportedConfigurationObject()?["wallpaperID"] as? String
     }
 
     func remapPersistedPaths(_ mappings: [String: String]) {
@@ -272,9 +267,22 @@ final class ScreenSaverManager {
     }
 
     func configuredWallpaperTitle() -> String? {
+        supportedConfigurationObject()?["title"] as? String
+    }
+
+    private func supportedConfigurationObject() -> [String: Any]? {
         guard let data = try? Data(contentsOf: configurationURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object["title"] as? String
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let kind = object["kind"] as? String,
+              kind == WallpaperKind.video.rawValue || kind == WallpaperKind.scene.rawValue
+        else { return nil }
+        return object
+    }
+
+    private func discardUnsupportedConfiguration() {
+        guard fm.fileExists(atPath: configurationURL.path),
+              supportedConfigurationObject() == nil else { return }
+        try? fm.removeItem(at: configurationURL)
     }
 
     func openSystemSettings() {

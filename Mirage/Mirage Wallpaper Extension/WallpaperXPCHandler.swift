@@ -247,6 +247,7 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
                 context.renderer?.setLocked(false)
             }
         }
+        agentProxy?.invalidateSnapshots { _ in }
     }
 
     private func reloadSettings() {

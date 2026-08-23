@@ -169,6 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             MirageLogService.shared.saveAutomatically()
         }
         wallpaperViewModel.saveRuntime()
+        DesktopOverrideService.shared.finalizeForApplicationTermination()
         // This method returns directly into process exit, so the renderers must
         // be reaped here and now. Anything deferred would never run and a hung
         // renderer would outlive the app as an orphan still drawing on the

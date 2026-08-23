@@ -68,7 +68,7 @@ struct ScreenSaverPage: SettingsPage {
                 Button("将正在播放的壁纸设为屏保") {
                     perform { try configureCurrentWallpaper() }
                 }
-                .disabled(!wallpaper.isValid || wallpaper.kind == .unsupported)
+                .disabled(!wallpaper.isValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
             } header: {
                 Label("屏保壁纸", systemImage: "photo.on.rectangle.angled")
             } footer: {
@@ -77,7 +77,7 @@ struct ScreenSaverPage: SettingsPage {
             }
 
             Section {
-                Text("视频、网页和场景壁纸由 Mirage 自己的屏保宿主加载，不要求 Mirage 主程序保持运行。网页屏保不会获得网络导航权限，音频响应在屏保环境中保持静音。")
+                Text("视频和场景壁纸由 Mirage 自己的屏保宿主加载，不要求 Mirage 主程序保持运行。屏保始终保持静音。")
                     .foregroundStyle(.secondary)
             } header: {
                 Label("运行方式", systemImage: "info.circle")

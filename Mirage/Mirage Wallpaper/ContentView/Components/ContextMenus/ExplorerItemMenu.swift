@@ -59,7 +59,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 Button(action: setAsScreenSaver) {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
-                .disabled(!canApply)
+                .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
 
                 Button(action: setAsDynamicLockScreen) {
                     Label("设为动态锁屏", systemImage: "lock.rectangle")

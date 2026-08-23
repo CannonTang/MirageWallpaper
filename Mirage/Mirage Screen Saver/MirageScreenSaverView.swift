@@ -3,8 +3,6 @@ import AppKit
 import Darwin
 import OSLog
 import ScreenSaver
-import UniformTypeIdentifiers
-import WebKit
 
 private let screenSaverLogger = Logger(
     subsystem: "cn.laobamac.Mirage.ScreenSaver",
@@ -14,13 +12,9 @@ private let screenSaverLogger = Logger(
 private struct MirageSaverConfiguration {
     let title: String
     let kind: String
-    let renderDirectory: URL
     let entryURL: URL
     let playbackEntryURL: URL
     let fallbackEntryURL: URL?
-    let entryRelativePath: String
-    let overlays: [URL]
-    let properties: [String: Any]
     let rawProperties: [String: Any]
     let fps: Int
     let fillMode: String
@@ -41,9 +35,8 @@ private struct MirageSaverConfiguration {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (object["version"] as? Int) == 1,
               let kind = object["kind"] as? String,
-              let renderPath = object["renderDirectory"] as? String,
+              kind == "video" || kind == "scene",
               let entryPath = object["entryPath"] as? String else { return nil }
-        let renderDirectory = URL(fileURLWithPath: renderPath, isDirectory: true)
         let entryURL = URL(fileURLWithPath: entryPath)
         guard FileManager.default.fileExists(atPath: entryURL.path) else { return nil }
         let candidate = (object["playableEntryPath"] as? String).map(URL.init(fileURLWithPath:))
@@ -58,15 +51,9 @@ private struct MirageSaverConfiguration {
         return Self(
             title: object["title"] as? String ?? "Mirage",
             kind: kind,
-            renderDirectory: renderDirectory,
             entryURL: entryURL,
             playbackEntryURL: entryURL,
             fallbackEntryURL: fallbackEntryURL,
-            entryRelativePath: entryURL.path.hasPrefix(renderDirectory.path + "/")
-                ? String(entryURL.path.dropFirst(renderDirectory.path.count + 1))
-                : entryURL.lastPathComponent,
-            overlays: (object["assetOverlays"] as? [String] ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) },
-            properties: object["properties"] as? [String: Any] ?? [:],
             rawProperties: object["rawProperties"] as? [String: Any] ?? [:],
             fps: max(10, min(object["fps"] as? Int ?? 30, 60)),
             fillMode: object["fillMode"] as? String ?? "cover",
@@ -133,200 +120,12 @@ private final class MirageSceneLibrary {
     deinit { dlclose(handle) }
 }
 
-private final class MirageWallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
-    let base: URL
-    let overlays: [URL]
-    private let queue = DispatchQueue(label: "cn.laobamac.Mirage.ScreenSaver.resources")
-    private let lock = NSLock()
-    private var activeTasks = Set<ObjectIdentifier>()
-
-    init(base: URL, overlays: [URL]) {
-        self.base = base
-        self.overlays = overlays
-    }
-
-    private func isActive(_ task: WKURLSchemeTask) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return activeTasks.contains(ObjectIdentifier(task))
-    }
-
-    private func finish(_ task: WKURLSchemeTask) {
-        lock.lock()
-        activeTasks.remove(ObjectIdentifier(task))
-        lock.unlock()
-    }
-
-    private func mimeType(for url: URL) -> String {
-        switch url.pathExtension.lowercased() {
-        case "atlas": return "text/plain"
-        case "skel", "bin": return "application/octet-stream"
-        case "wasm": return "application/wasm"
-        case "webm": return "video/webm"
-        case "ogg", "oga": return "audio/ogg"
-        case "woff": return "font/woff"
-        case "woff2": return "font/woff2"
-        case "ttf": return "font/ttf"
-        case "otf": return "font/otf"
-        default:
-            return UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        }
-    }
-
-    private func byteRange(_ header: String, total: Int) -> Range<Int>? {
-        guard total > 0, header.lowercased().hasPrefix("bytes=") else { return nil }
-        let spec = String(header.dropFirst(6)).split(
-            separator: "-", maxSplits: 1, omittingEmptySubsequences: false
-        ).map(String.init)
-        guard spec.count == 2 else { return nil }
-        if spec[0].isEmpty {
-            guard let suffix = Int(spec[1]), suffix > 0 else { return nil }
-            let length = min(suffix, total)
-            return (total - length)..<total
-        }
-        guard let start = Int(spec[0]), start >= 0, start < total else { return nil }
-        if spec[1].isEmpty { return start..<total }
-        guard let requestedEnd = Int(spec[1]), requestedEnd >= start else { return nil }
-        return start..<(min(requestedEnd, total - 1) + 1)
-    }
-
-    private func sendFile(_ candidate: URL, for requestURL: URL, task: WKURLSchemeTask) {
-        queue.async { [weak self] in
-            guard let self, self.isActive(task) else { return }
-            guard let data = try? Data(contentsOf: candidate, options: [.mappedIfSafe]) else {
-                DispatchQueue.main.async {
-                    guard self.isActive(task) else { return }
-                    task.didFailWithError(URLError(.cannotOpenFile))
-                    self.finish(task)
-                }
-                return
-            }
-            let total = data.count
-            let range = task.request.value(forHTTPHeaderField: "Range")
-            var start = 0
-            var end = max(0, total - 1)
-            var status = 200
-            if let range {
-                if let bytes = self.byteRange(range, total: total) {
-                    start = bytes.lowerBound
-                    end = bytes.upperBound - 1
-                    status = 206
-                } else {
-                    status = 416
-                }
-            }
-            let body: Data
-            if status == 416 || total == 0 {
-                body = Data()
-            } else if status == 200 {
-                body = data
-            } else {
-                body = data.subdata(in: start..<(end + 1))
-            }
-            let mime = self.mimeType(for: candidate)
-            var headers = [
-                "Content-Type": mime,
-                "Content-Length": String(body.count),
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "private, max-age=60"
-            ]
-            if status == 206 {
-                headers["Content-Range"] = "bytes \(start)-\(end)/\(total)"
-            } else if status == 416 {
-                headers["Content-Range"] = "bytes */\(total)"
-            }
-            let response = HTTPURLResponse(
-                url: requestURL,
-                statusCode: status,
-                httpVersion: "HTTP/1.1",
-                headerFields: headers
-            ) ?? URLResponse(url: requestURL, mimeType: mime, expectedContentLength: body.count, textEncodingName: nil)
-            DispatchQueue.main.async {
-                guard self.isActive(task) else { return }
-                task.didReceive(response)
-                task.didReceive(body)
-                task.didFinish()
-                self.finish(task)
-            }
-        }
-    }
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard let requestURL = urlSchemeTask.request.url,
-              let relative = requestURL.path.removingPercentEncoding?.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-              !relative.isEmpty else {
-            urlSchemeTask.didFailWithError(URLError(.badURL))
-            return
-        }
-        lock.lock()
-        activeTasks.insert(ObjectIdentifier(urlSchemeTask))
-        lock.unlock()
-
-        if relative == "__mirage_local",
-           let requestedPath = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "path" })?.value,
-           (requestedPath as NSString).isAbsolutePath {
-            let candidate = URL(fileURLWithPath: requestedPath).standardizedFileURL.resolvingSymlinksInPath()
-            for rootURL in overlays + [base] {
-                let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
-                if candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") {
-                    sendFile(candidate, for: requestURL, task: urlSchemeTask)
-                    return
-                }
-            }
-            finish(urlSchemeTask)
-            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
-            return
-        }
-
-        let roots = relative.lowercased() == "project.json" ? [base] : overlays + [base]
-        for root in roots {
-            let normalizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-            let candidate = normalizedRoot.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
-            guard candidate.path.hasPrefix(normalizedRoot.path + "/") else { continue }
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                sendFile(candidate, for: requestURL, task: urlSchemeTask)
-                return
-            }
-        }
-        finish(urlSchemeTask)
-        urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
-    }
-
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        finish(urlSchemeTask)
-    }
-}
-
-private final class MirageWebViewDelegate: NSObject, WKNavigationDelegate {
-    weak var owner: MirageScreenSaverView?
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        owner?.webViewDidFinishNavigation(webView)
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        screenSaverLogger.error("Web wallpaper navigation failed: \(error.localizedDescription, privacy: .public)")
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        screenSaverLogger.error("Web wallpaper provisional navigation failed: \(error.localizedDescription, privacy: .public)")
-    }
-
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        owner?.webViewContentProcessDidTerminate(webView)
-    }
-}
-
 @objc(MirageScreenSaverView)
 final class MirageScreenSaverView: ScreenSaverView {
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var memoryAssetLoader: MirageMemoryVideoAssetLoader?
     private var playerLayer: AVPlayerLayer?
-    private var webView: WKWebView?
-    private var webViewDelegate: MirageWebViewDelegate?
-    private var schemeHandler: MirageWallpaperSchemeHandler?
     private var messageLabel: NSTextField?
     private var configuration: MirageSaverConfiguration?
     private var sceneLibrary: MirageSceneLibrary?
@@ -370,7 +169,6 @@ final class MirageScreenSaverView: ScreenSaverView {
         looper = nil
         memoryAssetLoader = nil
         videoLoadTask?.cancel()
-        webView?.stopLoading()
         if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
     }
 
@@ -392,7 +190,6 @@ final class MirageScreenSaverView: ScreenSaverView {
         animationTimeInterval = 1.0 / Double(configuration.fps)
         switch configuration.kind {
         case "video": loadVideo(configuration)
-        case "web": loadWeb(configuration)
         case "scene": loadScene(configuration)
         default: showMessage(localized("不支持的壁纸格式"))
         }
@@ -579,8 +376,6 @@ final class MirageScreenSaverView: ScreenSaverView {
         if let playerLayer, let configuration {
             applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
         }
-        webView?.frame = presentationBounds
-        webView?.evaluateJavaScript("window.dispatchEvent(new Event('resize'));", completionHandler: nil)
     }
 
     private var videoPresentationBounds: CGRect {
@@ -604,187 +399,6 @@ final class MirageScreenSaverView: ScreenSaverView {
         }
     }
 
-    private func loadWeb(_ configuration: MirageSaverConfiguration) {
-        let webConfiguration = WKWebViewConfiguration()
-        let controller = WKUserContentController()
-        let propertiesData = (try? JSONSerialization.data(withJSONObject: configuration.properties)) ?? Data("{}".utf8)
-        let propertiesJSON = String(data: propertiesData, encoding: .utf8) ?? "{}"
-        let rafFallbackDelay = max(17, 1000.0 / Double(configuration.fps))
-        let shim = """
-        (function(){
-          window.wallpaperEngine_paused=false;
-          window.chrome=window.chrome||{runtime:{}};
-          var __miragePaused=false;
-          var __mirageRafSerial=1;
-          var __mirageRafRequests={};
-          var __mirageNativeRaf=(window.requestAnimationFrame||function(cb){return window.setTimeout(function(){cb(performance.now());},16);}).bind(window);
-          var __mirageNativeCancelRaf=(window.cancelAnimationFrame||window.clearTimeout).bind(window);
-          var __mirageNativeSetTimeout=window.setTimeout.bind(window);
-          var __mirageNativeClearTimeout=window.clearTimeout.bind(window);
-          function __mirageScheduleRaf(id){
-            var request=__mirageRafRequests[id];
-            if(!request||__miragePaused)return;
-            var fired=false;
-            function run(stamp){
-              if(fired)return;
-              fired=true;
-              var current=__mirageRafRequests[id];
-              if(!current)return;
-              if(current.native)__mirageNativeCancelRaf(current.native);
-              if(current.timer)__mirageNativeClearTimeout(current.timer);
-              current.native=0;
-              current.timer=0;
-              if(__miragePaused)return;
-              delete __mirageRafRequests[id];
-              current.callback(typeof stamp==='number'?stamp:performance.now());
-            }
-            request.native=__mirageNativeRaf(run);
-            request.timer=__mirageNativeSetTimeout(run,\(rafFallbackDelay));
-          }
-          window.requestAnimationFrame=function(callback){
-            var id=__mirageRafSerial++;
-            __mirageRafRequests[id]={callback:callback,native:0,timer:0};
-            __mirageScheduleRaf(id);
-            return id;
-          };
-          window.cancelAnimationFrame=function(id){
-            var request=__mirageRafRequests[id];
-            if(!request)return;
-            if(request.native)__mirageNativeCancelRaf(request.native);
-            if(request.timer)__mirageNativeClearTimeout(request.timer);
-            delete __mirageRafRequests[id];
-          };
-          window.__mirageSetPaused=function(paused){
-            __miragePaused=!!paused;
-            window.wallpaperEngine_paused=__miragePaused;
-            Object.keys(__mirageRafRequests).forEach(function(id){
-              var request=__mirageRafRequests[id];
-              if(request.native)__mirageNativeCancelRaf(request.native);
-              if(request.timer)__mirageNativeClearTimeout(request.timer);
-              request.native=0;
-              request.timer=0;
-              if(!__miragePaused)__mirageScheduleRaf(id);
-            });
-          };
-          function __mirageLocalAssetURL(raw){
-            if(typeof raw!=='string'||raw.slice(0,5).toLowerCase()!=='file:')return raw;
-            try{
-              var u=new URL(raw),p=decodeURIComponent(u.pathname||'');
-              while(p.length>1&&p.charAt(0)==='/'&&p.charAt(1)==='/')p=p.slice(1);
-              return 'mirage-wallpaper://wallpaper/__mirage_local?path='+encodeURIComponent(p);
-            }catch(e){return raw;}
-          }
-          function __mirageRewriteCssURLs(value){
-            if(typeof value!=='string')return value;
-            return value.replace(/file:[^'")]+/gi,function(url){return __mirageLocalAssetURL(url.trim());});
-          }
-          function __mirageWrapCssProperty(name){
-            try{
-              var d=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,name);
-              if(d&&d.get&&d.set)Object.defineProperty(CSSStyleDeclaration.prototype,name,{
-                configurable:d.configurable,enumerable:d.enumerable,get:d.get,
-                set:function(v){d.set.call(this,__mirageRewriteCssURLs(v));}
-              });
-            }catch(e){}
-          }
-          ['background','backgroundImage','cssText'].forEach(__mirageWrapCssProperty);
-          try{
-            var nativeSetProperty=CSSStyleDeclaration.prototype.setProperty;
-            CSSStyleDeclaration.prototype.setProperty=function(name,value,priority){
-              return nativeSetProperty.call(this,name,__mirageRewriteCssURLs(value),priority);
-            };
-          }catch(e){}
-          function __mirageWrapURLProperty(proto,name){
-            try{
-              var d=Object.getOwnPropertyDescriptor(proto,name);
-              if(d&&d.get&&d.set)Object.defineProperty(proto,name,{
-                configurable:d.configurable,enumerable:d.enumerable,get:d.get,
-                set:function(v){d.set.call(this,__mirageLocalAssetURL(v));}
-              });
-            }catch(e){}
-          }
-          [[HTMLImageElement.prototype,'src'],[HTMLMediaElement.prototype,'src'],
-           [HTMLSourceElement.prototype,'src']].forEach(function(x){__mirageWrapURLProperty(x[0],x[1]);});
-          try{
-            var nativeSetAttribute=Element.prototype.setAttribute;
-            Element.prototype.setAttribute=function(name,value){
-              var n=String(name).toLowerCase();
-              if(n==='src'||n==='poster')value=__mirageLocalAssetURL(value);
-              else if(n==='style')value=__mirageRewriteCssURLs(value);
-              return nativeSetAttribute.call(this,name,value);
-            };
-          }catch(e){}
-          function __mirageRewriteElementAsset(element,name){
-            try{
-              var value=element.getAttribute(name);
-              if(!value||value.toLowerCase().indexOf('file:')<0)return;
-              var rewritten=name==='style'?__mirageRewriteCssURLs(value):__mirageLocalAssetURL(value);
-              if(rewritten!==value)nativeSetAttribute.call(element,name,rewritten);
-            }catch(e){}
-          }
-          function __mirageInstallLocalAssetObserver(){
-            if(!document.documentElement||window.__mirageLocalAssetObserver)return;
-            var observer=new MutationObserver(function(records){
-              records.forEach(function(record){__mirageRewriteElementAsset(record.target,record.attributeName);});
-            });
-            observer.observe(document.documentElement,{subtree:true,attributes:true,attributeFilter:['style','src','poster']});
-            window.__mirageLocalAssetObserver=observer;
-          }
-          if(document.documentElement)__mirageInstallLocalAssetObserver();
-          document.addEventListener('DOMContentLoaded',__mirageInstallLocalAssetObserver,{once:true});
-          var retry=window.setTimeout.bind(window);
-          var listeners=[];
-          window.wallpaperRegisterAudioListener=function(cb){if(typeof cb==='function')listeners.push(cb);};
-          window.wallpaperRemoveAudioListener=function(cb){var i=listeners.indexOf(cb);if(i>=0)listeners.splice(i,1);};
-          window.wallpaperRegisterAudioStream=function(el){if(el)el.muted=true;return el;};
-          var mediaPlay=HTMLMediaElement.prototype.play;
-          HTMLMediaElement.prototype.play=function(){this.muted=true;return mediaPlay.apply(this,arguments);};
-          window.__mirageProperties=\(propertiesJSON);
-          window.__mirageApply=function(){
-            var l=window.wallpaperPropertyListener;
-            if(l&&typeof l.applyUserProperties==='function'){
-              try{l.applyUserProperties(window.__mirageProperties);return;}catch(e){}
-            }
-            retry(window.__mirageApply,25);
-          };
-          document.addEventListener('DOMContentLoaded',window.__mirageApply,{once:true});
-        })();
-        """
-        controller.addUserScript(WKUserScript(source: shim, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        webConfiguration.userContentController = controller
-        webConfiguration.websiteDataStore = .nonPersistent()
-        webConfiguration.mediaTypesRequiringUserActionForPlayback = []
-        let handler = MirageWallpaperSchemeHandler(base: configuration.renderDirectory, overlays: configuration.overlays)
-        webConfiguration.setURLSchemeHandler(handler, forURLScheme: "mirage-wallpaper")
-        schemeHandler = handler
-
-        let webView = WKWebView(frame: presentationBounds, configuration: webConfiguration)
-        webView.autoresizingMask = [.width, .height]
-        webView.setValue(false, forKey: "drawsBackground")
-        let delegate = MirageWebViewDelegate()
-        delegate.owner = self
-        webView.navigationDelegate = delegate
-        webViewDelegate = delegate
-        addSubview(webView)
-        self.webView = webView
-
-        var components = URLComponents()
-        components.scheme = "mirage-wallpaper"
-        components.host = "wallpaper"
-        components.path = "/" + configuration.entryRelativePath
-        if let url = components.url { webView.load(URLRequest(url: url)) }
-    }
-
-    fileprivate func webViewDidFinishNavigation(_ webView: WKWebView) {
-        webView.frame = presentationBounds
-        let paused = isAnimatingWallpaper ? "false" : "true"
-        webView.evaluateJavaScript("window.__mirageSetPaused&&window.__mirageSetPaused(\(paused));window.dispatchEvent(new Event('resize'));", completionHandler: nil)
-    }
-
-    fileprivate func webViewContentProcessDidTerminate(_ webView: WKWebView) {
-        webView.reload()
-    }
-
     private func showMessage(_ text: String) {
         let label = NSTextField(labelWithString: text)
         label.textColor = .secondaryLabelColor
@@ -806,14 +420,12 @@ final class MirageScreenSaverView: ScreenSaverView {
         isAnimatingWallpaper = true
         loadWallpaper()
         player?.play()
-        webView?.evaluateJavaScript("window.__mirageSetPaused&&window.__mirageSetPaused(false);if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(false);")
         if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 0) }
     }
 
     override func stopAnimation() {
         isAnimatingWallpaper = false
         player?.pause()
-        webView?.evaluateJavaScript("window.__mirageSetPaused&&window.__mirageSetPaused(true);if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(true);")
         if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 1) }
         super.stopAnimation()
     }
@@ -821,7 +433,6 @@ final class MirageScreenSaverView: ScreenSaverView {
     override func animateOneFrame() {
         normalizeFullScreenBoundsIfNeeded()
         playerLayer?.frame = presentationBounds
-        webView?.frame = presentationBounds
     }
 
     override var hasConfigureSheet: Bool { false }

@@ -6,6 +6,7 @@
 
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 
 struct DynamicLockScreenDisplayConfiguration: Codable {
@@ -17,6 +18,7 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     let entryPath: String
     let previewPath: String?
     var desktopFallbackPath: String?
+    var systemFallbackPath: String?
     let rawProperties: [String: AnyCodableValue]
     let fps: Int
     let fillMode: String
@@ -83,6 +85,8 @@ final class DynamicLockScreenManager: ObservableObject {
     private let confirmationKey = "Mirage.DynamicLockScreen.Confirmed"
     private let appGroupID = "group.cn.laobamac.Mirage"
     private let configurationName = "dynamic-lock-screen.json"
+    private let registeredExtensionFingerprintKey =
+        "Mirage.DynamicLockScreen.RegisteredExtensionFingerprint"
 
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
@@ -201,6 +205,17 @@ final class DynamicLockScreenManager: ObservableObject {
                 let fallbackURL = fallbackSource.flatMap {
                     try? deployDesktopFallback(source: $0, displayID: displayID, in: container)
                 }
+                let systemFallbackSource = DesktopOverrideService.shared
+                    .dynamicLockScreenSystemFallbackURL(forDisplay: displayID)
+                let systemFallbackURL: URL?
+                if systemFallbackSource?.resolvingSymlinksInPath()
+                    == fallbackSource?.resolvingSymlinksInPath() {
+                    systemFallbackURL = fallbackURL
+                } else {
+                    systemFallbackURL = systemFallbackSource.flatMap {
+                        try? deployDesktopFallback(source: $0, displayID: displayID, in: container)
+                    }
+                }
                 let record = DynamicLockScreenDisplayConfiguration(
                     displayID: displayID,
                     wallpaperID: wallpaper.id,
@@ -210,6 +225,7 @@ final class DynamicLockScreenManager: ObservableObject {
                     entryPath: deployment.entryURL.path,
                     previewPath: deployment.previewURL?.path,
                     desktopFallbackPath: fallbackURL?.path,
+                    systemFallbackPath: systemFallbackURL?.path,
                     rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
                     fps: min(max(fps, 10), 60),
                     fillMode: runtime.fillMode.rawValue,
@@ -242,23 +258,10 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     func refreshDesktopFallback(forDisplay displayID: UInt32) {
-        guard let configurationURL,
-              let data = try? Data(contentsOf: configurationURL),
-              var configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data),
-              var record = configuration.displays["display-\(displayID)"],
-              let container = sharedContainerURL,
-              let source = DesktopOverrideService.shared.dynamicLockScreenFallbackURL(forDisplay: displayID),
-              let fallback = try? deployDesktopFallback(source: source, displayID: displayID, in: container)
+        guard let source = DesktopOverrideService.shared.dynamicLockScreenFallbackURL(
+            forDisplay: displayID)
         else { return }
-        record.desktopFallbackPath = fallback.path
-        configuration.displays["display-\(displayID)"] = record
-        guard let updated = try? JSONEncoder().encode(configuration),
-              (try? updated.write(to: configurationURL, options: .atomic)) != nil else {
-            try? FileManager.default.removeItem(at: fallback)
-            return
-        }
-        notifyDesktopFallbackChanged()
-        cleanupDesktopFallbacks()
+        _ = try? updateDesktopFallback(from: source, forDisplay: displayID)
     }
 
     func refreshDesktopFallbacks() {
@@ -269,8 +272,69 @@ final class DynamicLockScreenManager: ObservableObject {
         configuration.displays.values.forEach { refreshDesktopFallback(forDisplay: $0.displayID) }
     }
 
+    @discardableResult
+    func updateDesktopFallback(from source: URL, forDisplay displayID: UInt32) throws -> Bool {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data),
+              var record = configuration.displays["display-\(displayID)"],
+              let container = sharedContainerURL else { return false }
+        let fallback = try deployDesktopFallback(
+            source: source, displayID: displayID, in: container)
+        record.desktopFallbackPath = fallback.path
+        configuration.displays["display-\(displayID)"] = record
+        do {
+            let updated = try JSONEncoder().encode(configuration)
+            try updated.write(to: configurationURL, options: .atomic)
+        } catch {
+            try? FileManager.default.removeItem(at: fallback)
+            throw error
+        }
+        notifyDesktopFallbackChanged()
+        cleanupDesktopFallbacks()
+        return true
+    }
+
+    func restoreSystemDesktopFallbacks() {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data)
+        else { return }
+        var changed = false
+        for key in configuration.displays.keys {
+            guard var record = configuration.displays[key] else { continue }
+            if let path = record.systemFallbackPath,
+               FileManager.default.fileExists(atPath: path) {
+                if record.desktopFallbackPath != path {
+                    record.desktopFallbackPath = path
+                    configuration.displays[key] = record
+                    changed = true
+                }
+                continue
+            }
+            guard let container = sharedContainerURL,
+                  let source = DesktopOverrideService.shared.dynamicLockScreenSystemFallbackURL(
+                    forDisplay: record.displayID),
+                  let fallback = try? deployDesktopFallback(
+                    source: source, displayID: record.displayID, in: container)
+            else { continue }
+            record.desktopFallbackPath = fallback.path
+            record.systemFallbackPath = fallback.path
+            configuration.displays[key] = record
+            changed = true
+        }
+        guard changed,
+              let updated = try? JSONEncoder().encode(configuration),
+              (try? updated.write(to: configurationURL, options: .atomic)) != nil
+        else { return }
+        notifyDesktopFallbackChanged()
+        cleanupDesktopFallbacks()
+    }
+
     func clearConfiguration() {
-        refreshDesktopFallbacks()
+        restoreSystemDesktopFallbacks()
         guard let configurationURL,
               let data = try? Data(contentsOf: configurationURL),
               var configuration = try? JSONDecoder().decode(
@@ -426,6 +490,8 @@ final class DynamicLockScreenManager: ObservableObject {
             else { return }
             let keep = Set(configuration.displays.values.compactMap(\.desktopFallbackPath).map {
                 URL(fileURLWithPath: $0).standardizedFileURL.path
+            }).union(configuration.displays.values.compactMap(\.systemFallbackPath).map {
+                URL(fileURLWithPath: $0).standardizedFileURL.path
             })
             for entry in entries where !keep.contains(entry.standardizedFileURL.path) {
                 try? FileManager.default.removeItem(at: entry)
@@ -436,19 +502,77 @@ final class DynamicLockScreenManager: ObservableObject {
     private func registerExtension() {
         guard let appURL = Bundle.main.bundleURL as URL? else { return }
         let extensionURL = appURL.appendingPathComponent("Contents/Extensions/MirageWallpaperExtension.appex")
-        guard FileManager.default.fileExists(atPath: extensionURL.path) else { return }
+        guard FileManager.default.fileExists(atPath: extensionURL.path),
+              let fingerprint = extensionFingerprint(at: extensionURL) else { return }
+        let previousFingerprint = UserDefaults.standard.string(
+            forKey: registeredExtensionFingerprintKey)
+        let fingerprintKey = registeredExtensionFingerprintKey
         DispatchQueue.global(qos: .utility).async {
             let add = Process()
             add.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
             add.arguments = ["-a", extensionURL.path]
-            try? add.run()
+            guard (try? add.run()) != nil else { return }
             add.waitUntilExit()
+            guard add.terminationStatus == 0 else { return }
             let enable = Process()
             enable.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
             enable.arguments = ["-e", "use", "-i", "cn.laobamac.Mirage.WallpaperExtension"]
-            try? enable.run()
+            guard (try? enable.run()) != nil else { return }
             enable.waitUntilExit()
+            guard enable.terminationStatus == 0 else { return }
+            if previousFingerprint != fingerprint,
+               !Self.restartWallpaperAgent() {
+                return
+            }
+            UserDefaults.standard.set(fingerprint, forKey: fingerprintKey)
         }
+    }
+
+    private func extensionFingerprint(at extensionURL: URL) -> String? {
+        let paths = [
+            "Contents/Info.plist",
+            "Contents/MacOS/MirageWallpaperExtension",
+            "Contents/Frameworks/libMirageSceneSaver.dylib"
+        ]
+        var hasher = SHA256()
+        for path in paths {
+            let url = extensionURL.appendingPathComponent(path)
+            guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+                return nil
+            }
+            hasher.update(data: Data(path.utf8))
+            hasher.update(data: data)
+        }
+        let codeResourcesPath = "Contents/_CodeSignature/CodeResources"
+        let codeResourcesURL = extensionURL.appendingPathComponent(codeResourcesPath)
+        if let data = try? Data(contentsOf: codeResourcesURL, options: [.mappedIfSafe]) {
+            hasher.update(data: Data(codeResourcesPath.utf8))
+            hasher.update(data: data)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private nonisolated static func restartWallpaperAgent() -> Bool {
+        let applications = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.wallpaper.agent")
+        guard !applications.isEmpty else { return true }
+        applications.forEach { _ = $0.terminate() }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if applications.allSatisfy({ $0.isTerminated }) { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        applications.filter { !$0.isTerminated }.forEach { application in
+            if !application.forceTerminate() {
+                _ = Darwin.kill(application.processIdentifier, SIGKILL)
+            }
+        }
+        let forcedDeadline = Date().addingTimeInterval(2)
+        while Date() < forcedDeadline {
+            if applications.allSatisfy({ $0.isTerminated }) { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return applications.allSatisfy({ $0.isTerminated })
     }
 
     private func activateStoredConfiguration() {
@@ -461,7 +585,6 @@ final class DynamicLockScreenManager: ObservableObject {
         guard let updated = try? JSONEncoder().encode(configuration),
               (try? updated.write(to: configurationURL, options: .atomic)) != nil
         else { return }
-        refreshDesktopFallbacks()
         notifyConfigurationChanged()
     }
 
@@ -500,6 +623,11 @@ final class DynamicLockScreenManager: ObservableObject {
             nil,
             true
         )
+    }
+
+    func refreshExtension() {
+        notifyConfigurationChanged()
+        notifyDesktopFallbackChanged()
     }
 }
 
