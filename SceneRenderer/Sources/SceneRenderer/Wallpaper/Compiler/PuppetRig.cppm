@@ -3,6 +3,7 @@ module;
 export module sr.pkg.puppet;
 import eigen;
 import sr.core;
+import sr.json;
 import rstd.cppstd;
 
 export namespace sr
@@ -289,6 +290,9 @@ public:
         bool        blendin { false };  // PKGV0021+
         bool        blendout { false }; // PKGV0021+
         double      blendtime { 0.0 };  // PKGV0021+
+        std::string visible_user;
+        std::shared_ptr<sr::Json> visible_condition;
+        bool         visible_has_condition { false };
     };
 
     void prepared(std::span<AnimationLayer>);
@@ -307,6 +311,8 @@ public:
     bool                           playAnimation(AnimationHandle handle) noexcept;
     bool                           pauseAnimation(AnimationHandle handle) noexcept;
     bool                           stopAnimation(AnimationHandle handle) noexcept;
+    void                           applyUserProperty(std::string_view key, const sr::Json& property) noexcept;
+    std::vector<std::string>       animationVisibilityKeys() const;
 
     std::span<const Eigen::Affine3f> genFrame(double time) noexcept;
     // Per-bone opacity matching the most recent genFrame(). Call genFrame()

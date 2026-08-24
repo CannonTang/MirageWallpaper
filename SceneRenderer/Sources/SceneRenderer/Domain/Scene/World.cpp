@@ -1255,6 +1255,12 @@ void Scene::EnableRuntimeLayerVisibility(WallpaperLayerId id) {
     m_pending_node_visibility_changes.erase(id.value);
 }
 
+void Scene::RegisterPuppetAnimationVisibilityBinding(
+    std::string key, std::function<void(const Json&)> setter) {
+    if (key.empty() || ! setter) return;
+    puppet_animation_visibility_index[std::move(key)].push_back(std::move(setter));
+}
+
 bool Scene::ConsumeRenderGraphDirty() {
     const bool dynamic_visibility_changed =
         m_hidden_scene_node_ids != m_render_graph_hidden_scene_node_ids;
@@ -1323,6 +1329,10 @@ bool Scene::CommitDynamicTopology() {
 }
 
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property) {
+    if (auto it = puppet_animation_visibility_index.find(std::string(key));
+        it != puppet_animation_visibility_index.end()) {
+        for (const auto& setter : it->second) setter(property);
+    }
     if (m_resource_index.Empty()) RebuildResourceIndex();
     bool matched_binding = false;
     for (auto* node : m_resource_index.Nodes()) {

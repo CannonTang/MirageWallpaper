@@ -3016,6 +3016,8 @@ public:
         return it->second;
     }
     bool                                 SetNodeVisible(SceneNode& node, bool visible);
+    void RegisterPuppetAnimationVisibilityBinding(
+        std::string key, std::function<void(const Json&)> setter);
     std::vector<SceneMeshDirtyEvent>     ConsumePreparedMeshDirtyEvents();
     std::vector<SceneMaterialDirtyEvent> ConsumePreparedMaterialDirtyEvents();
     void                                 ClearUserPropertyDiagnostics(std::string_view key);
@@ -3040,6 +3042,7 @@ public:
 
 private:
     Map<std::string, std::vector<std::function<void(std::string_view)>>> m_text_user_index;
+    Map<std::string, std::vector<std::function<void(const Json&)>>> puppet_animation_visibility_index;
 
     void RebuildElidableLayerIds();
 

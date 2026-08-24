@@ -261,6 +261,12 @@ std::shared_ptr<WPPuppetLayer> MakePuppetLayer(std::shared_ptr<WPPuppet>        
 void RegisterPuppetLayer(ParseContext& context, SceneNode* node,
                          std::shared_ptr<WPPuppetLayer> layer) {
     if (! node || ! layer) return;
+    if (context.scene) {
+        for (const auto& key : layer->animationVisibilityKeys()) {
+            context.scene->RegisterPuppetAnimationVisibilityBinding(
+                key, [layer, key](const Json& property) { layer->applyUserProperty(key, property); });
+        }
+    }
     context.puppet_layers->by_node[node] = std::move(layer);
 }
 
