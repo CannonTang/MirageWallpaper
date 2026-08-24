@@ -936,6 +936,15 @@ class WallpaperViewModel: ObservableObject {
                 fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
             )
         }
+        if ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperID() == wallpaper.id {
+            try? ScreenSaverManager.shared.configure(
+                with: wallpaper,
+                runtime: normalized,
+                properties: effectiveProperties(for: wallpaper, runtime: normalized),
+                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps),
+                forDynamicLockScreen: true
+            )
+        }
     }
 
     private func scheduleRuntimeSave(for key: DisplayKey) {

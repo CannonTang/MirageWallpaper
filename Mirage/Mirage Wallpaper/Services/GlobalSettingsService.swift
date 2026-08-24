@@ -723,6 +723,7 @@ class GlobalSettingsViewModel: ObservableObject {
         ScreenSaverManager.shared.updateLoadFromMemory(loadFromMemory)
         Task { @MainActor in
             DynamicLockScreenManager.shared.updateLoadFromMemory(loadFromMemory)
+            ScreenSaverDynamicLockScreenManager.shared.updateLoadFromMemory(loadFromMemory)
         }
         if savedSettings != settings {
             savedSettings = settings

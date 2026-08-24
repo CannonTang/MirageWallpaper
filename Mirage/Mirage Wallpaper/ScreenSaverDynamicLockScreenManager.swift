@@ -60,6 +60,9 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         }
         isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
             && DynamicLockScreenModeStore.active == .screenSaver
+        if isEnabled {
+            ScreenSaverManager.shared.migrateDynamicLockScreenConfigurationIfNeeded()
+        }
         recoverIfNeeded()
     }
 
@@ -81,12 +84,12 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
     }
 
     var isConfigured: Bool {
-        ScreenSaverManager.shared.configuredWallpaperID() != nil
-            && ScreenSaverManager.shared.isInstalled
+        ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperID() != nil
+            && ScreenSaverManager.shared.isDynamicLockScreenInstalled
     }
 
     var configuredWallpaperTitle: String? {
-        ScreenSaverManager.shared.configuredWallpaperTitle()
+        ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperTitle()
     }
 
     func requestEnable() {
@@ -125,6 +128,15 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         isEnabled = true
         UserDefaults.standard.set(true, forKey: enabledKey)
         DynamicLockScreenModeStore.activate(.screenSaver)
+        ScreenSaverManager.shared.migrateDynamicLockScreenConfigurationIfNeeded()
+        if ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperID() != nil,
+           !ScreenSaverManager.shared.isDynamicLockScreenInstalled {
+            do {
+                try ScreenSaverManager.shared.installDynamicLockScreen()
+            } catch {
+                NSLog("[Mirage] 安装方案 B 锁屏组件失败: %@", error.localizedDescription)
+            }
+        }
         reassertIfEnabled()
     }
 
@@ -149,21 +161,25 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
             throw ScreenSaverDynamicLockScreenError.unsupportedWallpaper
         }
-        try ScreenSaverManager.shared.install()
+        try ScreenSaverManager.shared.installDynamicLockScreen()
         try ScreenSaverManager.shared.configure(
-            with: wallpaper, runtime: runtime, properties: properties, fps: fps)
+            with: wallpaper, runtime: runtime, properties: properties, fps: fps,
+            forDynamicLockScreen: true)
         reassertIfEnabled()
     }
 
     func updateLoadFromMemory(_ enabled: Bool) {
-        ScreenSaverManager.shared.updateLoadFromMemory(enabled)
+        ScreenSaverManager.shared.updateLoadFromMemory(enabled, forDynamicLockScreen: true)
     }
 
     func reassertIfEnabled() {
         guard isEnabled, DynamicLockScreenModeStore.active == .screenSaver else { return }
-        guard ScreenSaverManager.shared.configuredWallpaperID() != nil else { return }
+        guard ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperID() != nil else { return }
         guard isScreenLocked() else { return }
         do {
+            if !ScreenSaverManager.shared.isDynamicLockScreenInstalled {
+                try ScreenSaverManager.shared.installDynamicLockScreen()
+            }
             try activateStore()
             try ScreenSaverManager.shared.restartForWallpaperStoreChange()
         } catch { NSLog("[Mirage] 屏保动态锁屏槽位恢复失败: %@", error.localizedDescription) }
@@ -172,8 +188,11 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
     @discardableResult
     func enterLockedState() -> Bool {
         guard isEnabled, DynamicLockScreenModeStore.active == .screenSaver,
-              ScreenSaverManager.shared.configuredWallpaperID() != nil else { return false }
+              ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperID() != nil else { return false }
         do {
+            if !ScreenSaverManager.shared.isDynamicLockScreenInstalled {
+                try ScreenSaverManager.shared.installDynamicLockScreen()
+            }
             try activateStore()
             try ScreenSaverManager.shared.restartForWallpaperStoreChange()
             UserDefaults.standard.set(true, forKey: lockedKey)
@@ -243,7 +262,8 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
             "version": 1,
             "backupSHA256": digest(currentData),
             "activeSHA256": digest(transformedData),
-            "saverPath": ScreenSaverManager.shared.installedURL.resolvingSymlinksInPath().path
+            "saverPath": ScreenSaverManager.shared.dynamicLockScreenInstalledURL
+                .resolvingSymlinksInPath().path
         ]
         let stateData = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
         try stateData.write(to: stateURL, options: .atomic)
@@ -281,7 +301,7 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
     private func screenSaverContent(from idleContent: [String: Any]) -> [String: Any] {
         var content = idleContent
         let configuration: [String: Any] = [
-            "module": ["relative": ScreenSaverManager.shared.installedURL.absoluteString]
+            "module": ["relative": ScreenSaverManager.shared.dynamicLockScreenInstalledURL.absoluteString]
         ]
         let data = (try? PropertyListSerialization.data(
             fromPropertyList: configuration, format: .binary, options: 0)) ?? Data()
@@ -334,8 +354,7 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
                             from: configuration, options: [], format: nil) as? [String: Any],
                          let module = object["module"] as? [String: Any],
                          let path = module["relative"] as? String else { return false }
-                   return URL(string: path)?.standardizedFileURL.path
-                       == ScreenSaverManager.shared.installedURL.standardizedFileURL.path
+                   return isMirageSaverPath(path)
                }) {
                 return true
             }
@@ -384,8 +403,13 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
                   from: configuration, options: [], format: nil) as? [String: Any],
               let module = object["module"] as? [String: Any],
               let path = module["relative"] as? String else { return false }
-        return URL(string: path)?.standardizedFileURL.path
-            == ScreenSaverManager.shared.installedURL.standardizedFileURL.path
+        return isMirageSaverPath(path)
+    }
+
+    private func isMirageSaverPath(_ path: String) -> Bool {
+        guard let path = URL(string: path)?.standardizedFileURL.path else { return false }
+        return path == ScreenSaverManager.shared.dynamicLockScreenInstalledURL.standardizedFileURL.path
+            || path == ScreenSaverManager.shared.installedURL.standardizedFileURL.path
     }
 
     private func digest(_ data: Data) -> String {

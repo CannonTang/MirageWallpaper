@@ -29,8 +29,12 @@ private struct MirageSaverConfiguration {
         } else {
             home = FileManager.default.homeDirectoryForCurrentUser
         }
+        let configurationName = Bundle(for: MirageScreenSaverView.self).bundleIdentifier
+            == "cn.laobamac.Mirage.DynamicLockScreen"
+            ? "dynamic-lock-screen-screensaver.json"
+            : "screensaver.json"
         let url = home
-            .appendingPathComponent("Library/Application Support/Mirage/screensaver.json")
+            .appendingPathComponent("Library/Application Support/Mirage/\(configurationName)")
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (object["version"] as? Int) == 1,

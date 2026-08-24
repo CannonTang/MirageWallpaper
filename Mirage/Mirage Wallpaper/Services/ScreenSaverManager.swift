@@ -34,9 +34,8 @@ final class ScreenSaverManager {
         "com.apple.ScreenSaver.Engine.legacyScreenSaver"
     ]
     private let wallpaperAgentBundleIdentifier = "com.apple.wallpaper.agent"
-    private let fingerprintPaths = [
+    private let fingerprintResourcePaths = [
         "Contents/Info.plist",
-        "Contents/MacOS/MirageScreenSaver",
         "Contents/Frameworks/libMirageSceneSaver.dylib",
         "Contents/Resources/thumbnail.png",
         "Contents/Resources/thumbnail@2x.png"
@@ -50,16 +49,55 @@ final class ScreenSaverManager {
         fm.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Mirage/screensaver.json")
     }
 
+    var dynamicLockScreenInstalledURL: URL {
+        fm.homeDirectoryForCurrentUser.appending(
+            path: "Library/Screen Savers/MirageDynamicLockScreen.saver")
+    }
+
+    var dynamicLockScreenConfigurationURL: URL {
+        fm.homeDirectoryForCurrentUser.appending(
+            path: "Library/Application Support/Mirage/dynamic-lock-screen-screensaver.json")
+    }
+
     var isInstalled: Bool { fm.fileExists(atPath: installedURL.path) }
+
+    var isDynamicLockScreenInstalled: Bool {
+        fm.fileExists(atPath: dynamicLockScreenInstalledURL.path)
+    }
 
     func install() throws {
         guard let bundledURL = bundledSaverURL else { throw MirageScreenSaverError.bundledSaverMissing }
+        try installComponent(
+            bundledURL: bundledURL,
+            installedURL: installedURL,
+            bundleIdentifier: "cn.laobamac.Mirage.ScreenSaver",
+            executableName: "MirageScreenSaver")
+    }
+
+    func installDynamicLockScreen() throws {
+        guard let bundledURL = bundledDynamicLockScreenSaverURL else {
+            throw MirageScreenSaverError.bundledSaverMissing
+        }
+        try installComponent(
+            bundledURL: bundledURL,
+            installedURL: dynamicLockScreenInstalledURL,
+            bundleIdentifier: "cn.laobamac.Mirage.DynamicLockScreen",
+            executableName: "MirageScreenSaver")
+    }
+
+    private func installComponent(bundledURL: URL, installedURL: URL,
+                                  bundleIdentifier: String,
+                                  executableName: String) throws {
         let directory = installedURL.deletingLastPathComponent()
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let stagingURL = directory.appending(path: ".MirageScreenSaver-\(UUID().uuidString).saver")
+        let stagingURL = directory.appending(
+            path: ".\(installedURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).saver")
         defer { try? fm.removeItem(at: stagingURL) }
         try fm.copyItem(at: bundledURL, to: stagingURL)
-        let expectedFingerprint = try validatedFingerprint(of: stagingURL)
+        let expectedFingerprint = try validatedFingerprint(
+            of: stagingURL,
+            bundleIdentifier: bundleIdentifier,
+            executableName: executableName)
 
         // ScreenSaverEngine and its legacy extension keep the loaded bundle and
         // native dylibs mapped even after the bundle is replaced on disk. Stop
@@ -72,7 +110,10 @@ final class ScreenSaverManager {
         } else {
             try fm.moveItem(at: stagingURL, to: installedURL)
         }
-        guard try validatedFingerprint(of: installedURL) == expectedFingerprint else {
+        guard try validatedFingerprint(
+            of: installedURL,
+            bundleIdentifier: bundleIdentifier,
+            executableName: executableName) == expectedFingerprint else {
             throw MirageScreenSaverError.installationVerificationFailed
         }
 
@@ -97,34 +138,65 @@ final class ScreenSaverManager {
     /// installation aligned with the newly updated app on the next launch.
     func refreshInstalledVersionIfNeeded() {
         discardUnsupportedConfiguration()
-        guard isInstalled,
-              let bundledURL = bundledSaverURL,
+        refreshInstalledComponent(
+            installedURL: installedURL,
+            bundledURL: bundledSaverURL,
+            bundleIdentifier: "cn.laobamac.Mirage.ScreenSaver",
+            executableName: "MirageScreenSaver",
+            displayName: "屏保组件",
+            install: install)
+        refreshInstalledComponent(
+            installedURL: dynamicLockScreenInstalledURL,
+            bundledURL: bundledDynamicLockScreenSaverURL,
+            bundleIdentifier: "cn.laobamac.Mirage.DynamicLockScreen",
+            executableName: "MirageScreenSaver",
+            displayName: "方案 B 锁屏组件",
+            install: installDynamicLockScreen)
+    }
+
+    private func refreshInstalledComponent(
+        installedURL: URL,
+        bundledURL: URL?,
+        bundleIdentifier: String,
+        executableName: String,
+        displayName: String,
+        install: () throws -> Void
+    ) {
+        guard fm.fileExists(atPath: installedURL.path),
+              let bundledURL,
               let bundledBundle = Bundle(url: bundledURL),
               let bundledBuild = bundledBundle.object(
                 forInfoDictionaryKey: "CFBundleVersion") as? String else { return }
-
         do {
-            let bundledFingerprint = try validatedFingerprint(of: bundledURL)
-            if let installedFingerprint = try? validatedFingerprint(of: installedURL),
+            let bundledFingerprint = try validatedFingerprint(
+                of: bundledURL,
+                bundleIdentifier: bundleIdentifier,
+                executableName: executableName)
+            if let installedFingerprint = try? validatedFingerprint(
+                of: installedURL,
+                bundleIdentifier: bundleIdentifier,
+                executableName: executableName),
                installedFingerprint == bundledFingerprint {
                 return
             }
             try install()
-            NSLog("[Mirage] 已将已安装屏保组件更新至构建 %@", bundledBuild)
+            NSLog("[Mirage] 已将已安装%@更新至构建 %@", displayName, bundledBuild)
         } catch {
-            NSLog("[Mirage] 更新已安装屏保组件失败: %@", error.localizedDescription)
+            NSLog("[Mirage] 更新已安装%@失败: %@", displayName, error.localizedDescription)
         }
     }
 
-    private func validatedFingerprint(of saverURL: URL) throws -> String {
+    private func validatedFingerprint(of saverURL: URL, bundleIdentifier: String,
+                                      executableName: String) throws -> String {
         guard let bundle = Bundle(url: saverURL),
-              bundle.bundleIdentifier == "cn.laobamac.Mirage.ScreenSaver",
+              bundle.bundleIdentifier == bundleIdentifier,
               bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String != nil else {
             throw MirageScreenSaverError.invalidBundle
         }
 
         var hasher = SHA256()
-        for relativePath in fingerprintPaths {
+        let paths = fingerprintResourcePaths + ["Contents/MacOS/\(executableName)"]
+        for relativePath in paths {
             let fileURL = saverURL.appending(path: relativePath)
             guard fm.isReadableFile(atPath: fileURL.path) else {
                 throw MirageScreenSaverError.invalidBundle
@@ -181,7 +253,8 @@ final class ScreenSaverManager {
     }
 
     func configure(with wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
-                   properties: [String: WEProjectProperty], fps: Int) throws {
+                   properties: [String: WEProjectProperty], fps: Int,
+                   forDynamicLockScreen: Bool = false) throws {
         guard wallpaper.isValid else { throw MirageScreenSaverError.noWallpaper }
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
             throw MirageScreenSaverError.unsupportedWallpaper
@@ -221,12 +294,18 @@ final class ScreenSaverManager {
         ]
         guard JSONSerialization.isValidJSONObject(object) else { throw MirageScreenSaverError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        try fm.createDirectory(at: configurationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: configurationURL, options: .atomic)
+        let targetURL = forDynamicLockScreen
+            ? dynamicLockScreenConfigurationURL
+            : configurationURL
+        try fm.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: targetURL, options: .atomic)
     }
 
-    func updateLoadFromMemory(_ enabled: Bool) {
-        guard let data = try? Data(contentsOf: configurationURL),
+    func updateLoadFromMemory(_ enabled: Bool, forDynamicLockScreen: Bool = false) {
+        let targetURL = forDynamicLockScreen
+            ? dynamicLockScreenConfigurationURL
+            : configurationURL
+        guard let data = try? Data(contentsOf: targetURL),
               var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
         object["loadFromMemory"] = enabled
@@ -234,31 +313,37 @@ final class ScreenSaverManager {
               let updated = try? JSONSerialization.data(
                 withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         else { return }
-        try? updated.write(to: configurationURL, options: .atomic)
+        try? updated.write(to: targetURL, options: .atomic)
     }
 
     func configuredWallpaperID() -> String? {
-        supportedConfigurationObject()?["wallpaperID"] as? String
+        supportedConfigurationObject(at: configurationURL)?["wallpaperID"] as? String
+    }
+
+    func configuredDynamicLockScreenWallpaperID() -> String? {
+        supportedConfigurationObject(at: dynamicLockScreenConfigurationURL)?["wallpaperID"] as? String
     }
 
     func remapPersistedPaths(_ mappings: [String: String]) {
-        guard !mappings.isEmpty,
-              let data = try? Data(contentsOf: configurationURL),
-              let object = try? JSONSerialization.jsonObject(with: data) else { return }
+        guard !mappings.isEmpty else { return }
         let remapper = WallpaperPathRemapper(mappings)
-        func remap(_ value: Any) -> Any {
-            if let string = value as? String { return remapper.path(string) }
-            if let array = value as? [Any] { return array.map(remap) }
-            if let dictionary = value as? [String: Any] {
-                return dictionary.mapValues(remap)
+        for url in [configurationURL, dynamicLockScreenConfigurationURL] {
+            guard let data = try? Data(contentsOf: url),
+                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+            func remap(_ value: Any) -> Any {
+                if let string = value as? String { return remapper.path(string) }
+                if let array = value as? [Any] { return array.map(remap) }
+                if let dictionary = value as? [String: Any] {
+                    return dictionary.mapValues(remap)
+                }
+                return value
             }
-            return value
+            let remapped = remap(object)
+            guard JSONSerialization.isValidJSONObject(remapped),
+                  let encoded = try? JSONSerialization.data(
+                    withJSONObject: remapped, options: [.prettyPrinted, .sortedKeys]) else { continue }
+            try? encoded.write(to: url, options: .atomic)
         }
-        let remapped = remap(object)
-        guard JSONSerialization.isValidJSONObject(remapped),
-              let encoded = try? JSONSerialization.data(
-                withJSONObject: remapped, options: [.prettyPrinted, .sortedKeys]) else { return }
-        try? encoded.write(to: configurationURL, options: .atomic)
     }
 
     private func playableVideoCacheURL(for source: URL) -> URL {
@@ -271,11 +356,25 @@ final class ScreenSaverManager {
     }
 
     func configuredWallpaperTitle() -> String? {
-        supportedConfigurationObject()?["title"] as? String
+        supportedConfigurationObject(at: configurationURL)?["title"] as? String
     }
 
-    private func supportedConfigurationObject() -> [String: Any]? {
-        guard let data = try? Data(contentsOf: configurationURL),
+    func configuredDynamicLockScreenWallpaperTitle() -> String? {
+        supportedConfigurationObject(at: dynamicLockScreenConfigurationURL)?["title"] as? String
+    }
+
+    func migrateDynamicLockScreenConfigurationIfNeeded() {
+        guard supportedConfigurationObject(at: dynamicLockScreenConfigurationURL) == nil,
+              supportedConfigurationObject(at: configurationURL) != nil,
+              let data = try? Data(contentsOf: configurationURL) else { return }
+        try? fm.createDirectory(
+            at: dynamicLockScreenConfigurationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try? data.write(to: dynamicLockScreenConfigurationURL, options: .atomic)
+    }
+
+    private func supportedConfigurationObject(at url: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let kind = object["kind"] as? String,
               kind == WallpaperKind.video.rawValue || kind == WallpaperKind.scene.rawValue
@@ -284,9 +383,12 @@ final class ScreenSaverManager {
     }
 
     private func discardUnsupportedConfiguration() {
-        guard fm.fileExists(atPath: configurationURL.path),
-              supportedConfigurationObject() == nil else { return }
-        try? fm.removeItem(at: configurationURL)
+        for url in [configurationURL, dynamicLockScreenConfigurationURL] {
+            if fm.fileExists(atPath: url.path),
+               supportedConfigurationObject(at: url) == nil {
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     func openSystemSettings() {
@@ -299,9 +401,17 @@ final class ScreenSaverManager {
     }
 
     private var bundledSaverURL: URL? {
+        bundledURL(named: "MirageScreenSaver.saver")
+    }
+
+    private var bundledDynamicLockScreenSaverURL: URL? {
+        bundledURL(named: "MirageDynamicLockScreen.saver")
+    }
+
+    private func bundledURL(named name: String) -> URL? {
         let candidates = [
-            Bundle.main.resourceURL?.appending(path: "Screen Savers/MirageScreenSaver.saver"),
-            Bundle.main.resourceURL?.appending(path: "MirageScreenSaver.saver")
+            Bundle.main.resourceURL?.appending(path: "Screen Savers/\(name)"),
+            Bundle.main.resourceURL?.appending(path: name)
         ]
         return candidates.compactMap { $0 }.first { fm.fileExists(atPath: $0.path) }
     }

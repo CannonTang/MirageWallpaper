@@ -227,6 +227,14 @@ if [ -d "$SAVER" ]; then
 EOF
 fi
 
+DYNAMIC_SAVER="$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
+if [ -d "$SAVER" ]; then
+    rm -rf "$DYNAMIC_SAVER"
+    cp -R "$SAVER" "$DYNAMIC_SAVER"
+    plutil -replace CFBundleIdentifier -string "cn.laobamac.Mirage.DynamicLockScreen" \
+        "$DYNAMIC_SAVER/Contents/Info.plist"
+fi
+
 if [ -d "$EXTENSION" ]; then
     EXTENSION_RESOURCES="$EXTENSION/Contents/Resources"
     EXTENSION_VK_ICD_DIR="$EXTENSION_RESOURCES/vulkan/icd.d"
@@ -294,6 +302,13 @@ if [ -d "${SAVER:-}" ]; then
         sign_item "$lib"
     done
     sign_bundle "$SAVER"
+fi
+if [ -d "${DYNAMIC_SAVER:-}" ]; then
+    for lib in "$DYNAMIC_SAVER/Contents/Frameworks"/*.dylib; do
+        [ -f "$lib" ] || continue
+        sign_item "$lib"
+    done
+    sign_bundle "$DYNAMIC_SAVER"
 fi
 LOGIN_ITEM="$APP/Contents/Library/LoginItems/Mirage Login Item.app"
 if [ -d "$LOGIN_ITEM" ]; then
