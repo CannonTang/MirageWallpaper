@@ -62,16 +62,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dynamicLockScreenSessionObservers = [
             lockCenter.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    guard let self, DynamicLockScreenManager.shared.isEnabled, DynamicLockScreenManager.shared.isConfigured else { return }
-                    self.wallpaperViewModel.setDynamicLockScreenPaused(true)
-                    self.postDynamicLockScreenState(locked: true)
+                    guard let self else { return }
+                    let modeA = DynamicLockScreenManager.shared.isEnabled
+                        && DynamicLockScreenManager.shared.isConfigured
+                    let modeB = ScreenSaverDynamicLockScreenManager.shared.isEnabled
+                        && ScreenSaverDynamicLockScreenManager.shared.isConfigured
+                    guard modeA || modeB else { return }
+                    self.wallpaperViewModel.suspendForExternalLockScreen()
+                    if modeB && !ScreenSaverDynamicLockScreenManager.shared.enterLockedState() {
+                        self.wallpaperViewModel.resumeAfterExternalLockScreen()
+                        return
+                    }
+                    if modeA { self.postDynamicLockScreenState(locked: true) }
                 }
             },
             lockCenter.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    guard let self, DynamicLockScreenManager.shared.isEnabled, DynamicLockScreenManager.shared.isConfigured else { return }
-                    self.wallpaperViewModel.setDynamicLockScreenPaused(false)
-                    self.postDynamicLockScreenState(locked: false)
+                    guard let self else { return }
+                    let modeA = DynamicLockScreenManager.shared.isEnabled
+                        && DynamicLockScreenManager.shared.isConfigured
+                    let modeB = ScreenSaverDynamicLockScreenManager.shared.isEnabled
+                        && ScreenSaverDynamicLockScreenManager.shared.isConfigured
+                    let saverWasLocked = ScreenSaverDynamicLockScreenManager.shared.isLocked
+                    guard modeA || modeB || saverWasLocked else {
+                        self.wallpaperViewModel.resumeAfterExternalLockScreen()
+                        return
+                    }
+                    if saverWasLocked && !ScreenSaverDynamicLockScreenManager.shared.leaveLockedState() { return }
+                    if modeA { self.postDynamicLockScreenState(locked: false) }
+                    self.wallpaperViewModel.resumeAfterExternalLockScreen()
                 }
             }
         ]
@@ -116,7 +135,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    private func currentScreenIsLocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        for key in ["CGSSessionScreenIsLocked", "kCGSSessionScreenIsLocked"] {
+            if let value = session[key] as? NSNumber { return value.boolValue }
+            if let value = session[key] as? Bool { return value }
+        }
+        return false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let launchedLocked = currentScreenIsLocked()
+        if !launchedLocked {
+            UserDefaults.standard.set(false, forKey: "Mirage.DynamicLockScreen.Locked")
+            UserDefaults.standard.synchronize()
+        }
         // Before any wallpaper is applied and before the screen-saver check can
         // restart WallpaperAgent: undoes an override the previous run died
         // holding, and clears the pre-2026-08 staticWP_ placeholder cache.
@@ -131,8 +164,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if DynamicLockScreenManager.shared.isEnabled {
             DynamicLockScreenManager.shared.setEnabled(true)
         }
+        if ScreenSaverDynamicLockScreenManager.shared.isEnabled {
+            ScreenSaverDynamicLockScreenManager.shared.setEnabled(true)
+        }
 
-        if wallpaperViewModel.hasAnyWallpaper {
+        let dynamicLockScreenActive = (DynamicLockScreenManager.shared.isEnabled
+            && DynamicLockScreenManager.shared.isConfigured)
+            || (ScreenSaverDynamicLockScreenManager.shared.isEnabled
+                && ScreenSaverDynamicLockScreenManager.shared.isConfigured)
+        if launchedLocked && dynamicLockScreenActive {
+            wallpaperViewModel.suspendForExternalLockScreen()
+        } else if wallpaperViewModel.hasAnyWallpaper {
             wallpaperViewModel.restoreAllDisplays()
         }
 
@@ -169,6 +211,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             MirageLogService.shared.saveAutomatically()
         }
         wallpaperViewModel.saveRuntime()
+        ScreenSaverDynamicLockScreenManager.shared.applicationWillTerminate()
         DesktopOverrideService.shared.finalizeForApplicationTermination()
         // This method returns directly into process exit, so the renderers must
         // be reaped here and now. Anything deferred would never run and a hung

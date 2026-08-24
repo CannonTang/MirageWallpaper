@@ -194,6 +194,7 @@ final class DesktopOverrideService {
     }
 
     func scheduleCapture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper) {
+        if UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
         pendingCapture[displayID]?.cancel()
         if preserveForDynamicLockScreen && !isEnabled {
@@ -216,6 +217,7 @@ final class DesktopOverrideService {
 
     /// Re-takes the still for every screen that currently has a wallpaper.
     func scheduleCaptureForAllScreens() {
+        if UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
         let viewModel = AppDelegate.shared.wallpaperViewModel
         for displayID in viewModel.renderer.activeDisplayIDs {
             guard let wallpaper = viewModel.renderer.currentWallpaper(onDisplay: displayID) else { continue }

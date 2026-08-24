@@ -89,7 +89,13 @@ final class DynamicLockScreenManager: ObservableObject {
         "Mirage.DynamicLockScreen.RegisteredExtensionFingerprint"
 
     private init() {
-        isEnabled = UserDefaults.standard.bool(forKey: enabledKey)
+        let storedEnabled = UserDefaults.standard.bool(forKey: enabledKey)
+        isEnabled = storedEnabled
+            && (DynamicLockScreenModeStore.active == nil
+                || DynamicLockScreenModeStore.active == .extensionMode)
+        if DynamicLockScreenModeStore.active == nil, isEnabled {
+            DynamicLockScreenModeStore.activate(.extensionMode)
+        }
         discardUnsupportedConfiguration()
     }
 
@@ -103,7 +109,9 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     var canUse: Bool {
-        isAvailable && isEnabled && hasConfirmedWarning && sharedContainerURL != nil
+        isAvailable && isEnabled && hasConfirmedWarning
+            && DynamicLockScreenModeStore.active == .extensionMode
+            && sharedContainerURL != nil
     }
 
     var isConfigured: Bool {
@@ -134,6 +142,8 @@ final class DynamicLockScreenManager: ObservableObject {
     func confirmAndEnable(input: String) -> Bool {
         guard input == "我同意" || input.caseInsensitiveCompare("Agree") == .orderedSame else { return false }
         UserDefaults.standard.set(true, forKey: confirmationKey)
+        ScreenSaverDynamicLockScreenManager.shared.disableForModeSwitch()
+        DynamicLockScreenModeStore.activate(.extensionMode)
         UserDefaults.standard.set(true, forKey: enabledKey)
         isEnabled = true
         isConfirmationPresented = false
@@ -146,6 +156,7 @@ final class DynamicLockScreenManager: ObservableObject {
         guard enabled else {
             isEnabled = false
             UserDefaults.standard.set(false, forKey: enabledKey)
+            DynamicLockScreenModeStore.deactivate(.extensionMode)
             clearConfiguration()
             return
         }
@@ -154,10 +165,20 @@ final class DynamicLockScreenManager: ObservableObject {
             return
         }
         guard isAvailable else { return }
+        ScreenSaverDynamicLockScreenManager.shared.disableForModeSwitch()
+        DynamicLockScreenModeStore.activate(.extensionMode)
         isEnabled = true
         UserDefaults.standard.set(true, forKey: enabledKey)
         activateStoredConfiguration()
         registerExtension()
+    }
+
+    func disableForModeSwitch() {
+        guard isEnabled || DynamicLockScreenModeStore.active == .extensionMode else { return }
+        isEnabled = false
+        UserDefaults.standard.set(false, forKey: enabledKey)
+        DynamicLockScreenModeStore.deactivate(.extensionMode)
+        clearConfiguration()
     }
 
     func configureCurrentWallpaper(_ wallpaper: WEWallpaper,

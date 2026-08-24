@@ -283,6 +283,10 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private func setAsDynamicLockScreen() {
+        if DynamicLockScreenModeStore.active == .screenSaver || !DynamicLockScreenManager.shared.isAvailable {
+            setAsScreenSaverDynamicLockScreen()
+            return
+        }
         let manager = DynamicLockScreenManager.shared
         guard manager.isAvailable else {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
@@ -316,6 +320,47 @@ struct ExplorerItemMenu: SubviewOfContentView {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
                 title: L("已设为动态锁屏"),
                 message: L("“%@”已部署到锁屏扩展。", hoveredWallpaper.project.title)
+            )
+        } catch {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("设置动态锁屏失败"),
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func setAsScreenSaverDynamicLockScreen() {
+        let manager = ScreenSaverDynamicLockScreenManager.shared
+        guard manager.isAvailable else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("动态锁屏不可用"),
+                message: L("动态锁屏方案 B 需要 macOS 14.2 或更高版本。")
+            )
+            return
+        }
+        guard manager.isEnabled else {
+            manager.requestEnable()
+            return
+        }
+        guard hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("设置动态锁屏失败"),
+                message: L("当前壁纸不能用作动态锁屏")
+            )
+            return
+        }
+        let runtime = wallpaperViewModel.loadRuntime(for: hoveredWallpaper)
+        let properties = wallpaperViewModel.effectiveProperties(for: hoveredWallpaper, runtime: runtime)
+        do {
+            try manager.configureCurrentWallpaper(
+                hoveredWallpaper,
+                runtime: runtime,
+                properties: properties,
+                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+            )
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("已设为动态锁屏"),
+                message: L("“%@”已设为方案 B 锁屏壁纸。", hoveredWallpaper.project.title)
             )
         } catch {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(

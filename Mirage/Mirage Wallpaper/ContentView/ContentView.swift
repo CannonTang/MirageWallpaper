@@ -67,6 +67,7 @@ struct ContentView: View {
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
     @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
+    @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
     @State private var loadedSections: Set<MainSection>
 
@@ -250,6 +251,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $dynamicLockScreenManager.isConfirmationPresented) {
             DynamicLockScreenConfirmationSheet(manager: dynamicLockScreenManager)
+        }
+        .sheet(isPresented: $screenSaverDynamicLockScreenManager.isConfirmationPresented) {
+            ScreenSaverDynamicLockScreenConfirmationSheet(manager: screenSaverDynamicLockScreenManager)
         }
         .alert(
             "Steam 收藏",

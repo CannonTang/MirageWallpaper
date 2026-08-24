@@ -78,6 +78,7 @@ class WallpaperViewModel: ObservableObject {
     private var pendingPropertyCommands: [DisplayKey: [String: WEProjectProperty]] = [:]
     private var sessionPaused = false
     private var dynamicLockScreenPaused = false
+    private var externalLockScreenSuspended = false
     private var sessionMuted = false
 
     static var invalidWallpaper: WEWallpaper {
@@ -1244,6 +1245,23 @@ class WallpaperViewModel: ObservableObject {
         applyPlaybackPolicies(
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
+    }
+
+    func suspendForExternalLockScreen() {
+        guard !externalLockScreenSuspended else { return }
+        externalLockScreenSuspended = true
+        UserDefaults.standard.set(true, forKey: "Mirage.DynamicLockScreen.Locked")
+        UserDefaults.standard.synchronize()
+        renderer.stopAllAndWait()
+        currentByScreen.removeAll()
+    }
+
+    func resumeAfterExternalLockScreen() {
+        guard externalLockScreenSuspended else { return }
+        externalLockScreenSuspended = false
+        UserDefaults.standard.set(false, forKey: "Mirage.DynamicLockScreen.Locked")
+        UserDefaults.standard.synchronize()
+        restoreAllDisplays()
     }
 
     private func clearSessionPlaybackOverrides() {

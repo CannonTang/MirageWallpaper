@@ -88,6 +88,10 @@ final class ScreenSaverManager {
         try terminateScreenSaverServices(restartWallpaperAgent: true)
     }
 
+    func restartForWallpaperStoreChange() throws {
+        try terminateScreenSaverServices(restartWallpaperAgent: true)
+    }
+
     /// The screen saver is copied out of the app bundle, so replacing Mirage.app
     /// alone cannot update an already installed saver. Keep an existing user
     /// installation aligned with the newly updated app on the next launch.
