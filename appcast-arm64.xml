@@ -6,24 +6,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
-            <title>1.0.9</title>
-            <pubDate>Mon, 24 Aug 2026 16:41:25 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>373</sparkle:version>
-            <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 0979f9c18bc1dd26006ee5e5c2a7cbe1575a4721
-Channel: beta
-
-revert: cancel 1.1.0 release
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-373-0979f9c18bc1-macOS-arm64.zip" length="295252237" type="application/octet-stream" sparkle:edSignature="V6GW7fYkc7vKsvrrqa+rSFRQ3xv43/gyGx4VJVoSvbsLto43g8sWXrHQC0CyUq1Edmg7Py2gcpQPxceXvQMzAg=="/>
-        </item>
-        <item>
             <title>1.1.0</title>
             <pubDate>Mon, 24 Aug 2026 18:14:42 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -61,6 +43,8 @@ revert: cancel 1.1.0 release
 
 ---
 
+<details>
+<summary>🇬🇧 English</summary>
 
 # Mirage 1.1.0
 
@@ -90,6 +74,7 @@ This release adds video and Scene dynamic lock screens, an independently configu
 
 Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
 
+</details>
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.0/Mirage-372-252e5045ac7c-macOS-arm64.zip" length="361367545" type="application/octet-stream" sparkle:edSignature="0GDwoLYzCTpGtsTjyB79Ep1jP6FLEKkqWT//Rqw8SS31bOqyfK24UxtSBDrEiYLbagNb3669diYTZ5zcoHwBCA=="/>
         </item>
@@ -550,6 +535,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: C/30LrizLePRdhLbSDLnmYYzHLStv1rX0Tb5DsRd3aV+qcb13U1vwhYwf8sgew/MCG96vsPgmgM8ymmrQPz8Bw==
-length: 41407
+edSignature: BbPyPmhxbI14C+mdfxxqm3TwFf0Glajnv3ZxyVxtxWk5INK93fWf4w6faT+k4mDhZ+iuqfajl4ywJXb5VCZ8DQ==
+length: 40452
 -->

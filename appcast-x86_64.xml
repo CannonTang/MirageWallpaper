@@ -6,23 +6,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
-            <title>1.0.9</title>
-            <pubDate>Mon, 24 Aug 2026 16:41:05 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>373</sparkle:version>
-            <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 0979f9c18bc1dd26006ee5e5c2a7cbe1575a4721
-Channel: beta
-
-revert: cancel 1.1.0 release
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-373-0979f9c18bc1-macOS-x86_64.zip" length="305081413" type="application/octet-stream" sparkle:edSignature="YOkB6aqfLn0rMk0z/TWfoCaCgYpasyWIJNuCcp2FSAs1InZ49Yy6wOZJhDeb1cl37+nfCA4Fb0Cb/oTM9l2vBA=="/>
-        </item>
-        <item>
             <title>1.1.0</title>
             <pubDate>Mon, 24 Aug 2026 18:14:22 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -59,6 +42,8 @@ revert: cancel 1.1.0 release
 
 ---
 
+<details>
+<summary>🇬🇧 English</summary>
 
 # Mirage 1.1.0
 
@@ -88,6 +73,7 @@ This release adds video and Scene dynamic lock screens, an independently configu
 
 Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
 
+</details>
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.0/Mirage-372-252e5045ac7c-macOS-x86_64.zip" length="373703777" type="application/octet-stream" sparkle:edSignature="mtpLSihrAbdwx1DCpa/1FspnNIBaEIk8zxRiFwG9nYa+Sq9U1G+qW4c2363qNWDSLAA7MWQKUGE33yRQVHmQCA=="/>
         </item>
@@ -538,6 +524,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: UNethrFspRvZjiqwPKYSL7wD7t6VsMi53hO1RNkNr4sVjMM6mGmds21Q+0jiSykZyTQThkwfF1fa62xoqVQQDw==
-length: 40471
+edSignature: ewrxSw8AOIXRNgNq+Kw3cUmeQBmMdC7/zRR9BY5ecOEK0GNkZDC1aqZ735BAncBsojfnWxBSAeJEW8AtIvOpAA==
+length: 39594
 -->
