@@ -193,13 +193,22 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
     return std::nullopt;
 }
 
+std::uint32_t MipExtent(std::uint32_t base, std::uint32_t level) {
+    return level >= 32 ? 1u : std::max(1u, base >> level);
+}
+
 void RecordQueuedImageUpload(vvk::CommandBuffer& cmd, const ImageParameters& image,
                              VkBuffer buffer, VkDeviceSize buffer_offset,
                              VkOffset3D image_offset, VkExtent3D image_extent,
                              VkImageLayout old_layout, VkImageLayout final_layout,
                              std::uint32_t mip_level) {
+    const auto mip_width  = MipExtent(image.extent.width, mip_level);
+    const auto mip_height = MipExtent(image.extent.height, mip_level);
     if (image.handle == VK_NULL_HANDLE || buffer == VK_NULL_HANDLE || image_extent.width == 0 ||
-        image_extent.height == 0)
+        image_extent.height == 0 || mip_level >= image.mipmap_level ||
+        image_offset.x < 0 || image_offset.y < 0 ||
+        static_cast<std::uint64_t>(image_offset.x) + image_extent.width > mip_width ||
+        static_cast<std::uint64_t>(image_offset.y) + image_extent.height > mip_height)
         return;
 
     VkImageSubresourceRange range {
@@ -400,7 +409,8 @@ ImageSlotsRef TextureCache::CreateTex(Image& image,
         auto  mipmap_levels = image_slot.mipmaps.size();
 
         // check data
-        if (! image_slot) return fail();
+        if (image_slot.width <= 0 || image_slot.height <= 0 || mipmap_levels == 0)
+            return fail();
         VkSamplerCreateInfo sampler_info {
             .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext                   = nullptr,
@@ -449,8 +459,11 @@ ImageSlotsRef TextureCache::CreateTex(Image& image,
         VkDeviceSize              staging_size = 0;
         for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
             auto& image_data = image_slot.mipmaps[j];
+            const auto expected_width = MipExtent(static_cast<u32>(image_slot.width), j);
+            const auto expected_height = MipExtent(static_cast<u32>(image_slot.height), j);
             if (image_data.size == 0 || image_data.data == nullptr || image_data.width <= 0 ||
-                image_data.height <= 0) {
+                image_data.height <= 0 || static_cast<u32>(image_data.width) != expected_width ||
+                static_cast<u32>(image_data.height) != expected_height) {
                 return fail();
             }
             staging_size = (staging_size + upload_alignment - 1) / upload_alignment *
