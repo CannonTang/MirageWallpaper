@@ -87,6 +87,7 @@ final class DynamicLockScreenManager: ObservableObject {
     private let configurationName = "dynamic-lock-screen.json"
     private let registeredExtensionFingerprintKey =
         "Mirage.DynamicLockScreen.RegisteredExtensionFingerprint"
+    private let extensionQueue = DispatchQueue(label: "cn.laobamac.Mirage.wallpaper-extension", qos: .utility)
 
     private init() {
         let storedEnabled = UserDefaults.standard.bool(forKey: enabledKey)
@@ -97,6 +98,13 @@ final class DynamicLockScreenManager: ObservableObject {
             DynamicLockScreenModeStore.activate(.extensionMode)
         }
         discardUnsupportedConfiguration()
+        if !isEnabled || DynamicLockScreenModeStore.active != .extensionMode {
+            extensionQueue.async {
+                if Self.removeRegisteredExtensions(except: nil) {
+                    _ = Self.restartWallpaperAgent()
+                }
+            }
+        }
     }
 
     var isAvailable: Bool {
@@ -158,6 +166,7 @@ final class DynamicLockScreenManager: ObservableObject {
             UserDefaults.standard.set(false, forKey: enabledKey)
             DynamicLockScreenModeStore.deactivate(.extensionMode)
             clearConfiguration()
+            unregisterExtension()
             return
         }
         guard hasConfirmedWarning else {
@@ -179,6 +188,7 @@ final class DynamicLockScreenManager: ObservableObject {
         UserDefaults.standard.set(false, forKey: enabledKey)
         DynamicLockScreenModeStore.deactivate(.extensionMode)
         clearConfiguration()
+        unregisterExtension()
     }
 
     func configureCurrentWallpaper(_ wallpaper: WEWallpaper,
@@ -525,28 +535,58 @@ final class DynamicLockScreenManager: ObservableObject {
         let extensionURL = appURL.appendingPathComponent("Contents/Extensions/MirageWallpaperExtension.appex")
         guard FileManager.default.fileExists(atPath: extensionURL.path),
               let fingerprint = extensionFingerprint(at: extensionURL) else { return }
-        let previousFingerprint = UserDefaults.standard.string(
-            forKey: registeredExtensionFingerprintKey)
-        let fingerprintKey = registeredExtensionFingerprintKey
-        DispatchQueue.global(qos: .utility).async {
-            let add = Process()
-            add.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
-            add.arguments = ["-a", extensionURL.path]
-            guard (try? add.run()) != nil else { return }
-            add.waitUntilExit()
-            guard add.terminationStatus == 0 else { return }
-            let enable = Process()
-            enable.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
-            enable.arguments = ["-e", "use", "-i", "cn.laobamac.Mirage.WallpaperExtension"]
-            guard (try? enable.run()) != nil else { return }
-            enable.waitUntilExit()
-            guard enable.terminationStatus == 0 else { return }
-            if previousFingerprint != fingerprint,
-               !Self.restartWallpaperAgent() {
-                return
-            }
-            UserDefaults.standard.set(fingerprint, forKey: fingerprintKey)
+        let previousFingerprint = UserDefaults.standard.string(forKey: registeredExtensionFingerprintKey)
+        extensionQueue.async { [weak self] in
+            guard let self else { return }
+            _ = Self.removeRegisteredExtensions(except: extensionURL.path)
+            guard Self.runPluginkit(["-a", extensionURL.path]),
+                  Self.runPluginkit(["-e", "use", "-i", "cn.laobamac.Mirage.WallpaperExtension"]) else { return }
+            if previousFingerprint != fingerprint, !Self.restartWallpaperAgent() { return }
+            UserDefaults.standard.set(fingerprint, forKey: self.registeredExtensionFingerprintKey)
         }
+    }
+
+    private func unregisterExtension() {
+        extensionQueue.async { [weak self] in
+            guard let self else { return }
+            if Self.removeRegisteredExtensions(except: nil) {
+                _ = Self.restartWallpaperAgent()
+            }
+            UserDefaults.standard.removeObject(forKey: self.registeredExtensionFingerprintKey)
+        }
+    }
+
+    private nonisolated static func runPluginkit(_ arguments: [String]) -> Bool {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    private nonisolated static func removeRegisteredExtensions(except path: String?) -> Bool {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        process.arguments = ["-mAv", "-p", "com.apple.wallpaper"]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        guard let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else { return false }
+        let identifier = "cn.laobamac.Mirage.WallpaperExtension"
+        var removed = false
+        for line in output.split(whereSeparator: \.isNewline) where line.contains(identifier) {
+            guard let slash = line.firstIndex(of: "/") else { continue }
+            let candidatePath = String(line[slash...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard candidatePath.hasSuffix(".appex"), candidatePath != path else { continue }
+            removed = runPluginkit(["-r", candidatePath]) || removed
+        }
+        return removed
     }
 
     private func extensionFingerprint(at extensionURL: URL) -> String? {

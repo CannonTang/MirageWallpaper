@@ -11,8 +11,6 @@ import sr.json;
 import sr.scene_wallpaper;
 import sr.utils;
 
-extern "C" void SceneRendererSetLiveMetalFrameCallback(
-    void (*cb)(void*, std::uint32_t, std::uint32_t, void*), void* userdata);
 extern "C" void* MirageSceneSaverHostCreate(void* ns_view, std::uint32_t drawable_width,
                                                std::uint32_t drawable_height);
 extern "C" void* MirageSceneDesktopHostCreate(void* ca_layer, std::uint32_t drawable_width,
@@ -36,13 +34,13 @@ struct SaverInstance {
 };
 
 std::mutex g_engine_mutex;
-SaverEngine* g_engine { nullptr };
+std::vector<SaverEngine*> g_engines;
 std::vector<SaverInstance*> g_instances;
 
 void Present(void* texture, std::uint32_t width, std::uint32_t height, void* userdata) {
     auto* engine = static_cast<SaverEngine*>(userdata);
     std::scoped_lock lock(g_engine_mutex);
-    if (engine == nullptr || engine != g_engine) return;
+    if (engine == nullptr) return;
     for (void* host : engine->hosts) {
         MirageSceneSaverHostPresent(host, texture, width, height);
     }
@@ -77,24 +75,16 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
         std::string(assets_dir) + "\n" + scene_pkg + "\n" +
         (properties_json == nullptr ? "" : properties_json) + "\n" + std::to_string(fps);
     std::unique_lock lock(g_engine_mutex);
-    if (g_engine != nullptr && g_engine->configuration_key == configuration_key) {
-        auto* instance = new SaverInstance { g_engine, host, false };
-        g_engine->hosts.push_back(host);
+    auto existing = std::find_if(g_engines.begin(), g_engines.end(), [&](auto* candidate) {
+        return candidate->configuration_key == configuration_key;
+    });
+    if (existing != g_engines.end()) {
+        auto* instance = new SaverInstance { *existing, host, false };
+        (*existing)->hosts.push_back(host);
         g_instances.push_back(instance);
         return instance;
     }
-    SaverEngine* retired_engine = g_engine;
-    if (retired_engine != nullptr) {
-        SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
-        g_engine = nullptr;
-        retired_engine->hosts.clear();
-        for (auto* instance : g_instances) {
-            if (instance->engine == retired_engine) instance->engine = nullptr;
-        }
-        g_instances.clear();
-    }
     lock.unlock();
-    delete retired_engine;
     auto engine = std::make_unique<SaverEngine>();
     engine->hosts.push_back(host);
     engine->configuration_key = configuration_key;
@@ -112,22 +102,25 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
-    SceneRendererSetLiveMetalFrameCallback(Present, engine.get());
     sr::RenderInitInfo info;
     info.offscreen = true;
     info.width = std::clamp<std::uint32_t>(width, 500u, 8192u);
     info.height = std::clamp<std::uint32_t>(height, 500u, 8192u);
     info.msaa_samples = 1;
+    info.metal_frame_callback = [engine = engine.get()](void* texture, void*, std::uint32_t frame_width,
+                                                        std::uint32_t frame_height) {
+        Present(texture, frame_width, frame_height, engine);
+    };
     engine->wallpaper.configure(std::move(config));
     engine->wallpaper.initVulkan(std::move(info));
     if (!engine->wallpaper.waitVulkanInited(30000)) {
-        SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
     lock.lock();
-    g_engine = engine.release();
-    auto* instance = new SaverInstance { g_engine, host, false };
+    auto* created = engine.release();
+    g_engines.push_back(created);
+    auto* instance = new SaverInstance { created, host, false };
     g_instances.push_back(instance);
     return instance;
 }
@@ -155,13 +148,14 @@ extern "C" void* MirageSceneDesktopCreate(void* ca_layer, const char* assets_dir
 extern "C" void MirageSceneSaverSetPaused(void* handle, int paused) {
     auto* instance = static_cast<SaverInstance*>(handle);
     std::scoped_lock lock(g_engine_mutex);
-    if (instance == nullptr || instance->engine != g_engine) return;
+    if (instance == nullptr || instance->engine == nullptr) return;
+    auto* engine = instance->engine;
     instance->paused = paused != 0;
-    const bool all_paused = std::all_of(g_instances.begin(), g_instances.end(), [](auto* item) {
-        return item->paused;
+    const bool all_paused = std::all_of(g_instances.begin(), g_instances.end(), [engine](auto* item) {
+        return item->engine != engine || item->paused;
     });
-    if (all_paused) g_engine->wallpaper.pause();
-    else g_engine->wallpaper.play();
+    if (all_paused) engine->wallpaper.pause();
+    else engine->wallpaper.play();
 }
 
 extern "C" void MirageSceneDesktopSetPaused(void* handle, int paused) {
@@ -177,11 +171,10 @@ extern "C" void MirageSceneSaverDestroy(void* handle) {
     std::erase(g_instances, instance);
     if (engine != nullptr) std::erase(engine->hosts, host);
     delete instance;
-    const bool last = g_instances.empty() && engine == g_engine;
-    if (last) {
-        SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
-        g_engine = nullptr;
-    }
+    const bool last = engine != nullptr && std::none_of(g_instances.begin(), g_instances.end(), [engine](auto* item) {
+        return item->engine == engine;
+    });
+    if (last) std::erase(g_engines, engine);
     lock.unlock();
     if (last) delete engine;
     MirageSceneSaverHostDestroy(host);

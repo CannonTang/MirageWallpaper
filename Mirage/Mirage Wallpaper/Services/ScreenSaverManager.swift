@@ -41,6 +41,10 @@ final class ScreenSaverManager {
         "Contents/Resources/thumbnail@2x.png"
     ]
 
+    private init() {
+        migrateObsoleteDynamicLockScreenIfNeeded()
+    }
+
     var installedURL: URL {
         fm.homeDirectoryForCurrentUser.appending(path: "Library/Screen Savers/MirageScreenSaver.saver")
     }
@@ -54,6 +58,21 @@ final class ScreenSaverManager {
             path: "Library/Screen Savers/MirageDynamicLockScreen.saver")
     }
 
+    private var obsoleteDotDynamicLockScreenInstalledURL: URL {
+        fm.homeDirectoryForCurrentUser.appending(
+            path: "Library/Screen Savers/.MirageDynamicLockScreen.saver")
+    }
+
+    private var hiddenDynamicLockScreenInstalledURL: URL {
+        fm.homeDirectoryForCurrentUser.appending(
+            path: "Library/Application Support/Mirage/Components/MirageDynamicLockScreen.saver")
+    }
+
+    private var wallpaperStoreURL: URL {
+        fm.homeDirectoryForCurrentUser.appending(
+            path: "Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+    }
+
     var dynamicLockScreenConfigurationURL: URL {
         fm.homeDirectoryForCurrentUser.appending(
             path: "Library/Application Support/Mirage/dynamic-lock-screen-screensaver.json")
@@ -63,6 +82,50 @@ final class ScreenSaverManager {
 
     var isDynamicLockScreenInstalled: Bool {
         fm.fileExists(atPath: dynamicLockScreenInstalledURL.path)
+    }
+
+    private func migrateObsoleteDynamicLockScreenIfNeeded() {
+        let obsoleteURLs = [obsoleteDotDynamicLockScreenInstalledURL, hiddenDynamicLockScreenInstalledURL]
+        let oldPaths = obsoleteURLs
+            .map { $0.standardizedFileURL.path }
+        var changed = false
+        if let data = try? Data(contentsOf: wallpaperStoreURL),
+           let value = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) {
+            func visit(_ value: Any) -> Any {
+                if let dictionary = value as? [String: Any] {
+                    var result = dictionary
+                    if let configuration = dictionary["Configuration"] as? Data,
+                       let object = try? PropertyListSerialization.propertyList(from: configuration, options: [], format: nil) as? [String: Any],
+                       let module = object["module"] as? [String: Any],
+                       let relative = module["relative"] as? String,
+                       let path = URL(string: relative)?.standardizedFileURL.path,
+                       oldPaths.contains(path) {
+                        var updatedModule = module
+                        updatedModule["relative"] = dynamicLockScreenInstalledURL.absoluteString
+                        var updatedObject = object
+                        updatedObject["module"] = updatedModule
+                        if let updatedData = try? PropertyListSerialization.data(fromPropertyList: updatedObject, format: .binary, options: 0) {
+                            result["Configuration"] = updatedData
+                            changed = true
+                        }
+                    }
+                    for (key, nested) in result { result[key] = visit(nested) }
+                    return result
+                }
+                if let array = value as? [Any] { return array.map(visit) }
+                return value
+            }
+            let updated = visit(value)
+            if changed, let updatedData = try? PropertyListSerialization.data(fromPropertyList: updated, format: .binary, options: 0) {
+                try? fm.createDirectory(at: wallpaperStoreURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? updatedData.write(to: wallpaperStoreURL, options: .atomic)
+            }
+        }
+        for url in obsoleteURLs
+            where fm.fileExists(atPath: url.path) {
+            do { try fm.removeItem(at: url) }
+            catch { NSLog("[Mirage] 清理旧方案 B 锁屏组件失败: %@", error.localizedDescription) }
+        }
     }
 
     func install() throws {
@@ -405,11 +468,17 @@ final class ScreenSaverManager {
     }
 
     private var bundledDynamicLockScreenSaverURL: URL? {
-        bundledURL(named: "MirageDynamicLockScreen.saver")
+        let name = "MirageDynamicLockScreen.saver"
+        let candidates = [
+            Bundle.main.resourceURL?.appending(path: "Screen Savers/\(name)"),
+            Bundle.main.resourceURL?.appending(path: name)
+        ]
+        return candidates.compactMap { $0 }.first { fm.fileExists(atPath: $0.path) }
     }
 
     private func bundledURL(named name: String) -> URL? {
         let candidates = [
+            Bundle.main.resourceURL?.appending(path: "Mirage Components/\(name)"),
             Bundle.main.resourceURL?.appending(path: "Screen Savers/\(name)"),
             Bundle.main.resourceURL?.appending(path: name)
         ]

@@ -201,6 +201,11 @@ rm -rf "$RESOURCES/assets"
 cp -R "$ASSETS_DIR" "$RESOURCES/assets"
 
 SAVER="$RESOURCES/Screen Savers/MirageScreenSaver.saver"
+DYNAMIC_SAVER="$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
+rm -rf "$RESOURCES/Mirage Components/MirageDynamicLockScreen.saver"
+rm -rf "$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
+rm -rf "$RESOURCES/Screen Savers/.MirageDynamicLockScreen.saver"
+rm -rf "$DYNAMIC_SAVER"
 if [ -d "$SAVER" ]; then
     SAVER_FRAMEWORKS="$SAVER/Contents/Frameworks"
     SAVER_RESOURCES="$SAVER/Contents/Resources"
@@ -227,11 +232,14 @@ if [ -d "$SAVER" ]; then
 EOF
 fi
 
-DYNAMIC_SAVER="$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
 if [ -d "$SAVER" ]; then
     rm -rf "$DYNAMIC_SAVER"
     cp -R "$SAVER" "$DYNAMIC_SAVER"
     plutil -replace CFBundleIdentifier -string "cn.laobamac.Mirage.DynamicLockScreen" \
+        "$DYNAMIC_SAVER/Contents/Info.plist"
+    plutil -replace CFBundleDisplayName -string "Mirage 锁屏组件" \
+        "$DYNAMIC_SAVER/Contents/Info.plist"
+    plutil -replace CFBundleName -string "Mirage 锁屏组件" \
         "$DYNAMIC_SAVER/Contents/Info.plist"
 fi
 
