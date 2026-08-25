@@ -7,6 +7,80 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.1.0</title>
+            <pubDate>Tue, 25 Aug 2026 16:31:41 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>375</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Mirage 1.1.0
+
+本版本带来视频和场景动态锁屏、独立的屏保动态锁屏配置，并修复动态锁屏组件升级、视频循环、屏保显示尺寸、锁屏退出后的桌面回退和场景木偶动画等问题。
+
+## 重大更新：动态锁屏与屏保壁纸
+
+- 新增原生动态锁屏支持：视频和场景壁纸可以在锁屏界面继续播放或渲染，解锁后恢复桌面壁纸显示。此功能使用 macOS 26 的系统 API，仅在 macOS 26 或更高版本可用。
+- 新增屏保动态锁屏模式，可在屏保设置中启用；屏保可以使用独立配置的场景或视频壁纸，不再只能跟随当前播放壁纸。此方案使用 Mirage 屏保组件，支持 macOS 14.2 或更高版本。
+- 改进动态锁屏和屏保组件的生命周期与桌面回退：修复动态内容泄漏到桌面、退出 Mirage 后锁屏状态失效，以及锁屏退出后桌面未及时恢复的问题。
+- 屏保配置与屏保动态锁屏配置现在相互独立，分别更新和恢复，避免更换其中一项时覆盖另一项。
+- 加强动态锁屏组件的安装与升级：自动清理旧版或重复注册的原生锁屏扩展，停用方案 A 时注销扩展，并迁移旧版屏保动态锁屏组件及已有系统墙纸配置。
+
+## 播放与屏保修复
+
+- 修复视频壁纸循环切换时的间隙，使视频循环衔接更加连续；视频资源也可在锁屏和屏保环境中稳定加载。
+- 改进屏保组件的显示尺寸校正，按屏幕实际显示尺寸更新布局，减少缩放显示器下的错位和比例异常（Issue #24）。
+- 修复多个场景屏保实例使用不同配置时相互替换渲染状态的问题；每组配置现在使用独立的渲染实例，并分别处理暂停与销毁。
+
+## 场景渲染修复
+
+- 修复木偶动画的图层混合与可见性处理，使带有动画可见性条件的场景能够正确响应运行时属性变化（Issue #37）。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 应用与屏保组件要求 macOS 14.2 或更高版本；原生动态锁屏功能要求 macOS 26 或更高版本
+
+当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
+
+---
+
+
+# Mirage 1.1.0
+
+This release adds video and Scene dynamic lock screens, an independently configured screen-saver dynamic lock screen, and fixes dynamic lock-screen component upgrades, video looping, screen-saver display sizing, desktop fallback after unlocking or quitting, and Scene puppet animation layering.
+
+## Major Update: Dynamic Lock Screen and Screen Saver Wallpapers
+
+- Added native dynamic lock-screen support for video and Scene wallpapers. They can continue playing or rendering on the lock screen, with the desktop wallpaper restored after unlocking. This feature uses macOS 26 system APIs and is available only on macOS 26 or later.
+- Added a Screen Saver Dynamic Lock Screen mode that can be enabled from Screen Saver settings. The screen saver can use an independently configured Scene or video wallpaper instead of always following the current playing wallpaper. This mode uses the Mirage screen-saver component and supports macOS 14.2 or later.
+- Improved dynamic lock-screen and screen-saver component lifecycle and desktop fallback behavior. Fixed dynamic content leaking onto the desktop, lock-screen state being lost when Mirage quits, and the desktop not being restored promptly after unlocking.
+- Screen-saver and Screen Saver Dynamic Lock Screen configurations are now independent and are updated and restored separately, so changing one no longer overwrites the other.
+- Hardened dynamic lock-screen component installation and upgrades by removing obsolete or duplicate native lock-screen extension registrations, unregistering Method A when disabled, and migrating legacy Screen Saver Dynamic Lock Screen components and existing system wallpaper configuration.
+
+## Playback and Screen Saver Fixes
+
+- Fixed gaps when video wallpapers loop or switch, making playback transitions more continuous; video assets also load more reliably in lock-screen and screen-saver environments.
+- Improved screen-saver display sizing by updating layout for the display's actual dimensions, reducing misalignment and aspect-ratio errors on scaled displays (Issue #24).
+- Fixed Scene screen-saver instances with different configurations replacing each other's rendering state. Each configuration now uses an independent renderer with separate pause and teardown handling.
+
+## Scene Rendering Fix
+
+- Fixed puppet animation layer blending and visibility handling so scenes with animation visibility conditions respond correctly to runtime property changes (Issue #37).
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- The app and screen-saver component require macOS 14.2 or later; native dynamic lock-screen features require macOS 26 or later
+
+Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.0/Mirage-375-e36d37da220c-macOS-arm64.zip" length="361384478" type="application/octet-stream" sparkle:edSignature="IjHguA3P7CEBlmlH/XO+/0yYPx3SJcUMqhTd5IpZcDO1x4ItKw3q3ze9HerrjeepJykJCwaN1RXHZY7Tvy8iAQ=="/>
+        </item>
+        <item>
+            <title>1.1.0</title>
             <pubDate>Mon, 24 Aug 2026 18:14:42 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:version>372</sparkle:version>
@@ -395,71 +469,9 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.6/Mirage-296-4a05ff65e75c-macOS-arm64.zip" length="229232012" type="application/octet-stream" sparkle:edSignature="/fU/wSYx3uD4lz76AihafB58k6vQn98hGSmx2dcNKe1WCrxNLnXvv1pe1nz3f9HpP5nQ22P8lS+PPQrTwrcqCQ=="/>
         </item>
-        <item>
-            <title>1.0.5</title>
-            <pubDate>Sun, 09 Aug 2026 14:43:55 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:version>287</sparkle:version>
-            <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[# Mirage 1.0.5
-
-本版本带来创意工坊下载架构的重大升级：Mirage 现在通过直接集成 SteamKit2 的内置服务完成登录和下载，完全移除 SteamCMD，并新增场景壁纸的 MetalFX Spatial 缩放。
-
-## 重大更新：全新创意工坊下载服务
-
-- 使用面向 Apple Silicon 与 Intel Mac 的内置 SteamKit2 服务取代 SteamCMD；不再安装或启动外部命令行下载器，Apple Silicon Mac 也不再为创意工坊下载依赖 Rosetta 2。下载器的清单、CDN 和分块调度设计参考 DepotDownloader，但由 Mirage 自己的服务直接实现 (#13)。
-- 新增 Steam 手机应用二维码登录并将其设为默认方式，同时保留账户密码、邮箱或手机 Steam Guard 验证码以及手机确认流程。密码只通过本机进程间标准输入传递，不会保存或写入日志；刷新令牌和 Steam Guard 设备数据保存在 macOS 钥匙串中，并可在退出登录时一并清除。
-- 下载管理器现在最多并行处理三个作品，显示实际接收字节、平滑后的实时速度、完成进度和预计剩余时间。每个任务可以独立取消或重试，不会中断 Steam 会话或其他下载。
-- 下载改为直接解析创意工坊清单并从 Steam CDN 获取分块。Mirage 会复用已校验的现有文件和暂存分块，只重新获取缺失或变化的内容；全部文件通过清单校验且确认包含 `project.json` 后才原子安装，避免失败或取消产生不完整壁纸。
-- 简化首次设置流程，移除 SteamCMD 安装步骤；改进登录状态、下载阶段、错误信息和完成记录展示，并可从下载管理器直接在 Finder 中打开已安装作品。
-
-## 新增与改进
-
-- 场景壁纸新增 MetalFX Spatial 缩放选项，在降低渲染分辨率时通过 MetalFX 输出到显示分辨率；该选项默认启用，可在“设置 → 性能 → 渲染质量”中关闭，并在切换壁纸后生效。
-
-## 下载
-
-- `arm64`：Apple Silicon Mac
-- `x86_64`：Intel Mac
-- 系统要求：macOS 14.2 或更高版本
-
-当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
-
----
-
-
-# Mirage 1.0.5
-
-This release delivers a major overhaul of Workshop downloads. Mirage now signs in and downloads through an embedded service built directly on SteamKit2, removes SteamCMD entirely, and adds MetalFX Spatial scaling for Scene wallpapers.
-
-## Major Update: New Workshop Download Service
-
-- Replaced SteamCMD with an embedded SteamKit2 service built for both Apple Silicon and Intel Macs. Mirage no longer installs or launches an external command-line downloader, and Workshop downloads on Apple Silicon no longer depend on Rosetta 2. The manifest, CDN, and chunk-scheduling design draws from DepotDownloader, but is implemented directly by Mirage's own service (#13).
-- Added Steam Mobile QR sign-in as the default method while retaining account-password sign-in, email or mobile Steam Guard codes, and mobile confirmation. Passwords travel only through local inter-process standard input and are neither stored nor logged. Refresh tokens and Steam Guard device data are kept in the macOS Keychain and removed when signing out.
-- The download manager now processes up to three Workshop items concurrently and shows actual received bytes, smoothed real-time speed, progress, and estimated time remaining. Each task can be cancelled or retried independently without interrupting the Steam session or other downloads.
-- Downloads now resolve Workshop manifests directly and fetch chunks from the Steam CDN. Mirage reuses verified installed files and staged chunks, fetching only missing or changed data. It atomically installs an item only after every file passes manifest validation and a root `project.json` is present, preventing failed or cancelled downloads from creating incomplete wallpapers.
-- Simplified first-time setup by removing the SteamCMD installation step. Login states, download phases, errors, and completion history are clearer, and installed items can be revealed directly in Finder from the download manager.
-
-## Improvements
-
-- Added MetalFX Spatial scaling for Scene wallpapers, producing display-resolution output through MetalFX when using a reduced render resolution. It is enabled by default, can be disabled under Settings → Performance → Rendering Quality, and takes effect after switching wallpapers.
-
-## Downloads
-
-- `arm64` for Apple Silicon Mac
-- `x86_64` for Intel Mac
-- Requires macOS 14.2 or later
-
-Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.5/Mirage-287-3fe2d0be4540-macOS-arm64.zip" length="229155374" type="application/octet-stream" sparkle:edSignature="OHhQJe18sAk+FTZjt3x0UPUdhDGo6xjo2YqYTXUXXGio4N91wv4JHfhuDOsy4++G5c3BdG1n7Bu7sMhV9FhGAQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ciMWGqOED6SBQzRQc53alZXS3/3i+D6xmT9I/VKL81sOJ/HQHXS0LEp2q5Z0fRQ/O6yyX80juWynYECAXR4vBg==
-length: 36238
+edSignature: eWkq+WIp2nszJI7b1OR0sFyVEvREWB2bF43tE5jtbimrezm4hLYl1zR7ErpUhgbnA0oEsXktiSCnbf78WOcvDA==
+length: 36627
 -->
