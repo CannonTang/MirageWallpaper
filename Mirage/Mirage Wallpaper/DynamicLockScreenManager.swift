@@ -80,6 +80,7 @@ final class DynamicLockScreenManager: ObservableObject {
 
     @Published private(set) var isEnabled: Bool
     @Published var isConfirmationPresented = false
+    @Published private(set) var registrationErrorMessage: String?
 
     private let enabledKey = "Mirage.DynamicLockScreen.Enabled"
     private let confirmationKey = "Mirage.DynamicLockScreen.Confirmed"
@@ -156,7 +157,9 @@ final class DynamicLockScreenManager: ObservableObject {
         isEnabled = true
         isConfirmationPresented = false
         activateStoredConfiguration()
-        registerExtension()
+        if isConfigured {
+            registerExtension()
+        }
         return true
     }
 
@@ -179,7 +182,9 @@ final class DynamicLockScreenManager: ObservableObject {
         isEnabled = true
         UserDefaults.standard.set(true, forKey: enabledKey)
         activateStoredConfiguration()
-        registerExtension()
+        if isConfigured {
+            registerExtension()
+        }
     }
 
     func disableForModeSwitch() {
@@ -271,6 +276,7 @@ final class DynamicLockScreenManager: ObservableObject {
         notifyConfigurationChanged()
         cleanupDeployments(except: deployment.root)
         cleanupDesktopFallbacks()
+        registerExtension()
     }
 
     func updateLoadFromMemory(_ enabled: Bool) {
@@ -534,20 +540,92 @@ final class DynamicLockScreenManager: ObservableObject {
         guard let appURL = Bundle.main.bundleURL as URL? else { return }
         let extensionURL = appURL.appendingPathComponent("Contents/Extensions/MirageWallpaperExtension.appex")
         guard FileManager.default.fileExists(atPath: extensionURL.path),
-              let fingerprint = extensionFingerprint(at: extensionURL) else { return }
+              let fingerprint = extensionFingerprint(at: extensionURL) else {
+            registrationErrorMessage = L("动态锁屏扩展组件缺失或损坏，请重新安装 Mirage")
+            MirageLogService.shared.append(
+                "动态锁屏扩展注册失败: 扩展组件缺失或指纹计算失败",
+                source: "wallpaper-extension"
+            )
+            return
+        }
+        registrationErrorMessage = nil
         extensionQueue.async { [weak self] in
-            guard let self else { return }
-            guard Self.registerContainingApp(appURL),
-                  Self.runPluginkit(["-a", extensionURL.path]),
-                  Self.runPluginkit(["-e", "use", "-i", "cn.laobamac.Mirage.WallpaperExtension"]) else { return }
-            _ = Self.removeRegisteredExtensions(except: extensionURL.path)
-            guard Self.isRegisteredExtension(at: extensionURL.path),
-                  Self.restartWallpaperAgent() else { return }
-            UserDefaults.standard.set(fingerprint, forKey: self.registeredExtensionFingerprintKey)
+            let result = Self.performRegistration(
+                appURL: appURL,
+                extensionURL: extensionURL,
+                fingerprint: fingerprint
+            )
+            _ = Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let message = result.errorMessage {
+                    self.registrationErrorMessage = message
+                } else if let fingerprint = result.fingerprint {
+                    UserDefaults.standard.set(fingerprint, forKey: self.registeredExtensionFingerprintKey)
+                }
+            }
         }
     }
 
+    private nonisolated static func performRegistration(
+        appURL: URL,
+        extensionURL: URL,
+        fingerprint: String
+    ) -> (fingerprint: String?, errorMessage: String?) {
+        let identifier = "cn.laobamac.Mirage.WallpaperExtension"
+        guard registerContainingApp(appURL) else {
+            MirageLogService.shared.append(
+                "动态锁屏扩展注册失败: lsregister 无法注册主程序 \(appURL.path)",
+                source: "wallpaper-extension"
+            )
+            return (nil, L("无法向系统注册 Mirage，请重试或重启 Mirage 后重新开启动态锁屏"))
+        }
+        var registered = false
+        for attempt in 1...3 {
+            if attempt > 1 {
+                Thread.sleep(forTimeInterval: 1)
+            }
+            MirageLogService.shared.append(
+                "动态锁屏扩展注册尝试 \(attempt)/3",
+                source: "wallpaper-extension"
+            )
+            _ = runPluginkit(["-a", extensionURL.path])
+            _ = runPluginkit(["-e", "use", "-i", identifier])
+            if isRegisteredExtension(at: extensionURL.path) {
+                registered = true
+                break
+            }
+        }
+        guard registered else {
+            MirageLogService.shared.append(
+                "动态锁屏扩展注册失败: pluginkit 注册后未找到 \(extensionURL.path)",
+                source: "wallpaper-extension"
+            )
+            return (nil, L("动态锁屏扩展注册失败，请重试；若仍失败请重启 Mirage 后重新开启动态锁屏"))
+        }
+        if !isRegisteredExtension(at: extensionURL.path, elected: true) {
+            MirageLogService.shared.append(
+                "动态锁屏扩展已注册但未被选中，重新执行 use 选举",
+                source: "wallpaper-extension"
+            )
+            _ = runPluginkit(["-e", "use", "-i", identifier])
+        }
+        _ = removeRegisteredExtensions(except: extensionURL.path)
+        guard restartWallpaperAgent() else {
+            MirageLogService.shared.append(
+                "动态锁屏扩展注册失败: 无法重启 com.apple.wallpaper.agent",
+                source: "wallpaper-extension"
+            )
+            return (nil, L("动态锁屏扩展注册失败：无法重启系统墙纸服务，请重试"))
+        }
+        MirageLogService.shared.append(
+            "动态锁屏扩展注册成功: \(extensionURL.path)",
+            source: "wallpaper-extension"
+        )
+        return (fingerprint, nil)
+    }
+
     private func unregisterExtension() {
+        registrationErrorMessage = nil
         extensionQueue.async { [weak self] in
             guard let self else { return }
             if Self.removeRegisteredExtensions(except: nil) {
@@ -567,11 +645,13 @@ final class DynamicLockScreenManager: ObservableObject {
         return runTool(tool, arguments: ["-f", appURL.path]).success
     }
 
-    private nonisolated static func isRegisteredExtension(at path: String) -> Bool {
+    private nonisolated static func isRegisteredExtension(at path: String, elected: Bool = false) -> Bool {
         let result = runTool("/usr/bin/pluginkit", arguments: ["-mAv", "-i", "cn.laobamac.Mirage.WallpaperExtension"])
         guard result.success else { return false }
         return result.output.split(whereSeparator: \.isNewline).contains { line in
-            line.contains(path)
+            guard line.contains(path) else { return false }
+            guard elected else { return true }
+            return line.split(whereSeparator: \.isWhitespace).first?.contains("+") ?? false
         }
     }
 

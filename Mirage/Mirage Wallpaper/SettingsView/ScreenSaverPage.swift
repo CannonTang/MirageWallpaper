@@ -90,6 +90,10 @@ struct ScreenSaverPage: SettingsPage {
                     set: { dynamicLockScreenManager.setEnabled($0) }
                 ))
                 .disabled(!dynamicLockScreenManager.isAvailable)
+                if let registrationErrorMessage = dynamicLockScreenManager.registrationErrorMessage {
+                    Text(registrationErrorMessage)
+                        .foregroundStyle(.red)
+                }
                 if !dynamicLockScreenManager.isAvailable {
                     Text(LocalizedStringKey("动态锁屏需要 macOS 26 或更高版本。"))
                         .foregroundStyle(.secondary)
