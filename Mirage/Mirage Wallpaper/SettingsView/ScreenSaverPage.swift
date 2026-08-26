@@ -102,7 +102,7 @@ struct ScreenSaverPage: SettingsPage {
                     Button("打开系统墙纸设置") {
                         dynamicLockScreenManager.openSystemSettings()
                     }
-                    Text(LocalizedStringKey("动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。动态锁屏支持视频和场景壁纸。"))
+                    Text(LocalizedStringKey("动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。动态锁屏支持视频和场景壁纸。启用后请前往墙纸内切换为Mirage动态锁屏。"))
                         .foregroundStyle(.secondary)
                 }
                 Toggle("启用动态锁屏方案 B", isOn: Binding(
