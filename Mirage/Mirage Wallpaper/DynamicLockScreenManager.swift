@@ -535,13 +535,14 @@ final class DynamicLockScreenManager: ObservableObject {
         let extensionURL = appURL.appendingPathComponent("Contents/Extensions/MirageWallpaperExtension.appex")
         guard FileManager.default.fileExists(atPath: extensionURL.path),
               let fingerprint = extensionFingerprint(at: extensionURL) else { return }
-        let previousFingerprint = UserDefaults.standard.string(forKey: registeredExtensionFingerprintKey)
         extensionQueue.async { [weak self] in
             guard let self else { return }
-            _ = Self.removeRegisteredExtensions(except: extensionURL.path)
-            guard Self.runPluginkit(["-a", extensionURL.path]),
+            guard Self.registerContainingApp(appURL),
+                  Self.runPluginkit(["-a", extensionURL.path]),
                   Self.runPluginkit(["-e", "use", "-i", "cn.laobamac.Mirage.WallpaperExtension"]) else { return }
-            if previousFingerprint != fingerprint, !Self.restartWallpaperAgent() { return }
+            _ = Self.removeRegisteredExtensions(except: extensionURL.path)
+            guard Self.isRegisteredExtension(at: extensionURL.path),
+                  Self.restartWallpaperAgent() else { return }
             UserDefaults.standard.set(fingerprint, forKey: self.registeredExtensionFingerprintKey)
         }
     }
@@ -557,27 +558,50 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     private nonisolated static func runPluginkit(_ arguments: [String]) -> Bool {
+        runTool("/usr/bin/pluginkit", arguments: arguments).success
+    }
+
+    private nonisolated static func registerContainingApp(_ appURL: URL) -> Bool {
+        let tool = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+        guard FileManager.default.isExecutableFile(atPath: tool) else { return false }
+        return runTool(tool, arguments: ["-f", appURL.path]).success
+    }
+
+    private nonisolated static func isRegisteredExtension(at path: String) -> Bool {
+        let result = runTool("/usr/bin/pluginkit", arguments: ["-mAv", "-i", "cn.laobamac.Mirage.WallpaperExtension"])
+        guard result.success else { return false }
+        return result.output.split(whereSeparator: \.isNewline).contains { line in
+            line.contains(path)
+        }
+    }
+
+    private nonisolated static func runTool(_ executable: String, arguments: [String]) -> (success: Bool, output: String) {
         let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirage-registration-\(UUID().uuidString).log")
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        do {
+            try Data().write(to: outputURL, options: .withoutOverwriting)
+            let handle = try FileHandle(forWritingTo: outputURL)
+            process.standardOutput = handle
+            process.standardError = handle
+            try process.run()
+            process.waitUntilExit()
+            try handle.close()
+            let data = try Data(contentsOf: outputURL)
+            try? FileManager.default.removeItem(at: outputURL)
+            return (process.terminationStatus == 0, String(data: data, encoding: .utf8) ?? "")
+        } catch {
+            try? FileManager.default.removeItem(at: outputURL)
+            return (false, "")
+        }
     }
 
     private nonisolated static func removeRegisteredExtensions(except path: String?) -> Bool {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
-        process.arguments = ["-mAv", "-p", "com.apple.wallpaper"]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        guard let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else { return false }
+        let result = runTool("/usr/bin/pluginkit", arguments: ["-mAv", "-p", "com.apple.wallpaper"])
+        guard result.success else { return false }
+        let output = result.output
         let identifier = "cn.laobamac.Mirage.WallpaperExtension"
         var removed = false
         for line in output.split(whereSeparator: \.isNewline) where line.contains(identifier) {
