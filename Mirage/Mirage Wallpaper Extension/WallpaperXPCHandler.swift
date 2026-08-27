@@ -288,8 +288,8 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     }
 
     private static func loadConfiguration() -> MirageLockConfiguration? {
-        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage"),
-              let data = try? Data(contentsOf: container.appendingPathComponent("dynamic-lock-screen.json")) else { return nil }
+        guard let configurationURL = mirageDynamicLockScreenConfigurationURL(),
+              let data = try? Data(contentsOf: configurationURL) else { return nil }
         return try? JSONDecoder().decode(MirageLockConfiguration.self, from: data)
     }
 

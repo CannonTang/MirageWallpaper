@@ -84,11 +84,16 @@ final class DynamicLockScreenManager: ObservableObject {
 
     private let enabledKey = "Mirage.DynamicLockScreen.Enabled"
     private let confirmationKey = "Mirage.DynamicLockScreen.Confirmed"
-    private let appGroupID = "group.cn.laobamac.Mirage"
+    private let extensionContainerBookmarkKey =
+        "Mirage.DynamicLockScreen.ExtensionContainerBookmark"
+    private let extensionBundleID = "cn.laobamac.Mirage.WallpaperExtension"
+    private let storageDirectoryName = "MirageDynamicLockScreen"
     private let configurationName = "dynamic-lock-screen.json"
     private let registeredExtensionFingerprintKey =
         "Mirage.DynamicLockScreen.RegisteredExtensionFingerprint"
     private let extensionQueue = DispatchQueue(label: "cn.laobamac.Mirage.wallpaper-extension", qos: .utility)
+    private var authorizedExtensionContainerURL: URL?
+    private var isAccessingAuthorizedExtensionContainer = false
 
     private init() {
         let storedEnabled = UserDefaults.standard.bool(forKey: enabledKey)
@@ -98,6 +103,7 @@ final class DynamicLockScreenManager: ObservableObject {
         if DynamicLockScreenModeStore.active == nil, isEnabled {
             DynamicLockScreenModeStore.activate(.extensionMode)
         }
+        restoreExtensionContainerAccess()
         discardUnsupportedConfiguration()
         if !isEnabled || DynamicLockScreenModeStore.active != .extensionMode {
             extensionQueue.async {
@@ -279,6 +285,43 @@ final class DynamicLockScreenManager: ObservableObject {
         registerExtension()
     }
 
+    func configureCurrentWallpaperRequestingAccess(
+        _ wallpaper: WEWallpaper,
+        runtime: WallpaperRuntimeState,
+        properties: [String: WEProjectProperty],
+        fps: Int,
+        displayIDs: [UInt32]
+    ) async throws {
+        do {
+            try configureCurrentWallpaper(
+                wallpaper,
+                runtime: runtime,
+                properties: properties,
+                fps: fps,
+                displayIDs: displayIDs
+            )
+            await waitForPendingExtensionRegistration()
+            return
+        } catch {
+            guard isFileAccessPermissionError(error) else { throw error }
+        }
+
+        try await requestExtensionContainerAccess()
+        do {
+            try configureCurrentWallpaper(
+                wallpaper,
+                runtime: runtime,
+                properties: properties,
+                fps: fps,
+                displayIDs: displayIDs
+            )
+            await waitForPendingExtensionRegistration()
+        } catch {
+            guard isFileAccessPermissionError(error) else { throw error }
+            throw DynamicLockScreenError.sharedContainerAccessDenied
+        }
+    }
+
     func updateLoadFromMemory(_ enabled: Bool) {
         guard let configurationURL,
               let data = try? Data(contentsOf: configurationURL),
@@ -392,8 +435,157 @@ final class DynamicLockScreenManager: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func isSelectedInSystemWallpaper(displayIDs: [UInt32]) -> Bool {
+        guard !displayIDs.isEmpty,
+              let data = try? Data(contentsOf: systemWallpaperIndexURL),
+              let root = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil
+              ) as? [String: Any],
+              let displays = root["Displays"] as? [String: Any]
+        else { return false }
+
+        return displayIDs.allSatisfy { displayID in
+            guard let unmanagedUUID = CGDisplayCreateUUIDFromDisplayID(displayID) else {
+                return false
+            }
+            let uuid = unmanagedUUID.takeRetainedValue()
+            guard let uuidString = CFUUIDCreateString(nil, uuid) as String?,
+                  let display = displays[uuidString] as? [String: Any],
+                  let desktop = display["Desktop"] as? [String: Any],
+                  let content = desktop["Content"] as? [String: Any],
+                  let choices = content["Choices"] as? [[String: Any]],
+                  let provider = choices.first?["Provider"] as? String
+            else { return false }
+            return provider == extensionBundleID
+        }
+    }
+
     private var sharedContainerURL: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+        extensionContainerURL?
+            .appendingPathComponent("Data/Library/Application Support", isDirectory: true)
+            .appendingPathComponent(storageDirectoryName, isDirectory: true)
+    }
+
+    private var extensionContainerURL: URL? {
+        if let authorizedExtensionContainerURL { return authorizedExtensionContainerURL }
+        let expected = expectedExtensionContainerURL
+        return FileManager.default.fileExists(atPath: expected.path) ? expected : nil
+    }
+
+    private var expectedExtensionContainerURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers", isDirectory: true)
+            .appendingPathComponent(extensionBundleID, isDirectory: true)
+    }
+
+    private var systemWallpaperIndexURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/com.apple.wallpaper/Store/Index.plist"
+            )
+    }
+
+    private func requestExtensionContainerAccess() async throws {
+        let panel = NSOpenPanel()
+        panel.title = L("授权 Mirage 动态锁屏文件夹")
+        panel.message = L(
+            "请选择“%@”文件夹，然后点击“授权访问”。Mirage 只会在锁屏扩展自己的目录中保存动态资源。",
+            extensionBundleID
+        )
+        panel.prompt = L("授权访问")
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.resolvesAliases = true
+        panel.directoryURL = expectedExtensionContainerURL.deletingLastPathComponent()
+
+        let response = await withCheckedContinuation { continuation in
+            panel.begin { continuation.resume(returning: $0) }
+        }
+        guard response == .OK, let selectedURL = panel.url else {
+            throw DynamicLockScreenError.sharedContainerAccessCancelled
+        }
+        guard isExpectedExtensionContainer(selectedURL) else {
+            throw DynamicLockScreenError.wrongSharedContainer(extensionBundleID)
+        }
+
+        do {
+            let bookmark = try selectedURL.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            UserDefaults.standard.set(bookmark, forKey: extensionContainerBookmarkKey)
+            beginAccessingExtensionContainer(selectedURL)
+        } catch {
+            throw DynamicLockScreenError.sharedContainerBookmarkFailed
+        }
+    }
+
+    private func restoreExtensionContainerAccess() {
+        guard let bookmark = UserDefaults.standard.data(forKey: extensionContainerBookmarkKey) else {
+            return
+        }
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            guard isExpectedExtensionContainer(url) else {
+                UserDefaults.standard.removeObject(forKey: extensionContainerBookmarkKey)
+                return
+            }
+            beginAccessingExtensionContainer(url)
+            if isStale {
+                let refreshed = try url.bookmarkData(
+                    options: .withSecurityScope,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                UserDefaults.standard.set(refreshed, forKey: extensionContainerBookmarkKey)
+            }
+        } catch {
+            UserDefaults.standard.removeObject(forKey: extensionContainerBookmarkKey)
+        }
+    }
+
+    private func beginAccessingExtensionContainer(_ url: URL) {
+        if isAccessingAuthorizedExtensionContainer,
+           let authorizedExtensionContainerURL,
+           authorizedExtensionContainerURL != url {
+            authorizedExtensionContainerURL.stopAccessingSecurityScopedResource()
+        }
+        authorizedExtensionContainerURL = url
+        isAccessingAuthorizedExtensionContainer = url.startAccessingSecurityScopedResource()
+    }
+
+    private func isExpectedExtensionContainer(_ url: URL) -> Bool {
+        let selected = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let expected = expectedExtensionContainerURL.standardizedFileURL
+            .resolvingSymlinksInPath().path
+        return selected == expected
+    }
+
+    private func isFileAccessPermissionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain,
+           (nsError.code == NSFileReadNoPermissionError
+            || nsError.code == NSFileWriteNoPermissionError) {
+            return true
+        }
+        if nsError.domain == NSPOSIXErrorDomain,
+           (nsError.code == Int(EACCES) || nsError.code == Int(EPERM)) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error,
+           isFileAccessPermissionError(underlying) {
+            return true
+        }
+        return false
     }
 
     private func playableEntryURL(for wallpaper: WEWallpaper) -> URL {
@@ -562,6 +754,14 @@ final class DynamicLockScreenManager: ObservableObject {
                 } else if let fingerprint = result.fingerprint {
                     UserDefaults.standard.set(fingerprint, forKey: self.registeredExtensionFingerprintKey)
                 }
+            }
+        }
+    }
+
+    private func waitForPendingExtensionRegistration() async {
+        await withCheckedContinuation { continuation in
+            extensionQueue.async {
+                continuation.resume()
             }
         }
     }
@@ -801,13 +1001,25 @@ enum DynamicLockScreenError: LocalizedError {
     case noWallpaper
     case unsupportedWallpaper
     case appGroupUnavailable
+    case sharedContainerAccessCancelled
+    case wrongSharedContainer(String)
+    case sharedContainerBookmarkFailed
+    case sharedContainerAccessDenied
 
     var errorDescription: String? {
         switch self {
         case .notEnabled: return L("请先开启动态锁屏并完成确认")
         case .noWallpaper: return L("请先播放一张壁纸")
         case .unsupportedWallpaper: return L("当前壁纸不能用作动态锁屏")
-        case .appGroupUnavailable: return L("动态锁屏共享容器不可用")
+        case .appGroupUnavailable: return L("动态锁屏扩展存储目录不可用")
+        case .sharedContainerAccessCancelled:
+            return L("未获得动态锁屏扩展文件夹访问权限")
+        case .wrongSharedContainer(let name):
+            return L("请选择“%@”文件夹以继续设置动态锁屏", name)
+        case .sharedContainerBookmarkFailed:
+            return L("无法保存动态锁屏扩展文件夹访问权限，请重试")
+        case .sharedContainerAccessDenied:
+            return L("授权后仍无法写入动态锁屏扩展文件夹，请重新选择该文件夹")
         }
     }
 }

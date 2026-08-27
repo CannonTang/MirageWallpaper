@@ -39,6 +39,8 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
     @Published private(set) var isEnabled: Bool
     @Published var isConfirmationPresented = false
 
+    private var pendingEnableAction: (() -> Void)?
+
     private let enabledKey = "Mirage.ScreenSaverDynamicLockScreen.Enabled"
     private let confirmationKey = "Mirage.ScreenSaverDynamicLockScreen.Confirmed"
     private let backupURL: URL
@@ -92,9 +94,15 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperTitle()
     }
 
-    func requestEnable() {
+    func requestEnable(afterEnable action: (() -> Void)? = nil) {
         guard isAvailable else { return }
+        pendingEnableAction = action
         isConfirmationPresented = true
+    }
+
+    func cancelEnableRequest() {
+        pendingEnableAction = nil
+        isConfirmationPresented = false
     }
 
     func confirmAndEnable(input: String) -> Bool {
@@ -104,6 +112,9 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         UserDefaults.standard.set(true, forKey: confirmationKey)
         isConfirmationPresented = false
         setEnabled(true)
+        let action = pendingEnableAction
+        pendingEnableAction = nil
+        action?()
         return true
     }
 

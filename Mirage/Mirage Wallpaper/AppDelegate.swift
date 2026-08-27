@@ -168,12 +168,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ScreenSaverDynamicLockScreenManager.shared.setEnabled(true)
         }
 
-        let dynamicLockScreenActive = (DynamicLockScreenManager.shared.isEnabled
-            && DynamicLockScreenManager.shared.isConfigured)
-            || (ScreenSaverDynamicLockScreenManager.shared.isEnabled
-                && ScreenSaverDynamicLockScreenManager.shared.isConfigured)
+        let extensionLockScreenActive = DynamicLockScreenManager.shared.isEnabled
+            && DynamicLockScreenManager.shared.isConfigured
+        let screenSaverLockScreenActive = ScreenSaverDynamicLockScreenManager.shared.isEnabled
+            && ScreenSaverDynamicLockScreenManager.shared.isConfigured
+        let dynamicLockScreenActive = extensionLockScreenActive || screenSaverLockScreenActive
         if launchedLocked && dynamicLockScreenActive {
             wallpaperViewModel.suspendForExternalLockScreen()
+            if screenSaverLockScreenActive
+                && !ScreenSaverDynamicLockScreenManager.shared.enterLockedState() {
+                wallpaperViewModel.resumeAfterExternalLockScreen()
+            }
+            if extensionLockScreenActive {
+                postDynamicLockScreenState(locked: true)
+            }
         } else if wallpaperViewModel.hasAnyWallpaper {
             wallpaperViewModel.restoreAllDisplays()
         }

@@ -86,8 +86,8 @@ private struct MirageStoredDisplay: Codable {
 }
 
 private func mirageLoadConfiguration() -> MirageStoredConfiguration? {
-    guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage"),
-          let data = try? Data(contentsOf: container.appendingPathComponent("dynamic-lock-screen.json")),
+    guard let configurationURL = mirageDynamicLockScreenConfigurationURL(),
+          let data = try? Data(contentsOf: configurationURL),
           let decoded = try? JSONDecoder().decode(MirageStoredConfiguration.self, from: data) else { return nil }
     guard decoded.enabled != false,
           !decoded.displays.isEmpty,

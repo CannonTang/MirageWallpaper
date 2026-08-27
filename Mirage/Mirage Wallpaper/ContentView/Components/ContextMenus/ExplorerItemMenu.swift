@@ -310,49 +310,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private func setAsDynamicLockScreen() {
-        if DynamicLockScreenModeStore.active == .screenSaver || !DynamicLockScreenManager.shared.isAvailable {
-            setAsScreenSaverDynamicLockScreen()
-            return
-        }
-        let manager = DynamicLockScreenManager.shared
-        guard manager.isAvailable else {
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("动态锁屏不可用"),
-                message: L("动态锁屏需要 macOS 26 或更高版本。")
-            )
-            return
-        }
-        guard manager.canUse else {
-            manager.requestEnable()
-            return
-        }
-        let sourceWallpaper = hoveredWallpaper
-        Task { @MainActor in
-            do {
-                let wallpaper = try await preparedProtectedWallpaper()
-                let displayIDs = displays.compactMap {
-                    DisplayRegistry.shared.displayID(for: $0.key)
-                }
-                let runtime = wallpaperViewModel.loadRuntime(for: sourceWallpaper)
-                let properties = wallpaperViewModel.effectiveProperties(
-                    for: sourceWallpaper,
-                    runtime: runtime
-                )
-                try manager.configureCurrentWallpaper(
-                    wallpaper,
-                    runtime: runtime,
-                    properties: properties,
-                    fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps),
-                    displayIDs: displayIDs
-                )
-                viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                    title: L("已设为动态锁屏"),
-                    message: L("“%@”已部署到锁屏扩展。", sourceWallpaper.project.title)
-                )
-            } catch {
-                presentProtectedPlaybackError(error, title: L("设置动态锁屏失败"))
-            }
-        }
+        setAsScreenSaverDynamicLockScreen()
     }
 
     private func setAsScreenSaverDynamicLockScreen() {
@@ -360,12 +318,12 @@ struct ExplorerItemMenu: SubviewOfContentView {
         guard manager.isAvailable else {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
                 title: L("动态锁屏不可用"),
-                message: L("动态锁屏方案 B 需要 macOS 14.2 或更高版本。")
+                message: L("动态锁屏需要 macOS 14.2 或更高版本。")
             )
             return
         }
         guard manager.isEnabled else {
-            manager.requestEnable()
+            manager.requestEnable { setAsScreenSaverDynamicLockScreen() }
             return
         }
         let sourceWallpaper = hoveredWallpaper
@@ -385,7 +343,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 )
                 viewModel.screenSaverFeedback = ScreenSaverFeedback(
                     title: L("已设为动态锁屏"),
-                    message: L("“%@”已设为方案 B 锁屏壁纸。", sourceWallpaper.project.title)
+                    message: L("锁屏时将播放“%@”，解锁后会恢复原桌面墙纸。", sourceWallpaper.project.title)
                 )
             } catch {
                 presentProtectedPlaybackError(error, title: L("设置动态锁屏失败"))
