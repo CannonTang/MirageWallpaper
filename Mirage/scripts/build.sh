@@ -95,6 +95,24 @@ APP="$BUILD_DIR/DD/Build/Products/$CONFIG/Mirage Wallpaper.app"
 echo "[build] 内嵌渲染器与依赖..."
 bash "$HERE/bundle_renderers.sh" "$APP" "$ROOT" "$SIGN_IDENTITY"
 
+echo "[build] 校验完整运行时组件..."
+REQUIRED_RUNTIME_PATHS=(
+    "Contents/Resources/Renderers/SceneWallpaper"
+    "Contents/Resources/Renderers/WebWallpaper"
+    "Contents/Resources/Renderers/VideoWallpaper"
+    "Contents/Resources/Screen Savers/MirageScreenSaver.saver/Contents/MacOS/MirageScreenSaver"
+    "Contents/Resources/Screen Savers/MirageScreenSaver.saver/Contents/Frameworks/libMirageSceneSaver.dylib"
+    "Contents/Resources/Screen Savers/MirageDynamicLockScreen.saver/Contents/MacOS/MirageScreenSaver"
+    "Contents/Resources/Screen Savers/MirageDynamicLockScreen.saver/Contents/Frameworks/libMirageSceneSaver.dylib"
+    "Contents/Extensions/MirageWallpaperExtension.appex/Contents/Frameworks/libMirageSceneSaver.dylib"
+)
+for relative_path in "${REQUIRED_RUNTIME_PATHS[@]}"; do
+    [ -f "$APP/$relative_path" ] || {
+        echo "[build] 运行时组件缺失: $relative_path" >&2
+        exit 1
+    }
+done
+
 OUT="$PROJ_DIR/dist"
 mkdir -p "$OUT"
 rm -rf "$OUT/Mirage.app"

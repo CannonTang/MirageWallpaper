@@ -138,14 +138,49 @@ final class ScreenSaverManager {
     }
 
     func installDynamicLockScreen() throws {
-        guard let bundledURL = bundledDynamicLockScreenSaverURL else {
-            throw MirageScreenSaverError.bundledSaverMissing
+        let generatedURL: URL?
+        let bundledURL: URL
+        if let dedicatedURL = bundledDynamicLockScreenSaverURL {
+            bundledURL = dedicatedURL
+            generatedURL = nil
+        } else {
+            guard let baseURL = bundledSaverURL else {
+                throw MirageScreenSaverError.bundledSaverMissing
+            }
+            let fallbackURL = fm.temporaryDirectory.appending(
+                path: "MirageDynamicLockScreen-\(UUID().uuidString).saver")
+            try fm.copyItem(at: baseURL, to: fallbackURL)
+            do {
+                try rewriteDynamicLockScreenInfo(at: fallbackURL)
+            } catch {
+                try? fm.removeItem(at: fallbackURL)
+                throw error
+            }
+            bundledURL = fallbackURL
+            generatedURL = fallbackURL
+        }
+        defer {
+            if let generatedURL { try? fm.removeItem(at: generatedURL) }
         }
         try installComponent(
             bundledURL: bundledURL,
             installedURL: dynamicLockScreenInstalledURL,
             bundleIdentifier: "cn.laobamac.Mirage.DynamicLockScreen",
             executableName: "MirageScreenSaver")
+    }
+
+    private func rewriteDynamicLockScreenInfo(at saverURL: URL) throws {
+        let infoURL = saverURL.appending(path: "Contents/Info.plist")
+        guard let data = try? Data(contentsOf: infoURL),
+              var info = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil) as? [String: Any]
+        else { throw MirageScreenSaverError.invalidBundle }
+        info["CFBundleIdentifier"] = "cn.laobamac.Mirage.DynamicLockScreen"
+        info["CFBundleDisplayName"] = "Mirage 锁屏组件"
+        info["CFBundleName"] = "Mirage 锁屏组件"
+        let rewritten = try PropertyListSerialization.data(
+            fromPropertyList: info, format: .binary, options: 0)
+        try rewritten.write(to: infoURL, options: .atomic)
     }
 
     private func installComponent(bundledURL: URL, installedURL: URL,
