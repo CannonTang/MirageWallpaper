@@ -99,6 +99,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
     @Published var isSteamSetupPresented = false
     @Published var isImportCenterPresented = false
+    @Published var editingShadertoyWallpaper: WEWallpaper?
     
     @AppStorage("WallpapersPerPage") var wallpapersPerPage: Int = 50 {
         didSet { currentPage = 1 }

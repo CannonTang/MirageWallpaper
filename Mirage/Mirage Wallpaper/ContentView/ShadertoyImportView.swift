@@ -16,8 +16,28 @@ private enum ShadertoyPreviewStatus: Equatable {
     case failed(String)
 }
 
+private enum ShadertoyPerformancePreset: String, CaseIterable, Identifiable {
+    case battery
+    case balanced
+    case quality
+    case extreme
+    case custom
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .battery: return "省电"
+        case .balanced: return "平衡"
+        case .quality: return "高质量"
+        case .extreme: return "极致"
+        case .custom: return "自定义"
+        }
+    }
+}
+
 private final class ShadertoyEditorModel: ObservableObject {
-    @Published var draft = ShadertoyProjectDraft()
+    @Published var draft: ShadertoyProjectDraft
     @Published var selectedPass: ShadertoyPassID = .image
     @Published var previewHTML = ""
     @Published var previewRevision = UUID()
@@ -27,6 +47,19 @@ private final class ShadertoyEditorModel: ObservableObject {
     @Published var errorMessage: String?
     private var draftVersion = UUID()
     private var previewedDraftVersion: UUID?
+
+    init(editingWallpaper: WEWallpaper?) {
+        if let editingWallpaper {
+            do {
+                draft = try ShadertoyPackageBuilder.loadDraft(from: editingWallpaper)
+            } catch {
+                draft = ShadertoyProjectDraft()
+                errorMessage = error.localizedDescription
+            }
+        } else {
+            draft = ShadertoyProjectDraft()
+        }
+    }
 
     func refreshPreview() {
         errorMessage = nil
@@ -71,6 +104,41 @@ private final class ShadertoyEditorModel: ObservableObject {
         invalidatePreview()
     }
 
+    func updateMaxDimension(_ value: Int) {
+        guard draft.maxDimension != value else { return }
+        draft.maxDimension = value
+        invalidatePreview()
+    }
+
+    var performancePreset: ShadertoyPerformancePreset {
+        switch (draft.renderScale, draft.fpsLimit, draft.maxDimension) {
+        case (0.5, 30, 1920): return .battery
+        case (0.75, 45, 2560): return .balanced
+        case (1.0, 60, 4096): return .quality
+        case (1.0, 120, 8192): return .extreme
+        default: return .custom
+        }
+    }
+
+    func applyPerformancePreset(_ preset: ShadertoyPerformancePreset) {
+        var next = draft
+        switch preset {
+        case .battery:
+            (next.renderScale, next.fpsLimit, next.maxDimension) = (0.5, 30, 1920)
+        case .balanced:
+            (next.renderScale, next.fpsLimit, next.maxDimension) = (0.75, 45, 2560)
+        case .quality:
+            (next.renderScale, next.fpsLimit, next.maxDimension) = (1.0, 60, 4096)
+        case .extreme:
+            (next.renderScale, next.fpsLimit, next.maxDimension) = (1.0, 120, 8192)
+        case .custom:
+            return
+        }
+        guard next != draft else { return }
+        draft = next
+        invalidatePreview()
+    }
+
     func handlePreviewStatus(_ status: ShadertoyPreviewStatus) {
         guard previewedDraftVersion == draftVersion else { return }
         previewStatus = status
@@ -78,8 +146,16 @@ private final class ShadertoyEditorModel: ObservableObject {
 
     var hasCurrentSuccessfulPreview: Bool {
         guard previewedDraftVersion == draftVersion,
-              case .ready = previewStatus else { return false }
+              case .ready = previewStatus,
+              previewPNG?.isEmpty == false else { return false }
         return true
+    }
+
+    func handleSnapshot(_ data: Data) {
+        guard previewedDraftVersion == draftVersion,
+              case .ready = previewStatus,
+              !data.isEmpty else { return }
+        previewPNG = data
     }
 
     private func invalidatePreview() {
@@ -95,8 +171,24 @@ struct ShadertoyImportView: View {
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     let onBack: () -> Void
     let onComplete: () -> Void
+    let editingWallpaper: WEWallpaper?
 
-    @StateObject private var model = ShadertoyEditorModel()
+    @StateObject private var model: ShadertoyEditorModel
+
+    init(contentViewModel: ContentViewModel,
+         wallpaperViewModel: WallpaperViewModel,
+         editingWallpaper: WEWallpaper? = nil,
+         onBack: @escaping () -> Void,
+         onComplete: @escaping () -> Void) {
+        self.contentViewModel = contentViewModel
+        self.wallpaperViewModel = wallpaperViewModel
+        self.editingWallpaper = editingWallpaper
+        self.onBack = onBack
+        self.onComplete = onComplete
+        _model = StateObject(
+            wrappedValue: ShadertoyEditorModel(editingWallpaper: editingWallpaper)
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,7 +226,18 @@ struct ShadertoyImportView: View {
 
             Spacer()
 
-            Picker("渲染比例", selection: Binding(
+            Picker("优化", selection: Binding(
+                get: { model.performancePreset },
+                set: { model.applyPerformancePreset($0) }
+            )) {
+                ForEach(ShadertoyPerformancePreset.allCases) { preset in
+                    Text(preset.displayName).tag(preset)
+                }
+            }
+            .help("一键选择性能与画质组合；单独修改后显示为自定义")
+            .frame(width: 125)
+
+            Picker("渲染精度", selection: Binding(
                 get: { model.draft.renderScale },
                 set: { model.updateRenderScale($0) }
             )) {
@@ -143,18 +246,36 @@ struct ShadertoyImportView: View {
                 Text("75%").tag(0.75)
                 Text("100%").tag(1.0)
             }
-            .frame(width: 150)
+            .help("按屏幕分辨率的比例渲染；数值越低越省 GPU")
+            .frame(width: 145)
 
             Picker("FPS", selection: Binding(
                 get: { model.draft.fpsLimit },
                 set: { model.updateFPSLimit($0) }
             )) {
                 Text("15").tag(15)
+                Text("24").tag(24)
                 Text("30").tag(30)
                 Text("45").tag(45)
                 Text("60").tag(60)
+                Text("90").tag(90)
+                Text("120").tag(120)
             }
+            .help("限制每秒渲染帧数；30 FPS 通常更省电")
             .frame(width: 105)
+
+            Picker("分辨率上限", selection: Binding(
+                get: { model.draft.maxDimension },
+                set: { model.updateMaxDimension($0) }
+            )) {
+                Text("720p").tag(1280)
+                Text("1080p").tag(1920)
+                Text("1440p").tag(2560)
+                Text("4K").tag(4096)
+                Text("8K").tag(8192)
+            }
+            .help("限制渲染缓冲区最长边，避免高分屏占用过多显存")
+            .frame(width: 150)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -309,7 +430,7 @@ struct ShadertoyImportView: View {
                         html: model.previewHTML,
                         revision: model.previewRevision,
                         onStatus: { status in model.handlePreviewStatus(status) },
-                        onSnapshot: { data in model.previewPNG = data }
+                        onSnapshot: { data in model.handleSnapshot(data) }
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
@@ -364,8 +485,13 @@ struct ShadertoyImportView: View {
             Label("编译中", systemImage: "clock")
                 .foregroundStyle(.secondary)
         case .ready:
-            Label("编译成功", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            if model.previewPNG == nil {
+                Label("正在生成封面", systemImage: "camera")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("预览与封面已更新", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
         case .failed:
             Label("编译失败", systemImage: "xmark.circle.fill")
                 .foregroundStyle(.red)
@@ -388,10 +514,10 @@ struct ShadertoyImportView: View {
                 Button("返回", action: onBack)
                     .disabled(model.isSaving)
                 Button("仅保存") { save(apply: false) }
-                    .disabled(model.isSaving)
+                    .disabled(model.isSaving || !model.hasCurrentSuccessfulPreview)
                 Button("保存并应用") { save(apply: true) }
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.isSaving)
+                    .disabled(model.isSaving || !model.hasCurrentSuccessfulPreview)
             }
         }
         .padding(.horizontal, 18)
@@ -464,6 +590,9 @@ struct ShadertoyImportView: View {
             model.updateChannel(index) {
                 $0.source = .texture
                 $0.textureURL = url
+                $0.textureFormat = nil
+                $0.textureWidth = nil
+                $0.textureHeight = nil
             }
         }
     }
@@ -471,7 +600,7 @@ struct ShadertoyImportView: View {
     private func save(apply: Bool) {
         model.errorMessage = nil
         guard model.hasCurrentSuccessfulPreview else {
-            model.errorMessage = "请先点击“编译并刷新预览”，确认当前代码可以运行"
+            model.errorMessage = "请先刷新预览，并等待最新封面生成完成"
             return
         }
         do {
@@ -483,13 +612,27 @@ struct ShadertoyImportView: View {
 
         model.isSaving = true
         let draft = model.draft
-        let preview = model.previewPNG
+        guard let preview = model.previewPNG else {
+            model.isSaving = false
+            model.errorMessage = "最新预览图尚未生成，请稍候再保存"
+            return
+        }
+        let original = editingWallpaper
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let destination = try WallpaperLibrary.shared.createShadertoyWallpaper(
-                    from: draft,
-                    previewPNG: preview
-                )
+                let destination: URL
+                if let original {
+                    destination = try WallpaperLibrary.shared.updateShadertoyWallpaper(
+                        original,
+                        from: draft,
+                        previewPNG: preview
+                    )
+                } else {
+                    destination = try WallpaperLibrary.shared.createShadertoyWallpaper(
+                        from: draft,
+                        previewPNG: preview
+                    )
+                }
                 let wallpaper = WEWallpaper.load(from: destination)
                 DispatchQueue.main.async {
                     WEWallpaper.invalidateSizeCache()
@@ -498,10 +641,15 @@ struct ShadertoyImportView: View {
                     // base64-encoded JSON and reaches WebGL only as GLSL source.
                     wallpaperViewModel.trust(wallpaper)
                     if apply, wallpaper.isValid {
+                        let runtime = original.map {
+                            wallpaperViewModel.loadRuntime(for: $0)
+                        } ?? WallpaperRuntimeState()
                         wallpaperViewModel.applyImportedWallpaper(
                             wallpaper,
-                            runtime: WallpaperRuntimeState()
+                            runtime: runtime
                         )
+                    } else if original != nil {
+                        wallpaperViewModel.refreshStoredWallpaperReference(wallpaper)
                     }
                     model.isSaving = false
                     onComplete()
@@ -574,7 +722,7 @@ private struct ShadertoyPreviewWebView: NSViewRepresentable {
                 terminalStatus = type
                 parent.onStatus(.ready(text))
                 guard let webView else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     self.capture(webView)
                 }
             case "error":

@@ -58,7 +58,16 @@ final class WorkshopImageLoader {
     }
 
     private func memoryKey(_ url: URL, _ px: Int) -> NSString {
-        "\(url.absoluteString)#\(px)" as NSString
+        "\(sourceIdentity(url))#\(px)" as NSString
+    }
+
+    private func sourceIdentity(_ url: URL) -> String {
+        guard url.isFileURL,
+              let values = try? url.resourceValues(
+                  forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return url.absoluteString
+        }
+        return "\(url.absoluteString)#\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(values.fileSize ?? 0)"
     }
 
     private func diskURL(for url: URL) -> URL {
@@ -77,18 +86,18 @@ final class WorkshopImageLoader {
     }
 
     private func cachedAnimatedFlag(_ url: URL) -> Bool? {
-        animatedFlags.object(forKey: url.absoluteString as NSString)?.boolValue
+        animatedFlags.object(forKey: sourceIdentity(url) as NSString)?.boolValue
     }
 
     private func setAnimatedFlag(_ value: Bool, for url: URL) {
-        animatedFlags.setObject(NSNumber(value: value), forKey: url.absoluteString as NSString)
+        animatedFlags.setObject(NSNumber(value: value), forKey: sourceIdentity(url) as NSString)
     }
 
     func load(url: URL, targetSize: CGSize, scale: CGFloat,
               completion: @escaping (NSImage?, Data?) -> Void) {
         let px = maxPixel(for: targetSize, scale: scale)
         let key = memoryKey(url, px)
-        let dataKey = url.absoluteString as NSString
+        let dataKey = sourceIdentity(url) as NSString
         if let image = memory.object(forKey: key), let animated = cachedAnimatedFlag(url) {
             guard animated else {
                 completion(image, nil)

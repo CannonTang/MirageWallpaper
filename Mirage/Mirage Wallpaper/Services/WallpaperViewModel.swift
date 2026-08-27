@@ -216,6 +216,40 @@ class WallpaperViewModel: ObservableObject {
         return updated
     }
 
+    /// Replaces stale in-memory references after an editable package was
+    /// rebuilt at the same directory. This refreshes titles and preview paths
+    /// without implicitly restarting a wallpaper the user only chose to save.
+    func refreshStoredWallpaperReference(_ updated: WEWallpaper) {
+        let targetID = updated.id
+        var states = displayStates
+        for displayKey in states.keys where states[displayKey]?.wallpaper.id == targetID {
+            states[displayKey]?.wallpaper = updated
+        }
+        displayStates = states
+
+        var currentWallpapers = currentByScreen
+        for screen in currentWallpapers.keys where currentWallpapers[screen]?.id == targetID {
+            currentWallpapers[screen] = updated
+        }
+        currentByScreen = currentWallpapers
+
+        for displayID in pendingAssignmentProposals.keys {
+            guard let proposals = pendingAssignmentProposals[displayID] else { continue }
+            pendingAssignmentProposals[displayID] = proposals.map { proposal in
+                guard proposal.state.wallpaper.id == targetID else { return proposal }
+                var state = proposal.state
+                state.wallpaper = updated
+                return PendingAssignmentProposal(
+                    id: proposal.id,
+                    key: proposal.key,
+                    state: state,
+                    restoreFocus: proposal.restoreFocus
+                )
+            }
+        }
+        persistStates()
+    }
+
     var runtime: WallpaperRuntimeState {
         get { runtime(for: selectedDisplayKey) }
         set {

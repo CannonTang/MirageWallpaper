@@ -28,6 +28,13 @@ struct ExplorerItemMenu: SubviewOfContentView {
     var body: some View {
         Group {
             Section {
+                if isEditableShader {
+                    Button {
+                        viewModel.editingShadertoyWallpaper = hoveredWallpaper
+                    } label: {
+                        Label("编辑 Shader 壁纸", systemImage: "function")
+                    }
+                }
                 if displays.count > 1 {
                     Menu {
                         ForEach(displays) { info in
@@ -175,6 +182,11 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
     private var canApply: Bool {
         hoveredWallpaper.isValid && hoveredWallpaper.kind != .unsupported
+    }
+
+    private var isEditableShader: Bool {
+        WallpaperLibrary.shared.isImported(hoveredWallpaper)
+            && ShadertoyPackageBuilder.canEdit(hoveredWallpaper)
     }
 
     private var isFavorite: Bool {

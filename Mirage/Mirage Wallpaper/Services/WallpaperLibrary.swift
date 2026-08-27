@@ -516,6 +516,52 @@ final class WallpaperLibrary {
         return dest
     }
 
+    /// Rebuilds a Mirage-owned Shader package in place. The editor first writes
+    /// a complete sibling package, then swaps directories, so reopening a draft
+    /// whose textures live inside the old package remains safe.
+    @discardableResult
+    func updateShadertoyWallpaper(_ wallpaper: WEWallpaper,
+                                  from draft: ShadertoyProjectDraft,
+                                  previewPNG: Data) throws -> URL {
+        guard isImported(wallpaper), ShadertoyPackageBuilder.canEdit(wallpaper) else {
+            throw ShadertoyProjectError.notEditable
+        }
+        let destination = wallpaper.wallpaperDirectory.standardizedFileURL
+        let parent = destination.deletingLastPathComponent()
+        let staging = parent.appending(
+            path: ".mirage-shader-edit-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        let backup = parent.appending(
+            path: ".mirage-shader-backup-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        do {
+            try ShadertoyPackageBuilder.writePackage(
+                draft,
+                to: staging,
+                previewPNG: previewPNG
+            )
+            try fm.moveItem(at: destination, to: backup)
+            do {
+                try fm.moveItem(at: staging, to: destination)
+            } catch {
+                try? fm.moveItem(at: backup, to: destination)
+                throw error
+            }
+            try? fm.removeItem(at: backup)
+        } catch {
+            try? fm.removeItem(at: staging)
+            if fm.fileExists(atPath: backup.path), !fm.fileExists(atPath: destination.path) {
+                try? fm.moveItem(at: backup, to: destination)
+            }
+            if let shaderError = error as? ShadertoyProjectError { throw shaderError }
+            throw ShadertoyProjectError.packageWriteFailed(error.localizedDescription)
+        }
+        libraryDidChange(at: destination)
+        return destination
+    }
+
     @discardableResult
     func importAny(at url: URL) throws -> URL {
         let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false

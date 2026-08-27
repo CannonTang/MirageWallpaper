@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 
 private enum ImportCenterRoute {
     case home
-    case shader
+    case shader(WEWallpaper?)
     case video(URL)
     case workshopMigration(URL)
 }
@@ -24,6 +24,14 @@ struct ImportCenterView: View {
     @State private var isDropTargeted = false
     @AppStorage("LastWallpaperImportDirectory") private var lastImportDirectory = ""
 
+    init(contentViewModel: ContentViewModel,
+         wallpaperViewModel: WallpaperViewModel,
+         editingWallpaper: WEWallpaper? = nil) {
+        self.contentViewModel = contentViewModel
+        self.wallpaperViewModel = wallpaperViewModel
+        _route = State(initialValue: editingWallpaper.map { .shader($0) } ?? .home)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -32,11 +40,14 @@ struct ImportCenterView: View {
                 switch route {
                 case .home:
                     home
-                case .shader:
+                case .shader(let wallpaper):
                     ShadertoyImportView(
                         contentViewModel: contentViewModel,
                         wallpaperViewModel: wallpaperViewModel,
-                        onBack: { route = .home },
+                        editingWallpaper: wallpaper,
+                        onBack: {
+                            if wallpaper == nil { route = .home } else { dismiss() }
+                        },
                         onComplete: { dismiss() }
                     )
                 case .video(let url):
@@ -68,14 +79,14 @@ struct ImportCenterView: View {
                     .foregroundStyle(Color.accentColor)
             } else {
                 Button {
-                    route = .home
+                    if isEditingShader { dismiss() } else { route = .home }
                 } label: {
                     Image(systemName: "chevron.left")
                 }
                 .buttonStyle(.borderless)
-                .help("返回导入中心")
+                .help(isEditingShader ? "关闭编辑器" : "返回导入中心")
             }
-            Text("添加壁纸")
+            Text(isEditingShader ? "编辑 Shader 壁纸" : "添加壁纸")
                 .font(.title2.bold())
             Spacer()
             Button("关闭") { dismiss() }
@@ -104,7 +115,7 @@ struct ImportCenterView: View {
                     detail: "直接粘贴 Shadertoy 代码，支持 Image、Buffer 和纹理通道。",
                     systemImage: "function",
                     tint: .cyan,
-                    action: { route = .shader }
+                    action: { route = .shader(nil) }
                 )
                 ImportChoiceCard(
                     title: "添加本地视频",
@@ -162,6 +173,11 @@ struct ImportCenterView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
+    }
+
+    private var isEditingShader: Bool {
+        if case .shader(let wallpaper) = route { return wallpaper != nil }
+        return false
     }
 
     private func configuredPanel() -> NSOpenPanel {

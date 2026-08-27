@@ -28,6 +28,7 @@ struct ExplorerItem: View {
                     animatedPreviewMode == .visible),
                 isLoadingEnabled: isActive
             )
+            .id(previewRevision)
             .scaleEffect(hovering ? 1.03 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
             .clipped()
@@ -102,5 +103,15 @@ struct ExplorerItem: View {
             return wallpaper.kind == .video ? "play.rectangle.fill" : "folder.fill"
         }
         return "shippingbox.fill"
+    }
+
+    private var previewRevision: String {
+        let url = wallpaper.previewURL
+        guard url.isFileURL,
+              let values = try? url.resourceValues(
+                  forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return url.absoluteString
+        }
+        return "\(url.path)#\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(values.fileSize ?? 0)"
     }
 }

@@ -101,11 +101,18 @@ struct GifImage: NSViewRepresentable {
             imageView.image = nil
             return
         }
-        // Identity is derived only from the URL and the animate flag — no
-        // per-update filesystem stat. Wallpaper preview files are effectively
-        // immutable for a given path, so this is safe and avoids a stat storm
-        // when the whole grid rebuilds.
-        let identity = url.path + (animates ? "#animated" : "#static")
+        // Local Shader previews are intentionally rewritten at the same path
+        // after each edit. Include the file revision so the detail pane cannot
+        // keep showing the old cached frame.
+        let revision: String
+        if url.isFileURL,
+           let values = try? url.resourceValues(
+               forKeys: [.contentModificationDateKey, .fileSizeKey]) {
+            revision = "#\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(values.fileSize ?? 0)"
+        } else {
+            revision = ""
+        }
+        let identity = url.path + revision + (animates ? "#animated" : "#static")
         guard coordinator.imageIdentity != identity else { return }
         coordinator.imageIdentity = identity
         coordinator.loadToken &+= 1

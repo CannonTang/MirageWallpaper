@@ -201,6 +201,17 @@ struct WallpaperPreview: SubviewOfContentView {
                     }
                     workshopActions
 
+                    if isEditableShader {
+                        sectionHeader("Shader")
+                        Button {
+                            viewModel.editingShadertoyWallpaper = wallpaperViewModel.currentWallpaper
+                        } label: {
+                            Label("编辑 Shader 与性能", systemImage: "function")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
                     sectionHeader("播放控制")
                     VStack(spacing: 16) {
                         HStack {
@@ -346,6 +357,12 @@ struct WallpaperPreview: SubviewOfContentView {
         } message: { _ in
             Text("取消订阅后，Mirage 会停止下载并删除 Mirage 下载目录中的副本。Steam 内容目录中的文件不会被删除。")
         }
+    }
+
+    private var isEditableShader: Bool {
+        let wallpaper = wallpaperViewModel.currentWallpaper
+        return WallpaperLibrary.shared.isImported(wallpaper)
+            && ShadertoyPackageBuilder.canEdit(wallpaper)
     }
 
     @ViewBuilder

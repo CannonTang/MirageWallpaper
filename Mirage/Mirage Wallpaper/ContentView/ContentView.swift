@@ -313,6 +313,14 @@ struct ContentView: View {
             )
             .frame(minWidth: 940, idealWidth: 1120, minHeight: 680, idealHeight: 760)
         }
+        .sheet(item: $viewModel.editingShadertoyWallpaper) { wallpaper in
+            ImportCenterView(
+                contentViewModel: viewModel,
+                wallpaperViewModel: wallpaperViewModel,
+                editingWallpaper: wallpaper
+            )
+            .frame(minWidth: 1040, idealWidth: 1240, minHeight: 700, idealHeight: 800)
+        }
         // Applied outside the sheets so the card also floats over an open sheet,
         // and after them so it is the topmost layer in the window.
         .overlay(alignment: .bottomTrailing) {

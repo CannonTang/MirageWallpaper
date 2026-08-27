@@ -89,6 +89,13 @@ enum ShadertoyTextureWrap: String, CaseIterable, Codable, Identifiable {
 struct ShadertoyChannelDraft: Equatable {
     var source: ShadertoyChannelSource = .none
     var textureURL: URL?
+    /// Set when an editable package is reopened and its OpenEXR source has
+    /// already been converted to the runtime's raw half-float representation.
+    /// Keeping this metadata makes the generated package a lossless editor
+    /// source without requiring the original external EXR file to remain.
+    var textureFormat: String?
+    var textureWidth: Int?
+    var textureHeight: Int?
     var filter: ShadertoyTextureFilter = .linear
     var wrap: ShadertoyTextureWrap = .repeatTexture
     var flipY = true
@@ -115,6 +122,7 @@ struct ShadertoyProjectDraft: Equatable {
     var author = "本地创建"
     var renderScale = 1.0
     var fpsLimit = 60
+    var maxDimension = 4096
     var passes: [ShadertoyPassDraft]
 
     init() {
@@ -157,6 +165,8 @@ enum ShadertoyProjectError: LocalizedError {
     case exrDimensionsInvalid(String)
     case sourceTooLarge
     case runtimeMissing
+    case notEditable
+    case invalidEditorData(String)
     case packageWriteFailed(String)
 
     var errorDescription: String? {
@@ -179,6 +189,10 @@ enum ShadertoyProjectError: LocalizedError {
             return "Shader 源码总大小超过 2 MB"
         case .runtimeMissing:
             return "应用内缺少 ShadertoyRuntime.js"
+        case .notEditable:
+            return "这不是由 Mirage Shader 编辑器创建的壁纸"
+        case .invalidEditorData(let message):
+            return "无法读取 Shader 编辑数据：\(message)"
         case .packageWriteFailed(let message):
             return "Shader 壁纸保存失败：\(message)"
         }
@@ -231,6 +245,71 @@ enum ShadertoyPackageBuilder {
         let rgba16F: Data
     }
 
+    static func canEdit(_ wallpaper: WEWallpaper) -> Bool {
+        guard wallpaper.kind == .web,
+              wallpaper.project.file == "index.html" else { return false }
+        return FileManager.default.fileExists(
+            atPath: wallpaper.wallpaperDirectory.appending(path: "shader.json").path
+        )
+    }
+
+    static func loadDraft(from wallpaper: WEWallpaper) throws -> ShadertoyProjectDraft {
+        guard canEdit(wallpaper) else { throw ShadertoyProjectError.notEditable }
+        let directory = wallpaper.wallpaperDirectory.standardizedFileURL
+        do {
+            let data = try Data(contentsOf: directory.appending(path: "shader.json"))
+            let config = try JSONDecoder().decode(ShadertoyRuntimeConfig.self, from: data)
+            var draft = ShadertoyProjectDraft()
+            draft.title = wallpaper.project.title
+            draft.author = wallpaper.project.author ?? ""
+            draft.renderScale = min(1, max(0.25, config.renderScale))
+            draft.fpsLimit = min(120, max(1, config.fpsLimit))
+            draft.maxDimension = min(8192, max(720, config.maxDimension))
+            draft.updatePass(.common) { $0.code = config.commonCode }
+
+            for runtimePass in config.passes {
+                guard let passID = ShadertoyPassID(rawValue: runtimePass.id),
+                      passID.isRenderable else { continue }
+                draft.updatePass(passID) { pass in
+                    pass.code = runtimePass.code
+                    for index in 0..<min(4, runtimePass.channels.count) {
+                        let runtimeChannel = runtimePass.channels[index]
+                        var channel = ShadertoyChannelDraft()
+                        channel.filter = ShadertoyTextureFilter(rawValue: runtimeChannel.filter) ?? .linear
+                        channel.wrap = ShadertoyTextureWrap(rawValue: runtimeChannel.wrap) ?? .repeatTexture
+                        channel.flipY = runtimeChannel.flipY
+                        switch runtimeChannel.kind {
+                        case "noise":
+                            channel.source = .noise
+                        case "buffer":
+                            channel.source = runtimeChannel.source.flatMap(ShadertoyChannelSource.init(rawValue:)) ?? .none
+                        case "texture":
+                            channel.source = .texture
+                            if let path = runtimeChannel.url,
+                               !path.lowercased().hasPrefix("data:"),
+                               let contained = PathContainment.containedURL(path, in: directory),
+                               FileManager.default.fileExists(atPath: contained.path) {
+                                channel.textureURL = contained
+                                channel.textureFormat = runtimeChannel.textureFormat
+                                channel.textureWidth = runtimeChannel.textureWidth
+                                channel.textureHeight = runtimeChannel.textureHeight
+                            }
+                        default:
+                            channel.source = .none
+                        }
+                        pass.channels[index] = channel
+                    }
+                }
+            }
+            try validate(draft)
+            return draft
+        } catch let error as ShadertoyProjectError {
+            throw error
+        } catch {
+            throw ShadertoyProjectError.invalidEditorData(error.localizedDescription)
+        }
+    }
+
     static func validate(_ draft: ShadertoyProjectDraft) throws {
         guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ShadertoyProjectError.emptyTitle
@@ -259,6 +338,15 @@ enum ShadertoyPackageBuilder {
                     guard size <= maximumTextureBytes else {
                         throw ShadertoyProjectError.textureTooLarge(url.lastPathComponent)
                     }
+                    if channel.textureFormat == "rgba16f" {
+                        guard let width = channel.textureWidth,
+                              let height = channel.textureHeight,
+                              width > 0, height > 0,
+                              width <= maximumDecodedTextureBytes / 8 / height,
+                              size == width * height * 8 else {
+                            throw ShadertoyProjectError.exrDimensionsInvalid(url.lastPathComponent)
+                        }
+                    }
                 }
             }
         }
@@ -266,8 +354,21 @@ enum ShadertoyPackageBuilder {
 
     static func makePreviewHTML(for draft: ShadertoyProjectDraft) throws -> String {
         try validate(draft)
-        let config = try runtimeConfig(for: draft) { textureURL in
-            if isOpenEXR(textureURL) {
+        let config = try runtimeConfig(for: draft) { channel in
+            guard let textureURL = channel.textureURL else {
+                throw ShadertoyProjectError.packageWriteFailed("纹理路径缺失")
+            }
+            if channel.textureFormat == "rgba16f",
+               let width = channel.textureWidth,
+               let height = channel.textureHeight {
+                let data = try Data(contentsOf: textureURL)
+                return TextureResource(
+                    url: "data:application/x-mirage-rgba16f;base64,\(data.base64EncodedString())",
+                    format: "rgba16f",
+                    width: width,
+                    height: height
+                )
+            } else if isOpenEXR(textureURL) {
                 let decoded = try decodeOpenEXR(textureURL)
                 return TextureResource(
                     url: "data:application/x-mirage-rgba16f;base64,\(decoded.rgba16F.base64EncodedString())",
@@ -299,13 +400,41 @@ enum ShadertoyPackageBuilder {
             var inlineEXRTextures: [String: TextureResource] = [:]
             var usedNames = Set<String>()
 
-            let config = try runtimeConfig(for: draft) { sourceURL in
+            let config = try runtimeConfig(for: draft) { channel in
+                guard let sourceURL = channel.textureURL else {
+                    throw ShadertoyProjectError.packageWriteFailed("纹理路径缺失")
+                }
                 let key = sourceURL.standardizedFileURL.path
                 if let existing = copiedTextures[key] { return existing }
                 if !fm.fileExists(atPath: textureDirectory.path) {
                     try fm.createDirectory(at: textureDirectory, withIntermediateDirectories: true)
                 }
-                if isOpenEXR(sourceURL) {
+                if channel.textureFormat == "rgba16f",
+                   let width = channel.textureWidth,
+                   let height = channel.textureHeight {
+                    let fileName = uniqueTextureName(
+                        for: sourceURL,
+                        used: &usedNames,
+                        forcedExtension: "rgba16f"
+                    )
+                    let relative = "textures/\(fileName)"
+                    let data = try Data(contentsOf: sourceURL)
+                    try data.write(to: destination.appending(path: relative), options: .atomic)
+                    let resource = TextureResource(
+                        url: relative,
+                        format: "rgba16f",
+                        width: width,
+                        height: height
+                    )
+                    copiedTextures[key] = resource
+                    inlineEXRTextures[key] = TextureResource(
+                        url: "data:application/x-mirage-rgba16f;base64,\(data.base64EncodedString())",
+                        format: "rgba16f",
+                        width: width,
+                        height: height
+                    )
+                    return resource
+                } else if isOpenEXR(sourceURL) {
                     let decoded = try decodeOpenEXR(sourceURL)
                     let fileName = uniqueTextureName(
                         for: sourceURL,
@@ -355,7 +484,10 @@ enum ShadertoyPackageBuilder {
             // files even when the page itself was loaded with file access. Keep
             // the original RGBA16F payload in textures/ for portability and
             // embed the EXR-derived data in index.html for reliable playback.
-            let indexConfig = try runtimeConfig(for: draft) { sourceURL in
+            let indexConfig = try runtimeConfig(for: draft) { channel in
+                guard let sourceURL = channel.textureURL else {
+                    throw ShadertoyProjectError.packageWriteFailed("纹理路径缺失")
+                }
                 let key = sourceURL.standardizedFileURL.path
                 if let inline = inlineEXRTextures[key] { return inline }
                 if let copied = copiedTextures[key] { return copied }
@@ -400,7 +532,7 @@ enum ShadertoyPackageBuilder {
 
     private static func runtimeConfig(
         for draft: ShadertoyProjectDraft,
-        textureURL: (URL) throws -> TextureResource
+        textureResource: (ShadertoyChannelDraft) throws -> TextureResource
     ) throws -> ShadertoyRuntimeConfig {
         var runtimePasses: [ShadertoyRuntimePass] = []
         for passID in ShadertoyPassID.renderOrder {
@@ -425,7 +557,7 @@ enum ShadertoyPackageBuilder {
                     guard let selectedURL = channel.textureURL else {
                         throw ShadertoyProjectError.missingTexture(passID, index)
                     }
-                    let resource = try textureURL(selectedURL)
+                    let resource = try textureResource(channel)
                     kind = "texture"; source = nil; url = resource.url
                     textureFormat = resource.format
                     textureWidth = resource.width
@@ -458,7 +590,7 @@ enum ShadertoyPackageBuilder {
             commonCode: draft.pass(.common).code,
             renderScale: min(1, max(0.25, draft.renderScale)),
             fpsLimit: min(120, max(1, draft.fpsLimit)),
-            maxDimension: 4096,
+            maxDimension: min(8192, max(720, draft.maxDimension)),
             passes: runtimePasses
         )
     }
