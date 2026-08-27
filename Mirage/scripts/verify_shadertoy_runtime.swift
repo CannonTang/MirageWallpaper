@@ -25,14 +25,24 @@ struct RuntimeCase {
     }
 }
 
-func channel(_ kind: String = "none", source: String? = nil) -> [String: Any] {
+func channel(_ kind: String = "none",
+             source: String? = nil,
+             url: String? = nil,
+             textureFormat: String? = nil,
+             textureWidth: Int? = nil,
+             textureHeight: Int? = nil,
+             flipY: Bool = true) -> [String: Any] {
     var value: [String: Any] = [
         "kind": kind,
         "filter": "linear",
         "wrap": "repeat",
-        "flipY": true
+        "flipY": flipY
     ]
     if let source { value["source"] = source }
+    if let url { value["url"] = url }
+    if let textureFormat { value["textureFormat"] = textureFormat }
+    if let textureWidth { value["textureWidth"] = textureWidth }
+    if let textureHeight { value["textureHeight"] = textureHeight }
     return value
 }
 
@@ -269,9 +279,35 @@ let invalid = RuntimeCase(
     expectsError: true
 )
 
+let halfFloatValues: [Float16] = [
+    4, 0, 0, 1,   0, 2, 0, 1,
+    0, 0, 3, 1,   1, 1, 1, 1
+]
+let halfFloatData = halfFloatValues.withUnsafeBytes { Data($0) }
+let halfFloatURL = "data:application/x-mirage-rgba16f;base64,\(halfFloatData.base64EncodedString())"
+var halfFloatChannels = Array(repeating: channel(), count: 4)
+halfFloatChannels[0] = channel(
+    "texture",
+    url: halfFloatURL,
+    textureFormat: "rgba16f",
+    textureWidth: 2,
+    textureHeight: 2,
+    flipY: false
+)
+let halfFloatTexture = RuntimeCase(
+    name: "rgba16f-texture",
+    config: config(passes: [pass("image", code: """
+    void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+        vec3 hdr = texture(iChannel0, fragCoord / iResolution.xy).rgb;
+        fragColor = vec4(hdr / (1.0 + hdr), 1.0);
+    }
+    """, channels: halfFloatChannels)]),
+    expectsError: false
+)
+
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
-var verificationCases = [starter, feedback, invalid]
+var verificationCases = [starter, feedback, halfFloatTexture, invalid]
 if arguments.count >= 4 {
     let packageDirectory = URL(fileURLWithPath: arguments[3], isDirectory: true)
     verificationCases.append(RuntimeCase(

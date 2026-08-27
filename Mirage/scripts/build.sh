@@ -19,6 +19,8 @@ DEVELOPMENT_TEAM="${MIRAGE_DEVELOPMENT_TEAM:-}"
 NOTARY_PROFILE="${MIRAGE_NOTARY_PROFILE:-}"
 NOTARY_TEMP_DIR=""
 
+mkdir -p "$BUILD_DIR"
+
 case "$TARGET_ARCH" in
     arm64|x86_64) ;;
     *) echo "[build] 不支持的更新架构: $TARGET_ARCH" >&2; exit 1 ;;

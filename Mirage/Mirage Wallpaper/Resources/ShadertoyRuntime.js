@@ -56,6 +56,7 @@
     report("error", "当前系统无法创建 WebGL 2 上下文");
     return;
   }
+  const floatLinearSupported = !!gl.getExtension("OES_texture_float_linear");
 
   const vertexSource = `#version 300 es
   precision highp float;
@@ -225,13 +226,113 @@
 
   const noiseTexture = createNoiseTexture();
   const imageTextures = new Map();
+  let textureLoadFailed = false;
+
+  function failTexture(record, key, error) {
+    record.error = true;
+    textureLoadFailed = true;
+    const detail = error && (error.message || error);
+    const label = String(key).startsWith("data:") ? "内嵌纹理" : key;
+    report("error", `纹理载入失败：${label}${detail ? `\n${detail}` : ""}`);
+  }
+
+  function flipHalfFloatRows(pixels, width, height) {
+    const rowElements = width * 4;
+    const temporary = new Uint16Array(rowElements);
+    for (let y = 0; y < Math.floor(height / 2); y += 1) {
+      const first = y * rowElements;
+      const second = (height - 1 - y) * rowElements;
+      temporary.set(pixels.subarray(first, first + rowElements));
+      pixels.copyWithin(first, second, second + rowElements);
+      pixels.set(temporary, second);
+    }
+  }
+
+  async function loadBinaryResource(url) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok && response.status !== 0) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.arrayBuffer();
+    } catch (fetchError) {
+      return await new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = () => {
+          if ((request.status >= 200 && request.status < 300) ||
+              (request.status === 0 && request.response)) {
+            resolve(request.response);
+          } else {
+            reject(new Error(`本地纹理读取失败（状态码 ${request.status}）`));
+          }
+        };
+        request.onerror = () => reject(fetchError || new Error("本地纹理读取失败"));
+        request.send();
+      });
+    }
+  }
+
+  async function loadHalfFloatTexture(record, channel, key) {
+    const width = Number(channel.textureWidth) || 0;
+    const height = Number(channel.textureHeight) || 0;
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+        width < 1 || height < 1 || width > 16384 || height > 16384) {
+      throw new Error(`RGBA16F 尺寸无效：${width} × ${height}`);
+    }
+    const buffer = await loadBinaryResource(key);
+    const expectedBytes = width * height * 4 * 2;
+    if (buffer.byteLength !== expectedBytes) {
+      throw new Error(`RGBA16F 数据长度错误：应为 ${expectedBytes} B，实际 ${buffer.byteLength} B`);
+    }
+    const pixels = new Uint16Array(buffer);
+    if (channel.flipY !== false) flipHalfFloatRows(pixels, width, height);
+
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0,
+      gl.RGBA, gl.HALF_FLOAT, pixels
+    );
+    const uploadError = gl.getError();
+    if (uploadError !== gl.NO_ERROR) {
+      gl.deleteTexture(texture);
+      throw new Error(`WebGL RGBA16F 上传失败（错误码 ${uploadError}）`);
+    }
+    record.texture = texture;
+    record.width = width;
+    record.height = height;
+    record.forceNearest = !floatLinearSupported;
+    record.ready = true;
+  }
 
   function imageTextureFor(channel) {
-    const key = channel.url || "";
+    const url = channel.url || "";
+    const key = `${channel.textureFormat || "image"}:${url}`;
     if (imageTextures.has(key)) return imageTextures.get(key);
-    const record = { texture: blackTexture, width: 1, height: 1, ready: false };
+    const record = {
+      texture: blackTexture,
+      width: 1,
+      height: 1,
+      ready: false,
+      error: false,
+      forceNearest: false
+    };
     imageTextures.set(key, record);
-    if (!key) return record;
+    if (!url) return record;
+
+    if (channel.textureFormat === "rgba16f") {
+      loadHalfFloatTexture(record, channel, url).catch(error => {
+        failTexture(record, url, error);
+      });
+      return record;
+    }
 
     const image = new Image();
     image.decoding = "async";
@@ -251,9 +352,9 @@
       record.ready = true;
     };
     image.onerror = () => {
-      console.error(`Mirage Shader: 无法载入纹理 ${key}`);
+      failTexture(record, url, "图片解码失败");
     };
-    image.src = key;
+    image.src = url;
     return record;
   }
 
@@ -339,9 +440,11 @@
     return true;
   }
 
-  function applySampling(texture, channel) {
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    const filter = channel.filter === "nearest" ? gl.NEAREST : gl.LINEAR;
+  function applySampling(resolved, channel) {
+    gl.bindTexture(gl.TEXTURE_2D, resolved.texture);
+    const filter = resolved.forceNearest || channel.filter === "nearest"
+      ? gl.NEAREST
+      : gl.LINEAR;
     const wrap = channel.wrap === "clamp" ? gl.CLAMP_TO_EDGE : gl.REPEAT;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
@@ -440,7 +543,7 @@
       const channel = channels[index] || { kind: "none" };
       const resolved = resolveChannel(channel);
       gl.activeTexture(gl.TEXTURE0 + index);
-      applySampling(resolved.texture, channel);
+      applySampling(resolved, channel);
       if (u.channels[index]) gl.uniform1i(u.channels[index], index);
       resolutions[index * 3] = resolved.width || 1;
       resolutions[index * 3 + 1] = resolved.height || 1;
@@ -484,7 +587,8 @@
 
     for (const pass of renderPasses) drawPass(pass, delta, frameRate);
     frame += 1;
-    if (!reportedReady && frame >= 1) {
+    const texturesReady = [...imageTextures.values()].every(record => record.ready);
+    if (!textureLoadFailed && !reportedReady && frame >= 1 && texturesReady) {
       reportedReady = true;
       report("ready", "Shader 编译成功");
     }

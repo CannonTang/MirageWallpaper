@@ -344,7 +344,7 @@ struct ShadertoyImportView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Label("可直接复制 Shadertoy 的 Common、Buffer A–D 和 Image 代码。", systemImage: "checkmark.circle")
-                Label("目前支持 2D 图片、内置噪声、多 Pass 和 Buffer 自反馈。", systemImage: "square.stack.3d.up")
+                Label("支持普通图片、HDR OpenEXR、内置噪声、多 Pass 和 Buffer 自反馈。", systemImage: "square.stack.3d.up")
                 Label("Sound、Cubemap、视频通道暂不支持。", systemImage: "info.circle")
             }
             .font(.caption)
@@ -452,9 +452,13 @@ struct ShadertoyImportView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP, .bmp]
+        var textureTypes: [UTType] = [.png, .jpeg, .gif, .webP, .bmp]
+        if let openEXR = UTType(filenameExtension: "exr") {
+            textureTypes.append(openEXR)
+        }
+        panel.allowedContentTypes = textureTypes
         panel.prompt = "选择纹理"
-        panel.message = "选择用于 iChannel\(index) 的 PNG、JPEG、GIF、WebP 或 BMP 图片"
+        panel.message = "选择用于 iChannel\(index) 的 PNG、JPEG、GIF、WebP、BMP 或 OpenEXR 纹理"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             model.updateChannel(index) {

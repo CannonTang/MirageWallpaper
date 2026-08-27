@@ -5,6 +5,7 @@
 //
 
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -50,7 +51,7 @@ enum ShadertoyChannelSource: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .none: return "未使用"
         case .noise: return "内置噪声纹理"
-        case .texture: return "本地图片"
+        case .texture: return "本地纹理"
         case .bufferA: return "Buffer A"
         case .bufferB: return "Buffer B"
         case .bufferC: return "Buffer C"
@@ -152,6 +153,8 @@ enum ShadertoyProjectError: LocalizedError {
     case missingBuffer(ShadertoyPassID, referencedBy: ShadertoyPassID)
     case missingTexture(ShadertoyPassID, Int)
     case textureTooLarge(String)
+    case exrDecodeFailed(String)
+    case exrDimensionsInvalid(String)
     case sourceTooLarge
     case runtimeMissing
     case packageWriteFailed(String)
@@ -168,6 +171,10 @@ enum ShadertoyProjectError: LocalizedError {
             return "\(pass.displayName) 的 iChannel\(index) 尚未选择图片"
         case .textureTooLarge(let name):
             return "纹理 \(name) 超过 64 MB，请先压缩"
+        case .exrDecodeFailed(let name):
+            return "无法解码 OpenEXR 纹理 \(name)"
+        case .exrDimensionsInvalid(let name):
+            return "OpenEXR 纹理 \(name) 的尺寸无效或解码后超过 128 MB"
         case .sourceTooLarge:
             return "Shader 源码总大小超过 2 MB"
         case .runtimeMissing:
@@ -182,6 +189,9 @@ struct ShadertoyRuntimeChannel: Codable, Equatable {
     let kind: String
     let source: String?
     let url: String?
+    let textureFormat: String?
+    let textureWidth: Int?
+    let textureHeight: Int?
     let filter: String
     let wrap: String
     let flipY: Bool
@@ -206,6 +216,20 @@ struct ShadertoyRuntimeConfig: Codable, Equatable {
 enum ShadertoyPackageBuilder {
     private static let maximumSourceBytes = 2 * 1024 * 1024
     private static let maximumTextureBytes = 64 * 1024 * 1024
+    private static let maximumDecodedTextureBytes = 128 * 1024 * 1024
+
+    private struct TextureResource {
+        let url: String
+        let format: String?
+        let width: Int?
+        let height: Int?
+    }
+
+    private struct DecodedEXRTexture {
+        let width: Int
+        let height: Int
+        let rgba16F: Data
+    }
 
     static func validate(_ draft: ShadertoyProjectDraft) throws {
         guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -243,9 +267,22 @@ enum ShadertoyPackageBuilder {
     static func makePreviewHTML(for draft: ShadertoyProjectDraft) throws -> String {
         try validate(draft)
         let config = try runtimeConfig(for: draft) { textureURL in
+            if isOpenEXR(textureURL) {
+                let decoded = try decodeOpenEXR(textureURL)
+                return TextureResource(
+                    url: "data:application/x-mirage-rgba16f;base64,\(decoded.rgba16F.base64EncodedString())",
+                    format: "rgba16f",
+                    width: decoded.width,
+                    height: decoded.height
+                )
+            }
             let data = try Data(contentsOf: textureURL)
-            let mime = mimeType(for: textureURL)
-            return "data:\(mime);base64,\(data.base64EncodedString())"
+            return TextureResource(
+                url: "data:\(mimeType(for: textureURL));base64,\(data.base64EncodedString())",
+                format: nil,
+                width: nil,
+                height: nil
+            )
         }
         return try html(config: config, runtime: runtimeSource(), inlineRuntime: true)
     }
@@ -258,7 +295,8 @@ enum ShadertoyPackageBuilder {
         do {
             try fm.createDirectory(at: destination, withIntermediateDirectories: false)
             let textureDirectory = destination.appending(path: "textures", directoryHint: .isDirectory)
-            var copiedTextures: [String: String] = [:]
+            var copiedTextures: [String: TextureResource] = [:]
+            var inlineEXRTextures: [String: TextureResource] = [:]
             var usedNames = Set<String>()
 
             let config = try runtimeConfig(for: draft) { sourceURL in
@@ -267,11 +305,39 @@ enum ShadertoyPackageBuilder {
                 if !fm.fileExists(atPath: textureDirectory.path) {
                     try fm.createDirectory(at: textureDirectory, withIntermediateDirectories: true)
                 }
+                if isOpenEXR(sourceURL) {
+                    let decoded = try decodeOpenEXR(sourceURL)
+                    let fileName = uniqueTextureName(
+                        for: sourceURL,
+                        used: &usedNames,
+                        forcedExtension: "rgba16f"
+                    )
+                    let relative = "textures/\(fileName)"
+                    try decoded.rgba16F.write(
+                        to: destination.appending(path: relative),
+                        options: .atomic
+                    )
+                    let resource = TextureResource(
+                        url: relative,
+                        format: "rgba16f",
+                        width: decoded.width,
+                        height: decoded.height
+                    )
+                    copiedTextures[key] = resource
+                    inlineEXRTextures[key] = TextureResource(
+                        url: "data:application/x-mirage-rgba16f;base64,\(decoded.rgba16F.base64EncodedString())",
+                        format: "rgba16f",
+                        width: decoded.width,
+                        height: decoded.height
+                    )
+                    return resource
+                }
                 let fileName = uniqueTextureName(for: sourceURL, used: &usedNames)
                 let relative = "textures/\(fileName)"
                 try fm.copyItem(at: sourceURL, to: destination.appending(path: relative))
-                copiedTextures[key] = relative
-                return relative
+                let resource = TextureResource(url: relative, format: nil, width: nil, height: nil)
+                copiedTextures[key] = resource
+                return resource
             }
 
             let runtime = try runtimeSource()
@@ -285,7 +351,19 @@ enum ShadertoyPackageBuilder {
             let shaderJSON = try encoder.encode(config)
             try shaderJSON.write(to: destination.appending(path: "shader.json"), options: .atomic)
 
-            let indexHTML = try html(config: config, runtime: runtime, inlineRuntime: false)
+            // WKWebView and some wallpaper hosts block fetch/XHR for local binary
+            // files even when the page itself was loaded with file access. Keep
+            // the original RGBA16F payload in textures/ for portability and
+            // embed the EXR-derived data in index.html for reliable playback.
+            let indexConfig = try runtimeConfig(for: draft) { sourceURL in
+                let key = sourceURL.standardizedFileURL.path
+                if let inline = inlineEXRTextures[key] { return inline }
+                if let copied = copiedTextures[key] { return copied }
+                throw ShadertoyProjectError.packageWriteFailed(
+                    "纹理缓存不完整：\(sourceURL.lastPathComponent)"
+                )
+            }
+            let indexHTML = try html(config: indexConfig, runtime: runtime, inlineRuntime: false)
             guard let indexData = indexHTML.data(using: .utf8) else {
                 throw ShadertoyProjectError.packageWriteFailed("无法编码 index.html")
             }
@@ -322,7 +400,7 @@ enum ShadertoyPackageBuilder {
 
     private static func runtimeConfig(
         for draft: ShadertoyProjectDraft,
-        textureURL: (URL) throws -> String
+        textureURL: (URL) throws -> TextureResource
     ) throws -> ShadertoyRuntimeConfig {
         var runtimePasses: [ShadertoyRuntimePass] = []
         for passID in ShadertoyPassID.renderOrder {
@@ -333,23 +411,36 @@ enum ShadertoyPackageBuilder {
                 let kind: String
                 let source: String?
                 let url: String?
+                let textureFormat: String?
+                let textureWidth: Int?
+                let textureHeight: Int?
                 switch channel.source {
                 case .none:
                     kind = "none"; source = nil; url = nil
+                    textureFormat = nil; textureWidth = nil; textureHeight = nil
                 case .noise:
                     kind = "noise"; source = nil; url = nil
+                    textureFormat = nil; textureWidth = nil; textureHeight = nil
                 case .texture:
                     guard let selectedURL = channel.textureURL else {
                         throw ShadertoyProjectError.missingTexture(passID, index)
                     }
-                    kind = "texture"; source = nil; url = try textureURL(selectedURL)
+                    let resource = try textureURL(selectedURL)
+                    kind = "texture"; source = nil; url = resource.url
+                    textureFormat = resource.format
+                    textureWidth = resource.width
+                    textureHeight = resource.height
                 case .bufferA, .bufferB, .bufferC, .bufferD:
                     kind = "buffer"; source = channel.source.rawValue; url = nil
+                    textureFormat = nil; textureWidth = nil; textureHeight = nil
                 }
                 return ShadertoyRuntimeChannel(
                     kind: kind,
                     source: source,
                     url: url,
+                    textureFormat: textureFormat,
+                    textureWidth: textureWidth,
+                    textureHeight: textureHeight,
                     filter: channel.filter.rawValue,
                     wrap: channel.wrap.rawValue,
                     flipY: channel.flipY
@@ -363,7 +454,7 @@ enum ShadertoyPackageBuilder {
             ))
         }
         return ShadertoyRuntimeConfig(
-            version: 1,
+            version: 2,
             commonCode: draft.pass(.common).code,
             renderScale: min(1, max(0.25, draft.renderScale)),
             fpsLimit: min(120, max(1, draft.fpsLimit)),
@@ -425,8 +516,59 @@ enum ShadertoyPackageBuilder {
         }
     }
 
-    private static func uniqueTextureName(for url: URL, used: inout Set<String>) -> String {
-        let ext = url.pathExtension.lowercased()
+    private static func isOpenEXR(_ url: URL) -> Bool {
+        url.pathExtension.caseInsensitiveCompare("exr") == .orderedSame
+    }
+
+    private static func decodeOpenEXR(_ url: URL) throws -> DecodedEXRTexture {
+        guard let image = CIImage(
+            contentsOf: url,
+            options: [.applyOrientationProperty: true]
+        ) else {
+            throw ShadertoyProjectError.exrDecodeFailed(url.lastPathComponent)
+        }
+
+        let extent = image.extent.integral
+        let width = Int(extent.width)
+        let height = Int(extent.height)
+        guard width > 0, height > 0,
+              width <= 16_384, height <= 16_384,
+              width <= maximumDecodedTextureBytes / 8 / height else {
+            throw ShadertoyProjectError.exrDimensionsInvalid(url.lastPathComponent)
+        }
+
+        let byteCount = width * height * 8
+        guard byteCount <= maximumDecodedTextureBytes,
+              let colorSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) else {
+            throw ShadertoyProjectError.exrDimensionsInvalid(url.lastPathComponent)
+        }
+
+        let context = CIContext(options: [
+            .workingColorSpace: colorSpace,
+            .outputColorSpace: colorSpace,
+            .cacheIntermediates: false
+        ])
+        var rgba16F = Data(count: byteCount)
+        rgba16F.withUnsafeMutableBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            context.render(
+                image,
+                toBitmap: baseAddress,
+                rowBytes: width * 8,
+                bounds: extent,
+                format: .RGBAh,
+                colorSpace: colorSpace
+            )
+        }
+        return DecodedEXRTexture(width: width, height: height, rgba16F: rgba16F)
+    }
+
+    private static func uniqueTextureName(
+        for url: URL,
+        used: inout Set<String>,
+        forcedExtension: String? = nil
+    ) -> String {
+        let ext = forcedExtension ?? url.pathExtension.lowercased()
         let originalStem = url.deletingPathExtension().lastPathComponent
         let stem = originalStem.replacingOccurrences(
             of: #"[^A-Za-z0-9_-]+"#,
