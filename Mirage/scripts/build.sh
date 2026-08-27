@@ -74,12 +74,18 @@ if [ "$SIGN_IDENTITY" != "-" ]; then
 fi
 
 echo "[build] 编译 ($CONFIG)..."
-xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
+XCODEBUILD_LOG="$BUILD_DIR/xcodebuild-$CONFIG.log"
+if ! xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_DIR/DD" \
     ARCHS="$TARGET_ARCH" ONLY_ACTIVE_ARCH=YES \
     CODE_SIGN_IDENTITY="$SIGN_IDENTITY" CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
-    build | tail -3
+    build > "$XCODEBUILD_LOG" 2>&1; then
+    echo "[build] Xcode 构建失败，完整日志: $XCODEBUILD_LOG" >&2
+    tail -120 "$XCODEBUILD_LOG" >&2
+    exit 1
+fi
+tail -3 "$XCODEBUILD_LOG"
 
 APP="$BUILD_DIR/DD/Build/Products/$CONFIG/Mirage Wallpaper.app"
 [ -d "$APP" ] || { echo "[build] 未找到产物: $APP" >&2; exit 1; }

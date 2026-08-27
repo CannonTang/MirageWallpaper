@@ -32,9 +32,9 @@ publish_architecture() {
     local architecture_destination="$DESTINATION/$architecture"
     local application_destination="$architecture_destination/app"
     local runtime_destination="$architecture_destination/runtime"
-    local restore_options=()
+    local restore_locked_mode=""
     if [ "${CI:-}" = "true" ]; then
-        restore_options=(-p:RestoreLockedMode=true)
+        restore_locked_mode="-p:RestoreLockedMode=true"
     fi
     env -u ASSEMBLY_NAME -u PRODUCT_NAME -u PROJECT_NAME -u TARGET_NAME \
         -u TARGETNAME -u EXECUTABLE_NAME -u FULL_PRODUCT_NAME -u WRAPPER_NAME \
@@ -46,7 +46,7 @@ publish_architecture() {
         -p:PublishTrimmed=false \
         -p:DebugType=None \
         -p:DebugSymbols=false \
-        "${restore_options[@]}" \
+        ${restore_locked_mode:+"$restore_locked_mode"} \
         -o "$OUTPUT/$runtime"
     mkdir -p "$application_destination" "$runtime_destination/host/fxr" "$runtime_destination/shared/Microsoft.NETCore.App"
     cp -R "$OUTPUT/$runtime/." "$application_destination/"
