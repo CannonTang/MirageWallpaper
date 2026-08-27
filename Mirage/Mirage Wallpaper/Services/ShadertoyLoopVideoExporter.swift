@@ -39,8 +39,8 @@ enum ShadertoyLoopVideoExportError: LocalizedError {
     }
 }
 
-/// Progress is intentionally non-modal. A 120–240 frame WebGL capture can take
-/// several seconds, but the rest of Mirage remains usable throughout.
+/// Progress is intentionally non-modal. High-quality capture can render more
+/// than a thousand WebGL frames, but the rest of Mirage remains usable.
 final class ShaderLoopExportProgressModel: ObservableObject {
     static let shared = ShaderLoopExportProgressModel()
 
@@ -81,7 +81,7 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         let duration: Double
 
         var frameCount: Int { max(2, Int((duration * Double(fps)).rounded())) }
-        var signature: String { "v3|\(width)x\(height)|\(fps)|\(duration)" }
+        var signature: String { "v4-forward-hq|\(width)x\(height)|\(fps)|\(duration)" }
     }
 
     private let fm = FileManager.default
@@ -169,13 +169,16 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         return result
     }
 
-    private func exportSettings(for draft: ShadertoyProjectDraft) -> ExportSettings {
+    private func exportSettings(for _: ShadertoyProjectDraft) -> ExportSettings {
         let screen = NSScreen.main ?? NSScreen.screens.first
         let pointSize = screen?.frame.size ?? CGSize(width: 16, height: 9)
         let scale = screen?.backingScaleFactor ?? 1
         let nativeLongEdge = max(pointSize.width, pointSize.height) * scale
-        let scaledLongEdge = nativeLongEdge * min(max(draft.renderScale, 0.25), 1)
-        let longEdge = Int(min(Double(min(draft.maxDimension, 1920)), max(640, scaledLongEdge)))
+        // Lock-screen export is rendered once and then decoded as a regular
+        // video. Do not inherit the live wallpaper's power-saving scale/FPS;
+        // capture at native resolution (up to WebGL's 4K surface limit) and
+        // 60 FPS so the generated asset preserves the shader's full quality.
+        let longEdge = Int(min(4096, max(640, nativeLongEdge)))
         let aspect = max(0.5, min(3, pointSize.width / max(1, pointSize.height)))
 
         var width: Int
@@ -192,8 +195,8 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         return ExportSettings(
             width: width,
             height: height,
-            fps: min(30, max(15, draft.fpsLimit)),
-            duration: 8
+            fps: 60,
+            duration: 20
         )
     }
 
@@ -305,11 +308,11 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
 
         for frameIndex in 0..<settings.frameCount {
             try Task.checkCancellation()
-            let phase = Double(frameIndex) / Double(settings.frameCount)
-            // A periodic forward/backward time path makes time-based shaders
-            // naturally return to their opening state. The final crossfade
-            // below also closes the seam for feedback buffers.
-            let shaderTime = (settings.duration / 2) * (0.5 - 0.5 * cos(2 * .pi * phase))
+            // Keep Shader time strictly increasing. Earlier builds followed a
+            // cosine time path that ran the second half backwards to close the
+            // loop; the short final crossfade is sufficient without reversing
+            // motion.
+            let shaderTime = Double(frameIndex) / Double(settings.fps)
             let script = "window.__mirageShaderCapture.renderFrame(\(shaderTime), \(1.0 / Double(settings.fps)), \(frameIndex), \(settings.fps))"
             guard let status = try await webView.evaluateJavaScript(script) as? [String: Any],
                   (status["failed"] as? Bool) != true else {
@@ -381,7 +384,9 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             throw ShadertoyLoopVideoExportError.encoderFailed(error.localizedDescription)
         }
         let pixelsPerSecond = settings.width * settings.height * settings.fps
-        let bitrate = min(12_000_000, max(2_000_000, pixelsPerSecond / 4))
+        // Preserve fine gradients and feedback detail. The previous 12 Mbps
+        // ceiling was visibly destructive at Retina/4K resolutions.
+        let bitrate = min(80_000_000, max(12_000_000, pixelsPerSecond / 6))
         let outputSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: settings.width,
