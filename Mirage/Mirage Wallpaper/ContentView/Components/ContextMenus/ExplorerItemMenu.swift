@@ -12,6 +12,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @ObservedObject private var shaderExportProgress = ShaderLoopExportProgressModel.shared
     
     var hoveredWallpaper: WEWallpaper
     
@@ -66,12 +67,12 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 Button(action: setAsScreenSaver) {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
-                .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
+                .disabled(!canApply || !supportsProtectedPlayback || shaderExportProgress.job != nil)
 
                 Button(action: setAsDynamicLockScreen) {
                     Label("设为动态锁屏", systemImage: "lock.rectangle")
                 }
-                .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
+                .disabled(!canApply || !supportsProtectedPlayback || shaderExportProgress.job != nil)
             }
 
             Section {
@@ -189,6 +190,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
             && ShadertoyPackageBuilder.canEdit(hoveredWallpaper)
     }
 
+    private var isMirageShader: Bool {
+        ShadertoyPackageBuilder.canEdit(hoveredWallpaper)
+    }
+
+    private var supportsProtectedPlayback: Bool {
+        hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene || isMirageShader
+    }
+
     private var isFavorite: Bool {
         if let workshopID {
             return workshopViewModel.isWorkshopFavorite(workshopID)
@@ -260,36 +269,42 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private func setAsScreenSaver() {
-        let wallpaper = hoveredWallpaper
-        let runtime = wallpaperViewModel.loadRuntime(for: wallpaper)
-        let properties = wallpaperViewModel.effectiveProperties(for: wallpaper, runtime: runtime)
-        let fps = Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
-        let manager = ScreenSaverManager.shared
-        let needsInstallation = !manager.isInstalled
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result {
-                if needsInstallation { try manager.install() }
-                try manager.configure(
-                    with: wallpaper,
-                    runtime: runtime,
-                    properties: properties,
-                    fps: fps
+        let sourceWallpaper = hoveredWallpaper
+        Task { @MainActor in
+            do {
+                let wallpaper = try await preparedProtectedWallpaper()
+                let runtime = wallpaperViewModel.loadRuntime(for: sourceWallpaper)
+                let properties = wallpaperViewModel.effectiveProperties(
+                    for: sourceWallpaper,
+                    runtime: runtime
                 )
-            }
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                        title: "已设为屏保",
-                        message: "“\(wallpaper.project.title)”将在下次启动屏保时显示。"
-                    )
-                case .failure(let error):
-                    viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                        title: "设置屏保失败",
-                        message: error.localizedDescription
-                    )
+                let fps = Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+                let manager = ScreenSaverManager.shared
+                let needsInstallation = !manager.isInstalled
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result = Result {
+                        if needsInstallation { try manager.install() }
+                        try manager.configure(
+                            with: wallpaper,
+                            runtime: runtime,
+                            properties: properties,
+                            fps: fps
+                        )
+                    }
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success:
+                            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                                title: "已设为屏保",
+                                message: "“\(sourceWallpaper.project.title)”将在下次启动屏保时显示。"
+                            )
+                        case .failure(let error):
+                            presentProtectedPlaybackError(error, title: "设置屏保失败")
+                        }
+                    }
                 }
+            } catch {
+                presentProtectedPlaybackError(error, title: "设置屏保失败")
             }
         }
     }
@@ -311,33 +326,32 @@ struct ExplorerItemMenu: SubviewOfContentView {
             manager.requestEnable()
             return
         }
-        guard hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene else {
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("设置动态锁屏失败"),
-                message: L("当前壁纸不能用作动态锁屏")
-            )
-            return
-        }
-        let displayIDs = displays.compactMap { DisplayRegistry.shared.displayID(for: $0.key) }
-        let runtime = wallpaperViewModel.loadRuntime(for: hoveredWallpaper)
-        let properties = wallpaperViewModel.effectiveProperties(for: hoveredWallpaper, runtime: runtime)
-        do {
-            try manager.configureCurrentWallpaper(
-                hoveredWallpaper,
-                runtime: runtime,
-                properties: properties,
-                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps),
-                displayIDs: displayIDs
-            )
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("已设为动态锁屏"),
-                message: L("“%@”已部署到锁屏扩展。", hoveredWallpaper.project.title)
-            )
-        } catch {
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("设置动态锁屏失败"),
-                message: error.localizedDescription
-            )
+        let sourceWallpaper = hoveredWallpaper
+        Task { @MainActor in
+            do {
+                let wallpaper = try await preparedProtectedWallpaper()
+                let displayIDs = displays.compactMap {
+                    DisplayRegistry.shared.displayID(for: $0.key)
+                }
+                let runtime = wallpaperViewModel.loadRuntime(for: sourceWallpaper)
+                let properties = wallpaperViewModel.effectiveProperties(
+                    for: sourceWallpaper,
+                    runtime: runtime
+                )
+                try manager.configureCurrentWallpaper(
+                    wallpaper,
+                    runtime: runtime,
+                    properties: properties,
+                    fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps),
+                    displayIDs: displayIDs
+                )
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("已设为动态锁屏"),
+                    message: L("“%@”已部署到锁屏扩展。", sourceWallpaper.project.title)
+                )
+            } catch {
+                presentProtectedPlaybackError(error, title: L("设置动态锁屏失败"))
+            }
         }
     }
 
@@ -354,32 +368,45 @@ struct ExplorerItemMenu: SubviewOfContentView {
             manager.requestEnable()
             return
         }
-        guard hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene else {
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("设置动态锁屏失败"),
-                message: L("当前壁纸不能用作动态锁屏")
-            )
-            return
+        let sourceWallpaper = hoveredWallpaper
+        Task { @MainActor in
+            do {
+                let wallpaper = try await preparedProtectedWallpaper()
+                let runtime = wallpaperViewModel.loadRuntime(for: sourceWallpaper)
+                let properties = wallpaperViewModel.effectiveProperties(
+                    for: sourceWallpaper,
+                    runtime: runtime
+                )
+                try manager.configureCurrentWallpaper(
+                    wallpaper,
+                    runtime: runtime,
+                    properties: properties,
+                    fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+                )
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("已设为动态锁屏"),
+                    message: L("“%@”已设为方案 B 锁屏壁纸。", sourceWallpaper.project.title)
+                )
+            } catch {
+                presentProtectedPlaybackError(error, title: L("设置动态锁屏失败"))
+            }
         }
-        let runtime = wallpaperViewModel.loadRuntime(for: hoveredWallpaper)
-        let properties = wallpaperViewModel.effectiveProperties(for: hoveredWallpaper, runtime: runtime)
-        do {
-            try manager.configureCurrentWallpaper(
-                hoveredWallpaper,
-                runtime: runtime,
-                properties: properties,
-                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
-            )
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("已设为动态锁屏"),
-                message: L("“%@”已设为方案 B 锁屏壁纸。", hoveredWallpaper.project.title)
-            )
-        } catch {
-            viewModel.screenSaverFeedback = ScreenSaverFeedback(
-                title: L("设置动态锁屏失败"),
-                message: error.localizedDescription
-            )
-        }
+    }
+
+    @MainActor
+    private func preparedProtectedWallpaper() async throws -> WEWallpaper {
+        guard isMirageShader else { return hoveredWallpaper }
+        return try await ShadertoyLoopVideoExporter.shared.videoWallpaper(
+            for: hoveredWallpaper
+        )
+    }
+
+    @MainActor
+    private func presentProtectedPlaybackError(_ error: Error, title: String) {
+        viewModel.screenSaverFeedback = ScreenSaverFeedback(
+            title: title,
+            message: error.localizedDescription
+        )
     }
 }
 

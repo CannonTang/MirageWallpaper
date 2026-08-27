@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 private enum ImportCenterRoute {
     case home
     case shader(WEWallpaper?)
+    case image(URL)
     case video(URL)
     case workshopMigration(URL)
 }
@@ -48,6 +49,14 @@ struct ImportCenterView: View {
                         onBack: {
                             if wallpaper == nil { route = .home } else { dismiss() }
                         },
+                        onComplete: { dismiss() }
+                    )
+                case .image(let url):
+                    ImageImportView(
+                        imageURL: url,
+                        contentViewModel: contentViewModel,
+                        wallpaperViewModel: wallpaperViewModel,
+                        onBack: { route = .home },
                         onComplete: { dismiss() }
                     )
                 case .video(let url):
@@ -118,6 +127,13 @@ struct ImportCenterView: View {
                     action: { route = .shader(nil) }
                 )
                 ImportChoiceCard(
+                    title: "添加本地图片",
+                    detail: "导入 PNG、JPEG、HEIC、WebP 等普通图片，并选择填充方式。",
+                    systemImage: "photo.fill",
+                    tint: .green,
+                    action: chooseImage
+                )
+                ImportChoiceCard(
                     title: "添加本地视频",
                     detail: "导入 MP4、MOV 或 M4V，并自动循环播放。",
                     systemImage: "play.rectangle.fill",
@@ -144,7 +160,7 @@ struct ImportCenterView: View {
                 Image(systemName: isDropTargeted ? "arrow.down.circle.fill" : "arrow.down.circle")
                     .font(.system(size: 28))
                     .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
-                Text("也可以把视频或壁纸文件夹拖到这里")
+                Text("也可以把图片、视频或壁纸文件夹拖到这里")
                     .font(.callout)
                 if !lastImportDirectory.isEmpty {
                     Text(L("上次位置：%@", lastImportDirectory))
@@ -200,6 +216,21 @@ struct ImportCenterView: View {
             guard response == .OK, let url = panel.url else { return }
             remember(url)
             route = .video(url)
+        }
+    }
+
+    private func chooseImage() {
+        let panel = configuredPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = L("选择图片")
+        panel.message = L("选择要设为壁纸的普通图片")
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            remember(url)
+            route = .image(url)
         }
     }
 
@@ -259,11 +290,161 @@ struct ImportCenterView: View {
                         dismiss()
                     }
                 } else {
-                    route = .video(url)
+                    route = WallpaperLibrary.isSupportedImageURL(url)
+                        ? .image(url)
+                        : .video(url)
                 }
             }
         }
         return true
+    }
+}
+
+private struct ImageImportView: View {
+    let imageURL: URL
+    @ObservedObject var contentViewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let onBack: () -> Void
+    let onComplete: () -> Void
+
+    @State private var title: String
+    @State private var fillMode: FillMode = .cover
+    @State private var isWorking = false
+    @State private var errorMessage: String?
+    @State private var previewImage: NSImage?
+
+    init(
+        imageURL: URL,
+        contentViewModel: ContentViewModel,
+        wallpaperViewModel: WallpaperViewModel,
+        onBack: @escaping () -> Void,
+        onComplete: @escaping () -> Void
+    ) {
+        self.imageURL = imageURL
+        self.contentViewModel = contentViewModel
+        self.wallpaperViewModel = wallpaperViewModel
+        self.onBack = onBack
+        self.onComplete = onComplete
+        _title = State(initialValue: imageURL.deletingPathExtension().lastPathComponent)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 20) {
+                preview
+                Form {
+                    TextField("名称", text: $title)
+                    LabeledContent("文件", value: imageURL.lastPathComponent)
+                    LabeledContent("大小", value: formattedFileSize)
+                    Picker("填充方式", selection: $fillMode) {
+                        ForEach(FillMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    LabeledContent("保存到") {
+                        Text(WallpaperLibrary.shared.importedDirectory.path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
+                }
+                .formStyle(.grouped)
+            }
+            .padding(20)
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 0)
+            Divider()
+            HStack {
+                Text("图片会转换为兼容格式并保存在 Mirage 本地壁纸库中。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("返回", action: onBack)
+                    .disabled(isWorking)
+                Button("仅导入") { importImage(apply: false) }
+                    .disabled(isWorking || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("导入并应用") { importImage(apply: true) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isWorking || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(20)
+        }
+        .onAppear { previewImage = NSImage(contentsOf: imageURL) }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        ZStack {
+            Color.black
+            if let previewImage {
+                switch fillMode {
+                case .cover:
+                    Image(nsImage: previewImage).resizable().scaledToFill()
+                case .contain:
+                    Image(nsImage: previewImage).resizable().scaledToFit()
+                case .stretch:
+                    Image(nsImage: previewImage).resizable()
+                }
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: 42))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 320, height: 200)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2)) }
+    }
+
+    private var formattedFileSize: String {
+        let size = (try? imageURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+    }
+
+    private func importImage(apply: Bool) {
+        isWorking = true
+        errorMessage = nil
+        let selectedTitle = title
+        let selectedFillMode = fillMode
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let destination = try WallpaperLibrary.shared.importImageFile(
+                    at: imageURL,
+                    title: selectedTitle,
+                    fillMode: selectedFillMode
+                )
+                let wallpaper = WEWallpaper.load(from: destination)
+                DispatchQueue.main.async {
+                    WEWallpaper.invalidateSizeCache()
+                    contentViewModel.refresh()
+                    // The generated page contains only Mirage-owned HTML and a
+                    // local image path, so it is safe to trust automatically.
+                    wallpaperViewModel.trust(wallpaper)
+                    if apply, wallpaper.isValid {
+                        wallpaperViewModel.applyImportedWallpaper(
+                            wallpaper,
+                            runtime: WallpaperRuntimeState(fillMode: selectedFillMode)
+                        )
+                    }
+                    isWorking = false
+                    onComplete()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isWorking = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

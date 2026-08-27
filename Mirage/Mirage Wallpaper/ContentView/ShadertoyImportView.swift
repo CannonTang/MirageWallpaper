@@ -57,7 +57,8 @@ private final class ShadertoyEditorModel: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         } else {
-            draft = ShadertoyProjectDraft()
+            draft = ShadertoyPackageBuilder.builtInDefaultDraft()
+                ?? ShadertoyProjectDraft()
         }
     }
 

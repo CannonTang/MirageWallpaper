@@ -324,8 +324,11 @@ struct ContentView: View {
         // Applied outside the sheets so the card also floats over an open sheet,
         // and after them so it is the topmost layer in the window.
         .overlay(alignment: .bottomTrailing) {
-            VideoTranscodeOverlay()
-                .allowsHitTesting(false)
+            VStack(spacing: 12) {
+                ShaderLoopExportOverlay()
+                VideoTranscodeOverlay()
+            }
+            .allowsHitTesting(false)
         }
         .environment(\.locale, localization.locale)
         .frame(minWidth: 1100, minHeight: 640)

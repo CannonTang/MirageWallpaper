@@ -259,48 +259,12 @@ enum ShadertoyPackageBuilder {
         do {
             let data = try Data(contentsOf: directory.appending(path: "shader.json"))
             let config = try JSONDecoder().decode(ShadertoyRuntimeConfig.self, from: data)
-            var draft = ShadertoyProjectDraft()
-            draft.title = wallpaper.project.title
-            draft.author = wallpaper.project.author ?? ""
-            draft.renderScale = min(1, max(0.25, config.renderScale))
-            draft.fpsLimit = min(120, max(1, config.fpsLimit))
-            draft.maxDimension = min(8192, max(720, config.maxDimension))
-            draft.updatePass(.common) { $0.code = config.commonCode }
-
-            for runtimePass in config.passes {
-                guard let passID = ShadertoyPassID(rawValue: runtimePass.id),
-                      passID.isRenderable else { continue }
-                draft.updatePass(passID) { pass in
-                    pass.code = runtimePass.code
-                    for index in 0..<min(4, runtimePass.channels.count) {
-                        let runtimeChannel = runtimePass.channels[index]
-                        var channel = ShadertoyChannelDraft()
-                        channel.filter = ShadertoyTextureFilter(rawValue: runtimeChannel.filter) ?? .linear
-                        channel.wrap = ShadertoyTextureWrap(rawValue: runtimeChannel.wrap) ?? .repeatTexture
-                        channel.flipY = runtimeChannel.flipY
-                        switch runtimeChannel.kind {
-                        case "noise":
-                            channel.source = .noise
-                        case "buffer":
-                            channel.source = runtimeChannel.source.flatMap(ShadertoyChannelSource.init(rawValue:)) ?? .none
-                        case "texture":
-                            channel.source = .texture
-                            if let path = runtimeChannel.url,
-                               !path.lowercased().hasPrefix("data:"),
-                               let contained = PathContainment.containedURL(path, in: directory),
-                               FileManager.default.fileExists(atPath: contained.path) {
-                                channel.textureURL = contained
-                                channel.textureFormat = runtimeChannel.textureFormat
-                                channel.textureWidth = runtimeChannel.textureWidth
-                                channel.textureHeight = runtimeChannel.textureHeight
-                            }
-                        default:
-                            channel.source = .none
-                        }
-                        pass.channels[index] = channel
-                    }
-                }
-            }
+            let draft = draft(
+                from: config,
+                title: wallpaper.project.title,
+                author: wallpaper.project.author ?? "",
+                textureDirectory: directory
+            )
             try validate(draft)
             return draft
         } catch let error as ShadertoyProjectError {
@@ -308,6 +272,83 @@ enum ShadertoyPackageBuilder {
         } catch {
             throw ShadertoyProjectError.invalidEditorData(error.localizedDescription)
         }
+    }
+
+    /// The app ships one real multi-pass sample so a new Shader project opens
+    /// with a useful, editable effect instead of an abstract placeholder.
+    static func builtInDefaultDraft() -> ShadertoyProjectDraft? {
+        guard let url = Bundle.main.url(
+            forResource: "CloudSeaTrainPreset",
+            withExtension: "json"
+        ) else { return nil }
+        do {
+            let data = try Data(contentsOf: url)
+            let config = try JSONDecoder().decode(ShadertoyRuntimeConfig.self, from: data)
+            let result = draft(
+                from: config,
+                title: "云海列车",
+                author: "mdby · Shadertoy",
+                textureDirectory: nil
+            )
+            try validate(result)
+            return result
+        } catch {
+            NSLog("[Mirage] 内置 Shader 预设载入失败: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private static func draft(from config: ShadertoyRuntimeConfig,
+                              title: String,
+                              author: String,
+                              textureDirectory: URL?) -> ShadertoyProjectDraft {
+        var draft = ShadertoyProjectDraft()
+        draft.title = title
+        draft.author = author
+        draft.renderScale = min(1, max(0.25, config.renderScale))
+        draft.fpsLimit = min(120, max(1, config.fpsLimit))
+        draft.maxDimension = min(8192, max(720, config.maxDimension))
+        draft.updatePass(.common) { $0.code = config.commonCode }
+
+        for runtimePass in config.passes {
+            guard let passID = ShadertoyPassID(rawValue: runtimePass.id),
+                  passID.isRenderable else { continue }
+            draft.updatePass(passID) { pass in
+                pass.code = runtimePass.code
+                for index in 0..<min(4, runtimePass.channels.count) {
+                    let runtimeChannel = runtimePass.channels[index]
+                    var channel = ShadertoyChannelDraft()
+                    channel.filter = ShadertoyTextureFilter(rawValue: runtimeChannel.filter) ?? .linear
+                    channel.wrap = ShadertoyTextureWrap(rawValue: runtimeChannel.wrap) ?? .repeatTexture
+                    channel.flipY = runtimeChannel.flipY
+                    switch runtimeChannel.kind {
+                    case "noise":
+                        channel.source = .noise
+                    case "buffer":
+                        channel.source = runtimeChannel.source
+                            .flatMap(ShadertoyChannelSource.init(rawValue:)) ?? .none
+                    case "texture":
+                        channel.source = .texture
+                        if let textureDirectory,
+                           let path = runtimeChannel.url,
+                           !path.lowercased().hasPrefix("data:"),
+                           let contained = PathContainment.containedURL(
+                               path, in: textureDirectory
+                           ),
+                           FileManager.default.fileExists(atPath: contained.path) {
+                            channel.textureURL = contained
+                            channel.textureFormat = runtimeChannel.textureFormat
+                            channel.textureWidth = runtimeChannel.textureWidth
+                            channel.textureHeight = runtimeChannel.textureHeight
+                        }
+                    default:
+                        channel.source = .none
+                    }
+                    pass.channels[index] = channel
+                }
+            }
+        }
+        return draft
     }
 
     static func validate(_ draft: ShadertoyProjectDraft) throws {

@@ -367,6 +367,7 @@
   const buffers = new Map();
   let surfaceWidth = 0;
   let surfaceHeight = 0;
+  let forcedSurfaceSize = null;
   const floatBufferSupported = !!gl.getExtension("EXT_color_buffer_float");
 
   function deleteBufferState(state) {
@@ -423,14 +424,21 @@
   }
 
   function resizeIfNeeded() {
-    const scale = Math.min(1, Math.max(0.25, Number(config.renderScale) || 1));
-    const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-    let width = Math.max(1, Math.floor(canvas.clientWidth * dpr * scale));
-    let height = Math.max(1, Math.floor(canvas.clientHeight * dpr * scale));
-    const maxDimension = Math.min(8192, Math.max(512, Number(config.maxDimension) || 4096));
-    const shrink = Math.min(1, maxDimension / Math.max(width, height));
-    width = Math.max(1, Math.floor(width * shrink));
-    height = Math.max(1, Math.floor(height * shrink));
+    let width;
+    let height;
+    if (forcedSurfaceSize) {
+      width = forcedSurfaceSize.width;
+      height = forcedSurfaceSize.height;
+    } else {
+      const scale = Math.min(1, Math.max(0.25, Number(config.renderScale) || 1));
+      const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      width = Math.max(1, Math.floor(canvas.clientWidth * dpr * scale));
+      height = Math.max(1, Math.floor(canvas.clientHeight * dpr * scale));
+      const maxDimension = Math.min(8192, Math.max(512, Number(config.maxDimension) || 4096));
+      const shrink = Math.min(1, maxDimension / Math.max(width, height));
+      width = Math.max(1, Math.floor(width * shrink));
+      height = Math.max(1, Math.floor(height * shrink));
+    }
     if (width === surfaceWidth && height === surfaceHeight) return false;
     surfaceWidth = width;
     surfaceHeight = height;
@@ -571,6 +579,22 @@
   }
 
   let reportedReady = false;
+
+  function texturesAreReady() {
+    return [...imageTextures.values()].every(record => record.ready);
+  }
+
+  function drawFrame(delta, frameRate) {
+    resizeIfNeeded();
+    for (const pass of renderPasses) drawPass(pass, delta, frameRate);
+    gl.finish();
+    frame += 1;
+    if (!textureLoadFailed && !reportedReady && frame >= 1 && texturesAreReady()) {
+      reportedReady = true;
+      report("ready", "Shader 编译成功");
+    }
+  }
+
   function render(timestamp) {
     requestAnimationFrame(render);
     if (hostPaused) return;
@@ -578,21 +602,60 @@
     const interval = 1000 / fpsLimit;
     if (lastDrawTimestamp && timestamp - lastDrawTimestamp < interval - 0.5) return;
 
-    resizeIfNeeded();
     const delta = lastTimestamp ? Math.min(0.25, Math.max(0, (timestamp - lastTimestamp) / 1000)) : 0;
     lastTimestamp = timestamp;
     lastDrawTimestamp = timestamp;
     elapsed += delta;
     const frameRate = delta > 0 ? 1 / delta : fpsLimit;
 
-    for (const pass of renderPasses) drawPass(pass, delta, frameRate);
-    frame += 1;
-    const texturesReady = [...imageTextures.values()].every(record => record.ready);
-    if (!textureLoadFailed && !reportedReady && frame >= 1 && texturesReady) {
-      reportedReady = true;
-      report("ready", "Shader 编译成功");
-    }
+    drawFrame(delta, frameRate);
   }
+
+  // Deterministic frame stepping used by Mirage's offline lock-screen exporter.
+  // The page keeps its normal requestAnimationFrame renderer for desktop use;
+  // capture mode pauses it, fixes the backing surface size and advances iTime
+  // only when the host explicitly asks for the next frame.
+  window.__mirageShaderCapture = {
+    begin(width, height) {
+      const safeWidth = Math.min(4096, Math.max(2, Math.floor(Number(width) || 2)));
+      const safeHeight = Math.min(4096, Math.max(2, Math.floor(Number(height) || 2)));
+      hostPaused = true;
+      forcedSurfaceSize = { width: safeWidth, height: safeHeight };
+      elapsed = 0;
+      frame = 0;
+      lastTimestamp = 0;
+      lastDrawTimestamp = 0;
+      surfaceWidth = 0;
+      surfaceHeight = 0;
+      resizeIfNeeded();
+      return {
+        width: surfaceWidth,
+        height: surfaceHeight,
+        texturesReady: texturesAreReady(),
+        failed: textureLoadFailed
+      };
+    },
+    renderFrame(time, delta, frameIndex, frameRate) {
+      if (!forcedSurfaceSize) throw new Error("尚未开始离线渲染");
+      elapsed = Number.isFinite(Number(time)) ? Number(time) : 0;
+      frame = Math.max(0, Math.floor(Number(frameIndex) || 0));
+      const safeDelta = Math.max(0, Number(delta) || 0);
+      const safeFrameRate = Math.max(1, Number(frameRate) || 60);
+      drawFrame(safeDelta, safeFrameRate);
+      return {
+        width: surfaceWidth,
+        height: surfaceHeight,
+        texturesReady: texturesAreReady(),
+        failed: textureLoadFailed
+      };
+    },
+    end() {
+      forcedSurfaceSize = null;
+      hostPaused = false;
+      lastTimestamp = 0;
+      lastDrawTimestamp = 0;
+    }
+  };
 
   resizeIfNeeded();
   // Draw one frame synchronously. WKWebView may suspend requestAnimationFrame

@@ -7,6 +7,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import ImageIO
 
 enum WPImportError: LocalizedError, Identifiable {
     case permissionDenied
@@ -31,7 +32,7 @@ enum WPImportError: LocalizedError, Identifiable {
         switch self {
         case .permissionDenied: return L("请在“系统设置 - 隐私与安全性”中授予访问权限后重试。")
         case .doesNotContainWallpaper: return L("所选文件夹需包含 project.json，请确认后重试。")
-        case .unsupportedType: return L("Mirage 仅支持 场景 / 网页 / 视频 类壁纸。")
+        case .unsupportedType: return L("Mirage 支持壁纸文件夹、常见视频和普通图片。")
         case .copyFailed: return L("请检查磁盘空间与权限后重试。")
         case .unknown: return nil
         }
@@ -497,6 +498,74 @@ final class WallpaperLibrary {
         return dest
     }
 
+    /// Imports a still image as a self-contained local web wallpaper. Keeping
+    /// it in the existing `web` pipeline avoids introducing a second renderer,
+    /// while the generated HTML applies the chosen fit mode at native quality.
+    @discardableResult
+    func importImageFile(at url: URL,
+                         title customTitle: String? = nil,
+                         fillMode: FillMode = .cover) throws -> URL {
+        guard Self.isSupportedImageURL(url),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = Self.decodeImage(source, maxPixelSize: 8192)
+        else { throw WPImportError.unsupportedType }
+
+        let baseName = url.deletingPathExtension().lastPathComponent
+        let dest = uniqueDestination(for: baseName)
+        do {
+            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+
+            let imageName = "image.png"
+            let imageRep = NSBitmapImageRep(cgImage: image)
+            guard let png = imageRep.representation(using: .png, properties: [:]) else {
+                throw WPImportError.unsupportedType
+            }
+            try png.write(to: dest.appending(path: imageName), options: .atomic)
+
+            let previewName = "preview.jpg"
+            if let previewImage = Self.decodeImage(source, maxPixelSize: 1280) {
+                let previewRep = NSBitmapImageRep(cgImage: previewImage)
+                if let jpeg = previewRep.representation(
+                    using: .jpeg,
+                    properties: [.compressionFactor: 0.88]
+                ) {
+                    try jpeg.write(to: dest.appending(path: previewName), options: .atomic)
+                }
+            }
+
+            let html = Self.imageWallpaperHTML(imageName: imageName, fillMode: fillMode)
+            try Data(html.utf8).write(
+                to: dest.appending(path: "index.html"),
+                options: .atomic
+            )
+
+            let title = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let project = WEProject(
+                approved: true,
+                author: L("本地导入"),
+                contentrating: "Everyone",
+                description: L("由 Mirage 导入的本地图片壁纸。"),
+                file: "index.html",
+                preview: previewName,
+                tags: ["Image", "Local"],
+                title: title?.isEmpty == false ? title! : baseName,
+                type: "web",
+                version: 1
+            )
+            let data = try JSONEncoder().encode(project)
+            try data.write(to: dest.appending(path: "project.json"), options: .atomic)
+        } catch let error as WPImportError {
+            try? fm.removeItem(at: dest)
+            throw error
+        } catch {
+            try? fm.removeItem(at: dest)
+            throw WPImportError.copyFailed(error.localizedDescription)
+        }
+        recordAdded(at: dest)
+        libraryDidChange(at: dest)
+        return dest
+    }
+
     /// Creates a self-contained web wallpaper from code entered in Mirage's
     /// Shadertoy editor. Unlike a generic web import, the HTML/JavaScript shell
     /// is owned by Mirage and the user's input is encoded strictly as GLSL data.
@@ -567,9 +636,49 @@ final class WallpaperLibrary {
         let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
         if isDir {
             return try importWallpaperFolder(at: url)
+        } else if Self.isSupportedImageURL(url) {
+            return try importImageFile(at: url)
         } else {
             return try importVideoFile(at: url)
         }
+    }
+
+    static func isSupportedImageURL(_ url: URL) -> Bool {
+        ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "bmp", "gif", "webp"]
+            .contains(url.pathExtension.lowercased())
+    }
+
+    private static func decodeImage(_ source: CGImageSource, maxPixelSize: Int) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    private static func imageWallpaperHTML(imageName: String, fillMode: FillMode) -> String {
+        let objectFit: String
+        switch fillMode {
+        case .cover: objectFit = "cover"
+        case .contain: objectFit = "contain"
+        case .stretch: objectFit = "fill"
+        }
+        return """
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <style>
+            html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
+            img { width: 100%; height: 100%; display: block; object-fit: \(objectFit); }
+          </style>
+        </head>
+        <body><img src="\(imageName)" alt=""></body>
+        </html>
+        """
     }
 
     private func uniqueDestination(for name: String) -> URL {
