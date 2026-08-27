@@ -248,7 +248,10 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         guard restored.replacements > 0 else {
             try? fm.removeItem(at: backupURL)
             try? fm.removeItem(at: stateURL)
-            throw ScreenSaverDynamicLockScreenError.restoreConflict
+            // Another wallpaper write already replaced Mirage's temporary
+            // desktop choice. Preserve that current user-visible state and
+            // clear our stale transaction instead of leaving lock mode stuck.
+            return
         }
         try writeStore(try encodeStore(restored.value))
         try? fm.removeItem(at: backupURL)
@@ -262,7 +265,12 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         let current = try decodeStore(currentData)
         if storeContainsMirageDesktopChoice(current) { return }
         if fm.fileExists(atPath: stateURL.path) || fm.fileExists(atPath: backupURL.path) {
-            throw ScreenSaverDynamicLockScreenError.conflict
+            // A prior activation can be displaced by a late system wallpaper
+            // write. Since Mirage's choice is no longer present, the current
+            // store is the new safe restore point; discard only our stale
+            // transaction files and activate again from that state.
+            try? fm.removeItem(at: stateURL)
+            try? fm.removeItem(at: backupURL)
         }
         let transformed = try transformStore(current)
         guard transformed.replacements > 0 else { throw ScreenSaverDynamicLockScreenError.invalidStore }

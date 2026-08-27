@@ -317,6 +317,13 @@ struct ContentView: View {
             )
             .frame(minWidth: 1040, idealWidth: 1240, minHeight: 700, idealHeight: 800)
         }
+        .sheet(item: $viewModel.shaderVideoRecordingRequest) { request in
+            ShaderVideoRecordingSheet(
+                request: request,
+                contentViewModel: viewModel,
+                wallpaperViewModel: wallpaperViewModel
+            )
+        }
         // Applied outside the sheets so the card also floats over an open sheet,
         // and after them so it is the topmost layer in the window.
         .overlay(alignment: .bottomTrailing) {

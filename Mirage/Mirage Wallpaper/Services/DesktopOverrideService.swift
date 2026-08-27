@@ -100,6 +100,11 @@ final class DesktopOverrideService {
         return configuration.enabled != false && !configuration.displays.isEmpty
     }
 
+    private var externalLockScreenIsActive: Bool {
+        defaults.bool(forKey: "Mirage.DynamicLockScreen.Locked")
+            || defaults.bool(forKey: "Mirage.ScreenSaverDynamicLockScreen.Locked")
+    }
+
     // MARK: - Launch recovery
 
     /// Must run before anything that can restart WallpaperAgent (i.e. before the
@@ -194,7 +199,7 @@ final class DesktopOverrideService {
     }
 
     func scheduleCapture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper) {
-        if UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
+        if externalLockScreenIsActive { return }
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
         pendingCapture[displayID]?.cancel()
         if preserveForDynamicLockScreen && !isEnabled {
@@ -217,12 +222,22 @@ final class DesktopOverrideService {
 
     /// Re-takes the still for every screen that currently has a wallpaper.
     func scheduleCaptureForAllScreens() {
-        if UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
+        if externalLockScreenIsActive { return }
         let viewModel = AppDelegate.shared.wallpaperViewModel
         for displayID in viewModel.renderer.activeDisplayIDs {
             guard let wallpaper = viewModel.renderer.currentWallpaper(onDisplay: displayID) else { continue }
             scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
         }
+    }
+
+    /// A still-frame request may already be rendering when macOS reports the
+    /// lock event. Invalidate it before the dynamic lock screen rewrites the
+    /// wallpaper store, otherwise its late NSWorkspace write can replace the
+    /// freshly activated video slot with a static image.
+    func cancelPendingCapturesForExternalLockScreen() {
+        pendingCapture.values.forEach { $0.cancel() }
+        pendingCapture.removeAll()
+        captureRequests.removeAll()
     }
 
     @MainActor
@@ -251,6 +266,10 @@ final class DesktopOverrideService {
     private func capture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper,
                          request: CaptureRequest, attempt: Int = 0) {
         guard captureRequests[displayID] == request else { return }
+        guard !externalLockScreenIsActive else {
+            captureRequests[displayID] = nil
+            return
+        }
         // Read the user's picture before anything is written, not after: the
         // read-back is only eventually consistent, so once an override is in
         // flight it can no longer be trusted to reveal what was there before.
@@ -270,6 +289,12 @@ final class DesktopOverrideService {
                 guard self.captureRequests[displayID] == request else {
                     try? FileManager.default.removeItem(at: target)
                     self.pendingTargets.remove(target)
+                    return
+                }
+                guard !self.externalLockScreenIsActive else {
+                    try? FileManager.default.removeItem(at: target)
+                    self.pendingTargets.remove(target)
+                    self.captureRequests[displayID] = nil
                     return
                 }
                 let current = AppDelegate.shared.wallpaperViewModel.renderer
@@ -316,6 +341,12 @@ final class DesktopOverrideService {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
+            guard !self.externalLockScreenIsActive else {
+                self.pendingTargets.remove(url)
+                self.captureRequests[displayID] = nil
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
             if !self.preserveForDynamicLockScreen {
                 self.install(url, forDisplay: displayID, request: request, attempt: 0)
                 return
@@ -343,6 +374,12 @@ final class DesktopOverrideService {
         guard captureRequests[displayID] == request else {
             try? FileManager.default.removeItem(at: url)
             pendingTargets.remove(url)
+            return
+        }
+        guard !externalLockScreenIsActive else {
+            try? FileManager.default.removeItem(at: url)
+            pendingTargets.remove(url)
+            captureRequests[displayID] = nil
             return
         }
         if preserveForDynamicLockScreen {

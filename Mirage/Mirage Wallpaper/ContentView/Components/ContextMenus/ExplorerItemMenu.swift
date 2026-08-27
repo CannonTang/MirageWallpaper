@@ -52,16 +52,55 @@ struct ExplorerItemMenu: SubviewOfContentView {
                             Label("所有显示器", systemImage: "rectangle.on.rectangle")
                         }
                     } label: {
-                        Label("设为壁纸", systemImage: "photo.fill")
+                        Label(isMirageShader ? "实时 Shader 设为壁纸" : "设为壁纸",
+                              systemImage: "photo.fill")
                     }
                     .disabled(!canApply)
                 } else {
                     Button {
                         if let info = displays.first { apply(to: info) }
                     } label: {
-                        Label("设为壁纸", systemImage: "photo.fill")
+                        Label(isMirageShader ? "实时 Shader 设为壁纸" : "设为壁纸",
+                              systemImage: "photo.fill")
                     }
                     .disabled(!canApply || displays.isEmpty)
+                }
+
+                if isMirageShader {
+                    if displays.count > 1 {
+                        Menu {
+                            ForEach(displays) { info in
+                                Button {
+                                    requestShaderVideo(.wallpaper(info.key))
+                                } label: {
+                                    Label(displayTitle(info), systemImage: "display")
+                                }
+                            }
+                            Divider()
+                            Button {
+                                requestShaderVideo(.allDisplays)
+                            } label: {
+                                Label("所有显示器", systemImage: "rectangle.on.rectangle")
+                            }
+                        } label: {
+                            Label("录制视频设为壁纸…", systemImage: "film.fill")
+                        }
+                    } else {
+                        Button {
+                            if let info = displays.first {
+                                requestShaderVideo(.wallpaper(info.key))
+                            }
+                        } label: {
+                            Label("录制视频设为壁纸…", systemImage: "film.fill")
+                        }
+                        .disabled(displays.isEmpty)
+                    }
+
+                    Button {
+                        requestShaderVideo(.recordOnly)
+                    } label: {
+                        Label("录制或更新视频缓存…", systemImage: "record.circle")
+                    }
                 }
 
                 Button(action: setAsScreenSaver) {
@@ -73,6 +112,13 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     Label("设为动态锁屏", systemImage: "lock.rectangle")
                 }
                 .disabled(!canApply || !supportsProtectedPlayback || shaderExportProgress.job != nil)
+
+                if isMirageShader && hasShaderLoopCache {
+                    Button(action: {}) {
+                        Label(shaderLoopCacheLabel, systemImage: "checkmark.circle.fill")
+                    }
+                    .disabled(true)
+                }
             }
 
             Section {
@@ -269,10 +315,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private func setAsScreenSaver() {
+        if isMirageShader {
+            requestShaderVideo(.screenSaver)
+            return
+        }
         let sourceWallpaper = hoveredWallpaper
         Task { @MainActor in
             do {
-                let wallpaper = try await preparedProtectedWallpaper()
+                let prepared = try await preparedProtectedWallpaper()
                 let runtime = wallpaperViewModel.loadRuntime(for: sourceWallpaper)
                 let properties = wallpaperViewModel.effectiveProperties(
                     for: sourceWallpaper,
@@ -285,7 +335,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     let result = Result {
                         if needsInstallation { try manager.install() }
                         try manager.configure(
-                            with: wallpaper,
+                            with: prepared.wallpaper,
                             runtime: runtime,
                             properties: properties,
                             fps: fps
@@ -297,6 +347,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                             viewModel.screenSaverFeedback = ScreenSaverFeedback(
                                 title: "已设为屏保",
                                 message: "“\(sourceWallpaper.project.title)”将在下次启动屏保时显示。"
+                                    + shaderCacheFeedback(for: prepared)
                             )
                         case .failure(let error):
                             presentProtectedPlaybackError(error, title: "设置屏保失败")
@@ -326,17 +377,21 @@ struct ExplorerItemMenu: SubviewOfContentView {
             manager.requestEnable { setAsScreenSaverDynamicLockScreen() }
             return
         }
+        if isMirageShader {
+            requestShaderVideo(.dynamicLockScreen)
+            return
+        }
         let sourceWallpaper = hoveredWallpaper
         Task { @MainActor in
             do {
-                let wallpaper = try await preparedProtectedWallpaper()
+                let prepared = try await preparedProtectedWallpaper()
                 let runtime = wallpaperViewModel.loadRuntime(for: sourceWallpaper)
                 let properties = wallpaperViewModel.effectiveProperties(
                     for: sourceWallpaper,
                     runtime: runtime
                 )
                 try manager.configureCurrentWallpaper(
-                    wallpaper,
+                    prepared.wallpaper,
                     runtime: runtime,
                     properties: properties,
                     fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
@@ -344,6 +399,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 viewModel.screenSaverFeedback = ScreenSaverFeedback(
                     title: L("已设为动态锁屏"),
                     message: L("锁屏时将播放“%@”，解锁后会恢复原桌面墙纸。", sourceWallpaper.project.title)
+                        + shaderCacheFeedback(for: prepared)
                 )
             } catch {
                 presentProtectedPlaybackError(error, title: L("设置动态锁屏失败"))
@@ -351,12 +407,45 @@ struct ExplorerItemMenu: SubviewOfContentView {
         }
     }
 
-    @MainActor
-    private func preparedProtectedWallpaper() async throws -> WEWallpaper {
-        guard isMirageShader else { return hoveredWallpaper }
-        return try await ShadertoyLoopVideoExporter.shared.videoWallpaper(
-            for: hoveredWallpaper
+    private func requestShaderVideo(_ purpose: ShaderVideoRecordingPurpose) {
+        viewModel.shaderVideoRecordingRequest = ShaderVideoRecordingRequest(
+            wallpaper: hoveredWallpaper,
+            purpose: purpose
         )
+    }
+
+    @MainActor
+    private func preparedProtectedWallpaper() async throws
+        -> ShadertoyLoopVideoExporter.PreparedVideo {
+        guard isMirageShader else {
+            return ShadertoyLoopVideoExporter.PreparedVideo(
+                wallpaper: hoveredWallpaper,
+                usedCache: false
+            )
+        }
+        return try await ShadertoyLoopVideoExporter.shared.prepareVideo(for: hoveredWallpaper)
+    }
+
+    @MainActor
+    private var hasShaderLoopCache: Bool {
+        ShadertoyLoopVideoExporter.shared.hasCachedVideo(for: hoveredWallpaper)
+    }
+
+    @MainActor
+    private var shaderLoopCacheLabel: String {
+        guard let info = ShadertoyLoopVideoExporter.shared.cachedVideoInfo(
+            for: hoveredWallpaper
+        ) else { return L("已有录制视频缓存") }
+        return L("已有缓存 · %@", info.summary)
+    }
+
+    private func shaderCacheFeedback(
+        for prepared: ShadertoyLoopVideoExporter.PreparedVideo
+    ) -> String {
+        guard isMirageShader else { return "" }
+        return prepared.usedCache
+            ? L("\n已复用现有的高质量锁屏视频缓存，无需重新录制。")
+            : L("\n已生成并保存高质量锁屏视频缓存；Shader 内容不变时将直接复用。")
     }
 
     @MainActor

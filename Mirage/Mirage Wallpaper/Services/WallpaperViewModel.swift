@@ -1305,6 +1305,7 @@ class WallpaperViewModel: ObservableObject {
         externalLockScreenSuspended = true
         UserDefaults.standard.set(true, forKey: "Mirage.DynamicLockScreen.Locked")
         UserDefaults.standard.synchronize()
+        DesktopOverrideService.shared.cancelPendingCapturesForExternalLockScreen()
         renderer.stopAllAndWait()
         currentByScreen.removeAll()
     }

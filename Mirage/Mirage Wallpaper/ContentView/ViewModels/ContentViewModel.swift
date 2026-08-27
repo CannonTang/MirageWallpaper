@@ -73,6 +73,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @Published var isUnsubscribeConfirming = false
 
     @Published var screenSaverFeedback: ScreenSaverFeedback?
+    @Published var shaderVideoRecordingRequest: ShaderVideoRecordingRequest?
 
     // Debounced: every keystroke used to kick off a full search + filter + sort
     // over the whole library. The pipeline already runs off the main thread, but

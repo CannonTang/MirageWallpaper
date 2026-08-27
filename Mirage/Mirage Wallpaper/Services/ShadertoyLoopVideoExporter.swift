@@ -39,6 +39,66 @@ enum ShadertoyLoopVideoExportError: LocalizedError {
     }
 }
 
+enum ShadertoyVideoQuality: String, Codable, CaseIterable, Identifiable {
+    case standard
+    case high
+    case maximum
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .standard: return L("标准")
+        case .high: return L("高")
+        case .maximum: return L("最高")
+        }
+    }
+}
+
+struct ShadertoyVideoRecordingSettings: Codable, Equatable {
+    /// Zero means the main display's native backing-pixel longest edge.
+    var longestEdge: Int = 0
+    var fps: Int = 60
+    var duration: Int = 20
+    var quality: ShadertoyVideoQuality = .maximum
+
+    static let storageKey = "Mirage.ShaderVideoRecording.Settings.v1"
+
+    static func load() -> Self {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let value = try? JSONDecoder().decode(Self.self, from: data)
+        else { return Self() }
+        return value.sanitized
+    }
+
+    func save() {
+        guard let data = try? JSONEncoder().encode(sanitized) else { return }
+        UserDefaults.standard.set(data, forKey: Self.storageKey)
+    }
+
+    var sanitized: Self {
+        Self(
+            longestEdge: [0, 1280, 1920, 2560, 4096].contains(longestEdge) ? longestEdge : 0,
+            fps: [24, 30, 60].contains(fps) ? fps : 60,
+            duration: [10, 20, 30, 60].contains(duration) ? duration : 20,
+            quality: quality
+        )
+    }
+}
+
+struct ShadertoyCachedVideoInfo: Codable, Equatable {
+    let width: Int
+    let height: Int
+    let fps: Int
+    let duration: Int
+    let quality: ShadertoyVideoQuality
+
+    var summary: String {
+        L("%d×%d · %d FPS · %d 秒 · %@画质",
+          width, height, fps, duration, quality.displayName)
+    }
+}
+
 /// Progress is intentionally non-modal. High-quality capture can render more
 /// than a thousand WebGL frames, but the rest of Mirage remains usable.
 final class ShaderLoopExportProgressModel: ObservableObject {
@@ -74,37 +134,62 @@ final class ShaderLoopExportProgressModel: ObservableObject {
 final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
     static let shared = ShadertoyLoopVideoExporter()
 
+    struct PreparedVideo {
+        let wallpaper: WEWallpaper
+        let usedCache: Bool
+    }
+
     private struct ExportSettings {
         let width: Int
         let height: Int
         let fps: Int
         let duration: Double
+        let quality: ShadertoyVideoQuality
 
         var frameCount: Int { max(2, Int((duration * Double(fps)).rounded())) }
-        var signature: String { "v4-forward-hq|\(width)x\(height)|\(fps)|\(duration)" }
+        var signature: String {
+            "v5-semantic-forward|\(width)x\(height)|\(fps)|\(duration)|\(quality.rawValue)"
+        }
+        var legacySignature: String { "v4-forward-hq|\(width)x\(height)|\(fps)|\(duration)" }
     }
 
     private let fm = FileManager.default
     private var navigationContinuation: CheckedContinuation<Void, Error>?
 
     func videoWallpaper(for wallpaper: WEWallpaper) async throws -> WEWallpaper {
+        try await prepareVideo(for: wallpaper).wallpaper
+    }
+
+    func prepareVideo(
+        for wallpaper: WEWallpaper,
+        recordingSettings: ShadertoyVideoRecordingSettings = .load(),
+        forceRecording: Bool = false
+    ) async throws -> PreparedVideo {
         guard ShadertoyPackageBuilder.canEdit(wallpaper) else {
             throw ShadertoyLoopVideoExportError.unsupportedWallpaper
+        }
+
+        let draft = try ShadertoyPackageBuilder.loadDraft(from: wallpaper)
+        let settings = exportSettings(for: draft, recordingSettings: recordingSettings.sanitized)
+        let fingerprint = try sourceFingerprint(for: wallpaper, settings: settings)
+        let destination = cacheDirectory(for: wallpaper)
+
+        if !forceRecording,
+           let cached = cachedWallpaper(at: destination, fingerprint: fingerprint) {
+            return PreparedVideo(wallpaper: cached, usedCache: true)
+        }
+        if !forceRecording, let migrated = try migrateLegacyCache(
+            at: destination,
+            for: wallpaper,
+            settings: settings,
+            semanticFingerprint: fingerprint
+        ) {
+            return PreparedVideo(wallpaper: migrated, usedCache: true)
         }
 
         let progress = ShaderLoopExportProgressModel.shared
         progress.begin(title: wallpaper.project.title)
         defer { progress.finish() }
-
-        let draft = try ShadertoyPackageBuilder.loadDraft(from: wallpaper)
-        let settings = exportSettings(for: draft)
-        let fingerprint = try sourceFingerprint(for: wallpaper, settings: settings)
-        let destination = cacheDirectory(for: wallpaper)
-
-        if let cached = cachedWallpaper(at: destination, fingerprint: fingerprint) {
-            progress.update(detail: L("已使用缓存的循环视频"), progress: 1)
-            return cached
-        }
 
         let workingRoot = fm.temporaryDirectory.appending(
             path: "MirageShaderLoop-\(UUID().uuidString)",
@@ -150,6 +235,17 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             to: outputPackage.appending(path: "source-fingerprint.txt"),
             options: .atomic
         )
+        let cacheInfo = ShadertoyCachedVideoInfo(
+            width: settings.width,
+            height: settings.height,
+            fps: settings.fps,
+            duration: Int(settings.duration.rounded()),
+            quality: settings.quality
+        )
+        try JSONEncoder().encode(cacheInfo).write(
+            to: outputPackage.appending(path: "recording-info.json"),
+            options: .atomic
+        )
 
         progress.update(detail: L("正在安装循环视频"), progress: 0.98)
         try fm.createDirectory(
@@ -166,19 +262,37 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             throw ShadertoyLoopVideoExportError.outputInvalid
         }
         progress.update(detail: L("循环视频已生成"), progress: 1)
-        return result
+        return PreparedVideo(wallpaper: result, usedCache: false)
     }
 
-    private func exportSettings(for _: ShadertoyProjectDraft) -> ExportSettings {
+    /// A lightweight menu hint. The exact semantic fingerprint is checked when
+    /// the user applies the lock screen, so this deliberately only reports that
+    /// a complete recording exists for this source wallpaper.
+    func hasCachedVideo(for wallpaper: WEWallpaper) -> Bool {
+        validCachedWallpaper(at: cacheDirectory(for: wallpaper)) != nil
+    }
+
+    func cachedVideoInfo(for wallpaper: WEWallpaper) -> ShadertoyCachedVideoInfo? {
+        let directory = cacheDirectory(for: wallpaper)
+        guard validCachedWallpaper(at: directory) != nil,
+              let data = try? Data(contentsOf: directory.appending(path: "recording-info.json"))
+        else { return nil }
+        return try? JSONDecoder().decode(ShadertoyCachedVideoInfo.self, from: data)
+    }
+
+    private func exportSettings(for _: ShadertoyProjectDraft,
+                                recordingSettings: ShadertoyVideoRecordingSettings) -> ExportSettings {
         let screen = NSScreen.main ?? NSScreen.screens.first
         let pointSize = screen?.frame.size ?? CGSize(width: 16, height: 9)
         let scale = screen?.backingScaleFactor ?? 1
         let nativeLongEdge = max(pointSize.width, pointSize.height) * scale
-        // Lock-screen export is rendered once and then decoded as a regular
-        // video. Do not inherit the live wallpaper's power-saving scale/FPS;
-        // capture at native resolution (up to WebGL's 4K surface limit) and
-        // 60 FPS so the generated asset preserves the shader's full quality.
-        let longEdge = Int(min(4096, max(640, nativeLongEdge)))
+        // Offline export is rendered once and then decoded as a regular video.
+        // Do not inherit the live wallpaper's power-saving scale/FPS; recording
+        // has its own user-selected profile, capped at WebGL's 4K surface limit.
+        let requestedLongEdge = recordingSettings.longestEdge == 0
+            ? Int(nativeLongEdge.rounded())
+            : recordingSettings.longestEdge
+        let longEdge = min(4096, max(640, requestedLongEdge))
         let aspect = max(0.5, min(3, pointSize.width / max(1, pointSize.height)))
 
         var width: Int
@@ -195,8 +309,9 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         return ExportSettings(
             width: width,
             height: height,
-            fps: 60,
-            duration: 20
+            fps: recordingSettings.fps,
+            duration: Double(recordingSettings.duration),
+            quality: recordingSettings.quality
         )
     }
 
@@ -214,6 +329,51 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
                                    settings: ExportSettings) throws -> String {
         var hasher = SHA256()
         hasher.update(data: Data(settings.signature.utf8))
+        let root = wallpaper.wallpaperDirectory.standardizedFileURL
+        let shaderData = try Data(contentsOf: root.appending(path: "shader.json"))
+        let config = try JSONDecoder().decode(ShadertoyRuntimeConfig.self, from: shaderData)
+        // Live playback controls are not part of the offline movie. Export has
+        // its own profile, so editor precision/FPS/max-dimension changes must
+        // not invalidate the recording.
+        let semanticConfig = ShadertoyRuntimeConfig(
+            version: config.version,
+            commonCode: config.commonCode,
+            renderScale: 1,
+            fpsLimit: 60,
+            maxDimension: 4096,
+            passes: config.passes
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        hasher.update(data: try encoder.encode(semanticConfig))
+
+        let keys: Set<URLResourceKey> = [.isRegularFileKey]
+        let textureRoot = root.appending(path: "textures", directoryHint: .isDirectory)
+        var files = [root.appending(path: "runtime.js")]
+        files += (fm.enumerator(
+            at: textureRoot,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        )?.allObjects as? [URL] ?? [])
+            .filter { (try? $0.resourceValues(forKeys: keys).isRegularFile) == true }
+            .sorted { $0.path < $1.path }
+
+        for file in files {
+            let relative = String(file.path.dropFirst(root.path.count))
+            hasher.update(data: Data(relative.utf8))
+            hasher.update(data: try Data(contentsOf: file, options: [.mappedIfSafe]))
+        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return "semantic-v1:\(digest)"
+    }
+
+    /// Builds 1.1.6's whole-package fingerprint only while migrating an old
+    /// cache. A matching value proves the existing movie was recorded from the
+    /// current package; after migration, future checks use the semantic hash.
+    private func legacySourceFingerprint(for wallpaper: WEWallpaper,
+                                         settings: ExportSettings) throws -> String {
+        var hasher = SHA256()
+        hasher.update(data: Data(settings.legacySignature.utf8))
         let root = wallpaper.wallpaperDirectory.standardizedFileURL
         let keys: Set<URLResourceKey> = [.isRegularFileKey]
         let files = (fm.enumerator(
@@ -238,6 +398,24 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             contentsOf: directory.appending(path: "source-fingerprint.txt"),
             encoding: .utf8
         ), stored == fingerprint else { return nil }
+        return validCachedWallpaper(at: directory)
+    }
+
+    private func migrateLegacyCache(at directory: URL,
+                                    for wallpaper: WEWallpaper,
+                                    settings: ExportSettings,
+                                    semanticFingerprint: String) throws -> WEWallpaper? {
+        let fingerprintURL = directory.appending(path: "source-fingerprint.txt")
+        guard let stored = try? String(contentsOf: fingerprintURL, encoding: .utf8),
+              !stored.hasPrefix("semantic-v1:"),
+              let cached = validCachedWallpaper(at: directory),
+              stored == (try legacySourceFingerprint(for: wallpaper, settings: settings))
+        else { return nil }
+        try Data(semanticFingerprint.utf8).write(to: fingerprintURL, options: .atomic)
+        return cached
+    }
+
+    private func validCachedWallpaper(at directory: URL) -> WEWallpaper? {
         let wallpaper = WEWallpaper.load(from: directory)
         return wallpaper.isValid && fm.fileExists(atPath: wallpaper.resolvedEntryURL.path)
             ? wallpaper
@@ -386,7 +564,15 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         let pixelsPerSecond = settings.width * settings.height * settings.fps
         // Preserve fine gradients and feedback detail. The previous 12 Mbps
         // ceiling was visibly destructive at Retina/4K resolutions.
-        let bitrate = min(80_000_000, max(12_000_000, pixelsPerSecond / 6))
+        let bitrate: Int
+        switch settings.quality {
+        case .standard:
+            bitrate = min(35_000_000, max(8_000_000, pixelsPerSecond / 12))
+        case .high:
+            bitrate = min(55_000_000, max(10_000_000, pixelsPerSecond / 8))
+        case .maximum:
+            bitrate = min(80_000_000, max(12_000_000, pixelsPerSecond / 6))
+        }
         let outputSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: settings.width,
