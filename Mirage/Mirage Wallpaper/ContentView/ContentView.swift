@@ -311,7 +311,7 @@ struct ContentView: View {
                 contentViewModel: viewModel,
                 wallpaperViewModel: wallpaperViewModel
             )
-            .frame(minWidth: 720, idealWidth: 780, minHeight: 520, idealHeight: 620)
+            .frame(minWidth: 940, idealWidth: 1120, minHeight: 680, idealHeight: 760)
         }
         // Applied outside the sheets so the card also floats over an open sheet,
         // and after them so it is the topmost layer in the window.

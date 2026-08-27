@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 
 private enum ImportCenterRoute {
     case home
+    case shader
     case video(URL)
     case workshopMigration(URL)
 }
@@ -31,6 +32,13 @@ struct ImportCenterView: View {
                 switch route {
                 case .home:
                     home
+                case .shader:
+                    ShadertoyImportView(
+                        contentViewModel: contentViewModel,
+                        wallpaperViewModel: wallpaperViewModel,
+                        onBack: { route = .home },
+                        onComplete: { dismiss() }
+                    )
                 case .video(let url):
                     VideoImportView(
                         videoURL: url,
@@ -87,7 +95,17 @@ struct ImportCenterView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 14) {
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 14),
+                GridItem(.flexible(), spacing: 14)
+            ], spacing: 14) {
+                ImportChoiceCard(
+                    title: "创建 Shader 壁纸",
+                    detail: "直接粘贴 Shadertoy 代码，支持 Image、Buffer 和纹理通道。",
+                    systemImage: "function",
+                    tint: .cyan,
+                    action: { route = .shader }
+                )
                 ImportChoiceCard(
                     title: "添加本地视频",
                     detail: "导入 MP4、MOV 或 M4V，并自动循环播放。",
@@ -264,7 +282,7 @@ private struct ImportChoiceCard: View {
                 }
             }
             .padding(16)
-            .frame(maxWidth: .infinity, minHeight: 185, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 142, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(hovering ? tint.opacity(0.09) : Color.primary.opacity(0.035))

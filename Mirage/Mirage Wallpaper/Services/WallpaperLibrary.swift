@@ -497,6 +497,25 @@ final class WallpaperLibrary {
         return dest
     }
 
+    /// Creates a self-contained web wallpaper from code entered in Mirage's
+    /// Shadertoy editor. Unlike a generic web import, the HTML/JavaScript shell
+    /// is owned by Mirage and the user's input is encoded strictly as GLSL data.
+    @discardableResult
+    func createShadertoyWallpaper(from draft: ShadertoyProjectDraft,
+                                  previewPNG: Data? = nil) throws -> URL {
+        let rawName = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = rawName.replacingOccurrences(
+            of: #"[/:\\]+"#,
+            with: "-",
+            options: .regularExpression
+        )
+        let dest = uniqueDestination(for: safeName.isEmpty ? "Shader Wallpaper" : safeName)
+        try ShadertoyPackageBuilder.writePackage(draft, to: dest, previewPNG: previewPNG)
+        recordAdded(at: dest)
+        libraryDidChange(at: dest)
+        return dest
+    }
+
     @discardableResult
     func importAny(at url: URL) throws -> URL {
         let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
