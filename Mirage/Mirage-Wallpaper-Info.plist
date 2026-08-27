@@ -6,12 +6,14 @@
 	<string>$(MIRAGE_STEAM_WEB_API_KEY)</string>
 	<key>MirageGitCommit</key>
 	<string>$(MIRAGE_GIT_COMMIT)</string>
+	<key>MirageDistributionChannel</key>
+	<string>cannon-tang-custom</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Mirage captures system audio to drive audio-responsive wallpapers.</string>
 	<key>SUAutomaticallyUpdate</key>
-	<true/>
+	<false/>
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<false/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/laobamac/MirageWallpaper/update-feeds/appcast-$(MIRAGE_UPDATE_ARCH).xml</string>
 	<key>SUPublicEDKey</key>

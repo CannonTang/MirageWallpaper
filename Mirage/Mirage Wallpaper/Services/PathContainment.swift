@@ -16,6 +16,20 @@ import Foundation
 // to be checked against the directory it is supposed to live in.
 enum PathContainment {
 
+    /// Converts a Windows-style manifest path to a portable relative path.
+    /// Absolute paths, drive letters, UNC paths and traversal components stay
+    /// invalid instead of being silently rewritten into something executable.
+    static func normalizedManifestPath(_ path: String) -> String? {
+        guard !path.isEmpty else { return "" }
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.hasPrefix("/"), !normalized.hasPrefix("//") else { return nil }
+        let components = normalized.split(separator: "/", omittingEmptySubsequences: true)
+        guard !components.isEmpty,
+              !components[0].contains(":"),
+              components.allSatisfy({ $0 != "." && $0 != ".." }) else { return nil }
+        return components.joined(separator: "/")
+    }
+
     // Returns the URL of `relativePath` inside `root`, or nil when it escapes.
     //
     // The verdict is taken on the standardized *and* symlink-resolved pair,
@@ -58,13 +72,14 @@ enum PathContainment {
         guard !relativePath.isEmpty else {
             return (root.standardizedFileURL.resolvingSymlinksInPath(), root)
         }
+        guard let portablePath = normalizedManifestPath(relativePath) else { return nil }
         let normalizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-        let candidate = normalizedRoot.appending(path: relativePath)
+        let candidate = normalizedRoot.appending(path: portablePath)
             .standardizedFileURL.resolvingSymlinksInPath()
         // The trailing "/" matters: without it "/a/bc" would count as inside "/a/b".
         let isInside = candidate.path == normalizedRoot.path
             || candidate.path.hasPrefix(normalizedRoot.path + "/")
         guard isInside else { return nil }
-        return (candidate, root.appending(path: relativePath).standardizedFileURL)
+        return (candidate, root.appending(path: portablePath).standardizedFileURL)
     }
 }

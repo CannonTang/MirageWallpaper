@@ -98,6 +98,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     private var searchDebounceWorkItem: DispatchWorkItem?
 
     @Published var isSteamSetupPresented = false
+    @Published var isImportCenterPresented = false
     
     @AppStorage("WallpapersPerPage") var wallpapersPerPage: Int = 50 {
         didSet { currentPage = 1 }

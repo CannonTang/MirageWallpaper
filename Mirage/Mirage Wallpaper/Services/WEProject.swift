@@ -443,10 +443,12 @@ struct WEProject: Codable, Equatable, Hashable {
         contentrating = try? c.decode(String.self, forKey: .contentrating)
         dependency = try? c.decode(WorkshopId.self, forKey: .dependency)
         description = try? c.decode(String.self, forKey: .description)
-        file = (try? c.decode(String.self, forKey: .file)) ?? ""
+        let decodedFile = (try? c.decode(String.self, forKey: .file)) ?? ""
+        file = PathContainment.normalizedManifestPath(decodedFile) ?? decodedFile
         general = try? c.decode(WEProjectGeneral.self, forKey: .general)
         preset = try? c.decode([String: WEPropertyValue].self, forKey: .preset)
-        preview = (try? c.decode(String.self, forKey: .preview)) ?? ""
+        let decodedPreview = (try? c.decode(String.self, forKey: .preview)) ?? ""
+        preview = PathContainment.normalizedManifestPath(decodedPreview) ?? decodedPreview
         tags = try? c.decode([String].self, forKey: .tags)
         title = (try? c.decode(String.self, forKey: .title)) ?? "未命名"
         visibility = try? c.decode(String.self, forKey: .visibility)

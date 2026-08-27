@@ -39,7 +39,7 @@ struct WallpaperExplorer: SubviewOfContentView {
                             Text("""
                                 没有找到匹配的壁纸。
                                 请调整或重置左侧筛选条件，或更换搜索关键词。
-                                也可以点击底部“导入壁纸”添加新壁纸。
+                                也可以点击顶部“添加壁纸”导入新壁纸。
                                 """)
                             .font(.title)
                             .foregroundStyle(Color.secondary)

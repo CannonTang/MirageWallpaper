@@ -168,6 +168,16 @@ class WallpaperViewModel: ObservableObject {
         set { assign(newValue, to: selectedDisplayKey, restoreFocus: true) }
     }
 
+    /// Applies a newly imported wallpaper with the choices made in the import
+    /// sheet. Persisting first lets the normal assignment path start the
+    /// renderer with the requested values instead of racing controls against
+    /// renderer startup.
+    func applyImportedWallpaper(_ wallpaper: WEWallpaper, runtime: WallpaperRuntimeState) {
+        let normalized = Self.normalizedRuntime(runtime, for: wallpaper)
+        persistRuntime(normalized, for: wallpaper)
+        assign(wallpaper, to: selectedDisplayKey, restoreFocus: true)
+    }
+
     @discardableResult
     func updateStoredMetadata(title: String? = nil,
                               tags: [String]? = nil,

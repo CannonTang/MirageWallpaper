@@ -91,7 +91,6 @@ struct ContentView: View {
                     VStack(spacing: 5) {
                         TopTabBar(navigationModel: navigationModel,
                                   wallpaperViewModel: wallpaperViewModel)
-                        ProjectFeedbackBanner()
                         ZStack {
                             if loadedSections.contains(.installed) {
                                 VStack(spacing: 5) {
@@ -306,6 +305,13 @@ struct ContentView: View {
         }) {
             SteamSetupView(viewModel: steamSetupViewModel)
                 .frame(width: 560, height: 640)
+        }
+        .sheet(isPresented: $viewModel.isImportCenterPresented) {
+            ImportCenterView(
+                contentViewModel: viewModel,
+                wallpaperViewModel: wallpaperViewModel
+            )
+            .frame(minWidth: 720, idealWidth: 780, minHeight: 520, idealHeight: 620)
         }
         // Applied outside the sheets so the card also floats over an open sheet,
         // and after them so it is the topmost layer in the window.

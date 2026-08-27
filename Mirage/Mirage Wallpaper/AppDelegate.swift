@@ -258,7 +258,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openSteamAPIKeySettings() {
-        globalSettingsViewModel.selection = 1
+        globalSettingsViewModel.selection = 6
         openSettingsWindow()
     }
 

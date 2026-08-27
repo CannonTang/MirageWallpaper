@@ -463,7 +463,7 @@ final class WallpaperLibrary {
     }
 
     @discardableResult
-    func importVideoFile(at url: URL) throws -> URL {
+    func importVideoFile(at url: URL, title customTitle: String? = nil) throws -> URL {
         let ext = url.pathExtension.lowercased()
         guard ["mp4", "mov", "m4v"].contains(ext) else {
             throw WPImportError.unsupportedType
@@ -480,9 +480,10 @@ final class WallpaperLibrary {
                 try? jpeg.write(to: dest.appending(path: previewName), options: .atomic)
             }
 
+            let title = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
             let project = WEProject(file: fileName,
                                     preview: previewName,
-                                    title: baseName,
+                                    title: title?.isEmpty == false ? title! : baseName,
                                     type: "video")
             let data = try JSONEncoder().encode(project)
             try data.write(to: dest.appending(path: "project.json"), options: .atomic)
@@ -547,7 +548,9 @@ final class WallpaperLibrary {
     }
 
     func isImported(_ wallpaper: WEWallpaper) -> Bool {
-        wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectory.path)
+        let path = wallpaper.wallpaperDirectory.standardizedFileURL.path
+        let prefix = importedDirectory.standardizedFileURL.path
+        return path == prefix || path.hasPrefix(prefix + "/")
     }
 
     /// True when a wallpaper lives in one of the Steam sources. This

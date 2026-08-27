@@ -66,6 +66,16 @@ struct ExplorerItem: View {
                 .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            Label(sourceTitle, systemImage: sourceIcon)
+                .font(.caption2.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.black.opacity(0.55), in: Capsule())
+                .padding(6)
+                .allowsHitTesting(false)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -78,5 +88,19 @@ struct ExplorerItem: View {
             AppDelegate.shared.workshopViewModel.openInstalledWallpaper(wallpaper)
         }
         .onHover { hovering = $0 }
+    }
+
+    private var sourceTitle: LocalizedStringKey {
+        if WallpaperLibrary.shared.isImported(wallpaper) {
+            return wallpaper.kind == .video ? "本地视频" : "本地导入"
+        }
+        return "创意工坊"
+    }
+
+    private var sourceIcon: String {
+        if WallpaperLibrary.shared.isImported(wallpaper) {
+            return wallpaper.kind == .video ? "play.rectangle.fill" : "folder.fill"
+        }
+        return "shippingbox.fill"
     }
 }

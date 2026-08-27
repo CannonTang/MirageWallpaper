@@ -27,8 +27,10 @@ struct SettingsView: View {
         [
             .init(id: 0, title: L("性能"), systemImage: "speedometer"),
             .init(id: 1, title: L("通用"), systemImage: "gearshape"),
+            .init(id: 5, title: L("壁纸库"), systemImage: "folder.fill"),
             .init(id: 2, title: L("插件"), systemImage: "puzzlepiece.extension"),
             .init(id: 3, title: L("屏保"), systemImage: "sparkles.tv"),
+            .init(id: 6, title: L("在线服务"), systemImage: "network"),
             .init(id: 4, title: L("关于"), systemImage: "person.3"),
         ]
     }
@@ -57,6 +59,10 @@ struct SettingsView: View {
                     ScreenSaverPage(globalSettings: viewModel)
                 case 4:
                     AboutUsView()
+                case 5:
+                    LibraryPage(globalSettings: viewModel)
+                case 6:
+                    OnlineServicesPage(globalSettings: viewModel)
                 default:
                     PerformancePage(globalSettings: viewModel)
                 }

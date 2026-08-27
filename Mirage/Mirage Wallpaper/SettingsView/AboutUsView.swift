@@ -61,6 +61,9 @@ struct AboutUsView: View {
                     VStack(spacing: 14) {
                         Text("版本 \(version)（构建 \(build)）").foregroundStyle(.secondary)
                         Text("提交 \(commit)").font(.caption.monospaced()).foregroundStyle(.tertiary)
+                        Label("CannonTang 自定义版", systemImage: "hammer.fill")
+                            .font(.caption.bold())
+                            .foregroundStyle(Color.accentColor)
                         HStack(spacing: 4) {
                             Text("作者")
                             Text("王孝慈 (laobamac)").bold()
@@ -68,12 +71,14 @@ struct AboutUsView: View {
                         Link("github.com/laobamac/MirageWallpaper",
                              destination: URL(string: "https://github.com/laobamac/MirageWallpaper")!)
                             .font(.footnote)
+                        Link("Fork: github.com/CannonTang/MirageWallpaper",
+                             destination: URL(string: "https://github.com/CannonTang/MirageWallpaper")!)
+                            .font(.footnote)
                     }
                     .font(.callout)
 
                     sponsorSection
 
-                    ProjectFeedbackBanner(showsActions: false)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 28)

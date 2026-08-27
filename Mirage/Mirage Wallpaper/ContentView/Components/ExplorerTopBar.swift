@@ -43,6 +43,12 @@ struct ExplorerTopBar: SubviewOfContentView {
             .help("刷新壁纸库")
             WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
             Spacer()
+            Button {
+                viewModel.isImportCenterPresented = true
+            } label: {
+                Label("添加壁纸", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
             Button { 
                 if viewModel.sortingSequence == .decrease {
                     viewModel.sortingSequence = .increase
