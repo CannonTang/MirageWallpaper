@@ -307,7 +307,7 @@ struct ContentView: View {
                 contentViewModel: viewModel,
                 wallpaperViewModel: wallpaperViewModel
             )
-            .frame(minWidth: 940, idealWidth: 1120, minHeight: 680, idealHeight: 760)
+            .frame(minWidth: 760, idealWidth: 1120, minHeight: 680, idealHeight: 760)
         }
         .sheet(item: $viewModel.editingShadertoyWallpaper) { wallpaper in
             ImportCenterView(
@@ -315,7 +315,7 @@ struct ContentView: View {
                 wallpaperViewModel: wallpaperViewModel,
                 editingWallpaper: wallpaper
             )
-            .frame(minWidth: 1040, idealWidth: 1240, minHeight: 700, idealHeight: 800)
+            .frame(minWidth: 760, idealWidth: 1240, minHeight: 700, idealHeight: 800)
         }
         .sheet(item: $viewModel.shaderVideoRecordingRequest) { request in
             ShaderVideoRecordingSheet(

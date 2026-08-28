@@ -4,24 +4,90 @@ import AppKit
 import Foundation
 import WebKit
 
+final class LocalPackageSchemeHandler: NSObject, WKURLSchemeHandler {
+    private let root: URL
+
+    init(root: URL) {
+        self.root = root.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
+        guard let requestURL = urlSchemeTask.request.url,
+              requestURL.host == "wallpaper" else {
+            urlSchemeTask.didFailWithError(NSError(domain: NSURLErrorDomain,
+                                                    code: NSURLErrorBadURL))
+            return
+        }
+        let relative = requestURL.path.removingPercentEncoding?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
+        let candidate = root.appendingPathComponent(relative)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix(root.path + "/") else {
+            urlSchemeTask.didFailWithError(NSError(domain: NSURLErrorDomain,
+                                                    code: NSURLErrorNoPermissionsToReadFile))
+            return
+        }
+        do {
+            let data = try Data(contentsOf: candidate, options: [.mappedIfSafe])
+            let response = URLResponse(
+                url: requestURL,
+                mimeType: Self.mimeType(for: candidate),
+                expectedContentLength: data.count,
+                textEncodingName: Self.isText(candidate) ? "utf-8" : nil
+            )
+            urlSchemeTask.didReceive(response)
+            urlSchemeTask.didReceive(data)
+            urlSchemeTask.didFinish()
+        } catch {
+            urlSchemeTask.didFailWithError(error)
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {}
+
+    private static func mimeType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "html", "htm": return "text/html"
+        case "js": return "application/javascript"
+        case "json": return "application/json"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "bmp": return "image/bmp"
+        case "rgba16f": return "application/x-mirage-rgba16f"
+        default: return "application/octet-stream"
+        }
+    }
+
+    private static func isText(_ url: URL) -> Bool {
+        ["html", "htm", "js", "json"].contains(url.pathExtension.lowercased())
+    }
+}
+
 struct RuntimeCase {
     let name: String
     let config: [String: Any]?
     let packageIndexURL: URL?
     let expectsError: Bool
+    let captureSize: (width: Int, height: Int)?
 
     init(name: String, config: [String: Any], expectsError: Bool) {
         self.name = name
         self.config = config
         self.packageIndexURL = nil
         self.expectsError = expectsError
+        self.captureSize = nil
     }
 
-    init(name: String, packageIndexURL: URL) {
+    init(name: String,
+         packageIndexURL: URL,
+         captureSize: (width: Int, height: Int)? = nil) {
         self.name = name
         self.config = nil
         self.packageIndexURL = packageIndexURL
         self.expectsError = false
+        self.captureSize = captureSize
     }
 }
 
@@ -72,6 +138,7 @@ final class RuntimeVerifier: NSObject, WKNavigationDelegate {
     private var timer: Timer?
     private var webView: WKWebView!
     private var window: NSWindow!
+    private var packageSchemeHandler: LocalPackageSchemeHandler?
 
     init(runtime: String, outputDirectory: URL, cases: [RuntimeCase]) {
         self.runtime = runtime
@@ -86,19 +153,49 @@ final class RuntimeVerifier: NSObject, WKNavigationDelegate {
         )
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.websiteDataStore = .nonPersistent()
+        if let packageURL = cases.lazy.compactMap(\.packageIndexURL).first {
+            let handler = LocalPackageSchemeHandler(
+                root: packageURL.deletingLastPathComponent()
+            )
+            packageSchemeHandler = handler
+            webConfiguration.setURLSchemeHandler(handler, forURLScheme: "mirage-shader-test")
+        }
         webView = WKWebView(
             frame: NSRect(x: 0, y: 0, width: 960, height: 540),
             configuration: webConfiguration
         )
         webView.navigationDelegate = self
-        window = NSWindow(
-            contentRect: webView.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        if ProcessInfo.processInfo.environment["MIRAGE_VERIFY_PANEL"] == "1" {
+            window = NSPanel(
+                contentRect: webView.frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+        } else {
+            window = NSWindow(
+                contentRect: webView.frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+        }
         window.contentView = webView
-        window.setFrameOrigin(NSPoint(x: 40, y: 40))
+        if ProcessInfo.processInfo.environment["MIRAGE_VERIFY_OFFSCREEN"] == "1" {
+            window.alphaValue = 0.01
+            window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        } else if ProcessInfo.processInfo.environment["MIRAGE_VERIFY_EDGE"] == "1" {
+            window.alphaValue = 0.01
+            window.setFrameOrigin(NSPoint(
+                x: 1 - window.frame.width,
+                y: 1 - window.frame.height
+            ))
+        } else {
+            if ProcessInfo.processInfo.environment["MIRAGE_VERIFY_TRANSPARENT"] == "1" {
+                window.alphaValue = 0.01
+            }
+            window.setFrameOrigin(NSPoint(x: 40, y: 40))
+        }
         window.orderFrontRegardless()
         runCurrentCase()
     }
@@ -114,10 +211,10 @@ final class RuntimeVerifier: NSObject, WKNavigationDelegate {
             if let packageIndexURL = current.packageIndexURL {
                 deadline = Date().addingTimeInterval(15)
                 print("RUN: \(current.name)")
-                webView.loadFileURL(
-                    packageIndexURL,
-                    allowingReadAccessTo: packageIndexURL.deletingLastPathComponent()
-                )
+                let requestURL = URL(
+                    string: "mirage-shader-test://wallpaper/\(packageIndexURL.lastPathComponent)"
+                )!
+                webView.load(URLRequest(url: requestURL))
                 return
             }
             guard let caseConfig = current.config else {
@@ -186,6 +283,64 @@ final class RuntimeVerifier: NSObject, WKNavigationDelegate {
             return
         }
 
+        if let captureSize = current.captureSize {
+            verifyCapture(for: current, size: captureSize)
+        } else {
+            saveSnapshot(for: current)
+        }
+    }
+
+    private func verifyCapture(for current: RuntimeCase,
+                               size: (width: Int, height: Int)) {
+        let script = """
+        (() => {
+          try {
+            const capture = window.__mirageShaderCapture;
+            if (!capture) throw new Error("capture API unavailable");
+            const begin = capture.begin(\(size.width), \(size.height));
+            const frame = capture.renderFrame(0, 1 / 60, 0, 60);
+            return JSON.stringify({
+              ok: true,
+              begin,
+              frame,
+              status: document.documentElement.dataset.mirageShaderStatus || "",
+              message: document.documentElement.dataset.mirageShaderMessage || ""
+            });
+          } catch (error) {
+            return JSON.stringify({
+              ok: false,
+              error: String(error && (error.message || error)),
+              stack: String(error && error.stack || ""),
+              status: document.documentElement.dataset.mirageShaderStatus || "",
+              message: document.documentElement.dataset.mirageShaderMessage || ""
+            });
+          }
+        })()
+        """
+        webView.evaluateJavaScript(script) { [weak self] value, error in
+            guard let self else { return }
+            if let error = error as NSError? {
+                self.fail("\(current.name) capture JavaScript failed: \(error), userInfo: \(error.userInfo)")
+                return
+            }
+            guard let text = value as? String,
+                  let data = text.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object["ok"] as? Bool == true else {
+                self.fail("\(current.name) capture failed: \(String(describing: value))")
+                return
+            }
+            let status = object["status"] as? String ?? ""
+            if status == "error" {
+                self.fail("\(current.name) capture runtime failed: \(object)")
+                return
+            }
+            print("PASS: \(current.name) captured \(size.width)×\(size.height): \(object)")
+            self.saveSnapshot(for: current)
+        }
+    }
+
+    private func saveSnapshot(for current: RuntimeCase) {
         let snapshot = WKSnapshotConfiguration()
         snapshot.afterScreenUpdates = true
         webView.takeSnapshot(with: snapshot) { [weak self] image, error in
@@ -310,9 +465,18 @@ application.setActivationPolicy(.accessory)
 var verificationCases = [starter, feedback, halfFloatTexture, invalid]
 if arguments.count >= 4 {
     let packageDirectory = URL(fileURLWithPath: arguments[3], isDirectory: true)
+    let captureSize: (width: Int, height: Int)?
+    if arguments.count >= 6,
+       let width = Int(arguments[4]),
+       let height = Int(arguments[5]) {
+        captureSize = (width, height)
+    } else {
+        captureSize = nil
+    }
     verificationCases.append(RuntimeCase(
         name: "saved-package",
-        packageIndexURL: packageDirectory.appendingPathComponent("index.html")
+        packageIndexURL: packageDirectory.appendingPathComponent("index.html"),
+        captureSize: captureSize
     ))
 }
 

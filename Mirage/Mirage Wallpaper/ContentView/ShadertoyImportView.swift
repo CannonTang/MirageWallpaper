@@ -197,9 +197,9 @@ struct ShadertoyImportView: View {
             Divider()
             HSplitView {
                 editorPane
-                    .frame(minWidth: 520, idealWidth: 660)
+                    .frame(minWidth: 420, idealWidth: 620)
                 previewPane
-                    .frame(minWidth: 380, idealWidth: 480)
+                    .frame(minWidth: 280, idealWidth: 460)
             }
             Divider()
             bottomBar
@@ -210,77 +210,139 @@ struct ShadertoyImportView: View {
     }
 
     private var metadataBar: some View {
-        HStack(spacing: 14) {
-            TextField("壁纸名称", text: Binding(
-                get: { model.draft.title },
-                set: { model.draft.title = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 210)
-
-            TextField("作者（可选）", text: Binding(
-                get: { model.draft.author },
-                set: { model.draft.author = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 150)
-
-            Spacer()
-
-            Picker("优化", selection: Binding(
-                get: { model.performancePreset },
-                set: { model.applyPerformancePreset($0) }
-            )) {
-                ForEach(ShadertoyPerformancePreset.allCases) { preset in
-                    Text(preset.displayName).tag(preset)
-                }
-            }
-            .help("一键选择性能与画质组合；单独修改后显示为自定义")
-            .frame(width: 125)
-
-            Picker("渲染精度", selection: Binding(
-                get: { model.draft.renderScale },
-                set: { model.updateRenderScale($0) }
-            )) {
-                Text("25%").tag(0.25)
-                Text("50%").tag(0.5)
-                Text("75%").tag(0.75)
-                Text("100%").tag(1.0)
-            }
-            .help("按屏幕分辨率的比例渲染；数值越低越省 GPU")
-            .frame(width: 145)
-
-            Picker("FPS", selection: Binding(
-                get: { model.draft.fpsLimit },
-                set: { model.updateFPSLimit($0) }
-            )) {
-                Text("15").tag(15)
-                Text("24").tag(24)
-                Text("30").tag(30)
-                Text("45").tag(45)
-                Text("60").tag(60)
-                Text("90").tag(90)
-                Text("120").tag(120)
-            }
-            .help("限制每秒渲染帧数；30 FPS 通常更省电")
-            .frame(width: 105)
-
-            Picker("分辨率上限", selection: Binding(
-                get: { model.draft.maxDimension },
-                set: { model.updateMaxDimension($0) }
-            )) {
-                Text("720p").tag(1280)
-                Text("1080p").tag(1920)
-                Text("1440p").tag(2560)
-                Text("4K").tag(4096)
-                Text("8K").tag(8192)
-            }
-            .help("限制渲染缓冲区最长边，避免高分屏占用过多显存")
-            .frame(width: 150)
+        ViewThatFits(in: .horizontal) {
+            wideMetadataLayout
+            compactMetadataLayout
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.bar)
+    }
+
+    private var wideMetadataLayout: some View {
+        HStack(spacing: 14) {
+            wallpaperTitleField
+                .frame(minWidth: 210, idealWidth: 260)
+
+            authorField
+                .frame(width: 150)
+
+            Spacer(minLength: 0)
+
+            performancePresetPicker
+                .frame(width: 125)
+            renderScalePicker
+                .frame(width: 145)
+            fpsPicker
+                .frame(width: 105)
+            maxDimensionPicker
+                .frame(width: 150)
+        }
+    }
+
+    private var compactMetadataLayout: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                wallpaperTitleField
+                    .frame(minWidth: 180, maxWidth: .infinity)
+                authorField
+                    .frame(width: 150)
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                compactMetadataControl("优化") { performancePresetPicker }
+                compactMetadataControl("渲染精度") { renderScalePicker }
+                compactMetadataControl("FPS") { fpsPicker }
+                compactMetadataControl("分辨率上限") { maxDimensionPicker }
+            }
+        }
+    }
+
+    private var wallpaperTitleField: some View {
+        TextField("壁纸名称", text: Binding(
+            get: { model.draft.title },
+            set: { model.draft.title = $0 }
+        ))
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private var authorField: some View {
+        TextField("作者（可选）", text: Binding(
+            get: { model.draft.author },
+            set: { model.draft.author = $0 }
+        ))
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private var performancePresetPicker: some View {
+        Picker("优化", selection: Binding(
+            get: { model.performancePreset },
+            set: { model.applyPerformancePreset($0) }
+        )) {
+            ForEach(ShadertoyPerformancePreset.allCases) { preset in
+                Text(preset.displayName).tag(preset)
+            }
+        }
+        .help("一键选择性能与画质组合；单独修改后显示为自定义")
+    }
+
+    private var renderScalePicker: some View {
+        Picker("渲染精度", selection: Binding(
+            get: { model.draft.renderScale },
+            set: { model.updateRenderScale($0) }
+        )) {
+            Text("25%").tag(0.25)
+            Text("50%").tag(0.5)
+            Text("75%").tag(0.75)
+            Text("100%").tag(1.0)
+        }
+        .help("按屏幕分辨率的比例渲染；数值越低越省 GPU")
+    }
+
+    private var fpsPicker: some View {
+        Picker("FPS", selection: Binding(
+            get: { model.draft.fpsLimit },
+            set: { model.updateFPSLimit($0) }
+        )) {
+            Text("15").tag(15)
+            Text("24").tag(24)
+            Text("30").tag(30)
+            Text("45").tag(45)
+            Text("60").tag(60)
+            Text("90").tag(90)
+            Text("120").tag(120)
+        }
+        .help("限制每秒渲染帧数；30 FPS 通常更省电")
+    }
+
+    private var maxDimensionPicker: some View {
+        Picker("分辨率上限", selection: Binding(
+            get: { model.draft.maxDimension },
+            set: { model.updateMaxDimension($0) }
+        )) {
+            Text("720p").tag(1280)
+            Text("1080p").tag(1920)
+            Text("1440p").tag(2560)
+            Text("4K").tag(4096)
+            Text("8K").tag(8192)
+        }
+        .help("限制渲染缓冲区最长边，避免高分屏占用过多显存")
+    }
+
+    private func compactMetadataControl<Control: View>(
+        _ title: String,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            control()
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var editorPane: some View {
@@ -370,7 +432,7 @@ struct ShadertoyImportView: View {
         return HStack(spacing: 8) {
             Text("iChannel\(index)")
                 .font(.caption.monospaced())
-                .frame(width: 72, alignment: .leading)
+                .frame(width: 68, alignment: .leading)
 
             Picker("", selection: channelSourceBinding(index)) {
                 ForEach(ShadertoyChannelSource.allCases) { source in
@@ -378,7 +440,7 @@ struct ShadertoyImportView: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 155)
+            .frame(width: 125)
 
             if channel.source == .texture {
                 Button {
@@ -387,7 +449,7 @@ struct ShadertoyImportView: View {
                     Text(channel.textureURL?.lastPathComponent ?? "选择图片…")
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 120)
+                        .frame(maxWidth: 100)
                 }
             } else {
                 Picker("", selection: channelFilterBinding(index)) {
@@ -396,7 +458,7 @@ struct ShadertoyImportView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 78)
+                .frame(width: 64)
 
                 Picker("", selection: channelWrapBinding(index)) {
                     ForEach(ShadertoyTextureWrap.allCases) { wrap in
@@ -404,7 +466,7 @@ struct ShadertoyImportView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 78)
+                .frame(width: 64)
             }
 
             Spacer(minLength: 0)
@@ -507,23 +569,43 @@ struct ShadertoyImportView: View {
                     .font(.callout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            HStack {
-                Text("Shader 只作为 GLSL 数据编译，不会执行粘贴内容中的 JavaScript。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("返回", action: onBack)
-                    .disabled(model.isSaving)
-                Button("仅保存") { save(apply: false) }
-                    .disabled(model.isSaving || !model.hasCurrentSuccessfulPreview)
-                Button("保存并应用") { save(apply: true) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.isSaving || !model.hasCurrentSuccessfulPreview)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    bottomSafetyNote
+                        .fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 12)
+                    bottomActions
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    bottomSafetyNote
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        bottomActions
+                    }
+                }
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.bar)
+    }
+
+    private var bottomSafetyNote: some View {
+        Text("Shader 只作为 GLSL 数据编译，不会执行粘贴内容中的 JavaScript。")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var bottomActions: some View {
+        Button("返回", action: onBack)
+            .disabled(model.isSaving)
+        Button("仅保存") { save(apply: false) }
+            .disabled(model.isSaving || !model.hasCurrentSuccessfulPreview)
+        Button("保存并应用") { save(apply: true) }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isSaving || !model.hasCurrentSuccessfulPreview)
     }
 
     private var currentPass: ShadertoyPassDraft { model.draft.pass(model.selectedPass) }

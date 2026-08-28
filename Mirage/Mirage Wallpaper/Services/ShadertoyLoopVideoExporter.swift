@@ -55,14 +55,122 @@ enum ShadertoyVideoQuality: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum ShadertoyLoopTransitionMode: String, Codable, CaseIterable, Identifiable {
+    case direct
+    case crossfade
+    case colorFade
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .direct: return L("直接衔接")
+        case .crossfade: return L("交叉淡化")
+        case .colorFade: return L("颜色淡化")
+        }
+    }
+}
+
+struct ShadertoyVideoTransitionColor: Codable, Equatable {
+    var red: Double
+    var green: Double
+    var blue: Double
+
+    static let black = Self(red: 0, green: 0, blue: 0)
+
+    var sanitized: Self {
+        Self(
+            red: min(1, max(0, red)),
+            green: min(1, max(0, green)),
+            blue: min(1, max(0, blue))
+        )
+    }
+
+    var nsColor: NSColor {
+        let value = sanitized
+        return NSColor(
+            srgbRed: CGFloat(value.red),
+            green: CGFloat(value.green),
+            blue: CGFloat(value.blue),
+            alpha: 1
+        )
+    }
+
+    var hexDescription: String {
+        let value = sanitized
+        return String(
+            format: "#%02X%02X%02X",
+            Int((value.red * 255).rounded()),
+            Int((value.green * 255).rounded()),
+            Int((value.blue * 255).rounded())
+        )
+    }
+}
+
 struct ShadertoyVideoRecordingSettings: Codable, Equatable {
     /// Zero means the main display's native backing-pixel longest edge.
     var longestEdge: Int = 0
     var fps: Int = 60
     var duration: Int = 20
     var quality: ShadertoyVideoQuality = .maximum
+    var transitionMode: ShadertoyLoopTransitionMode = .crossfade
+    var transitionColor: ShadertoyVideoTransitionColor = .black
 
     static let storageKey = "Mirage.ShaderVideoRecording.Settings.v1"
+
+    private enum CodingKeys: String, CodingKey {
+        case longestEdge
+        case fps
+        case duration
+        case quality
+        case transitionMode
+        case transitionColor
+    }
+
+    init(longestEdge: Int = 0,
+         fps: Int = 60,
+         duration: Int = 20,
+         quality: ShadertoyVideoQuality = .maximum,
+         transitionMode: ShadertoyLoopTransitionMode = .crossfade,
+         transitionColor: ShadertoyVideoTransitionColor = .black) {
+        self.longestEdge = longestEdge
+        self.fps = fps
+        self.duration = duration
+        self.quality = quality
+        self.transitionMode = transitionMode
+        self.transitionColor = transitionColor
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            longestEdge: try container.decodeIfPresent(Int.self, forKey: .longestEdge) ?? 0,
+            fps: try container.decodeIfPresent(Int.self, forKey: .fps) ?? 60,
+            duration: try container.decodeIfPresent(Int.self, forKey: .duration) ?? 20,
+            quality: try container.decodeIfPresent(
+                ShadertoyVideoQuality.self,
+                forKey: .quality
+            ) ?? .maximum,
+            transitionMode: try container.decodeIfPresent(
+                ShadertoyLoopTransitionMode.self,
+                forKey: .transitionMode
+            ) ?? .crossfade,
+            transitionColor: try container.decodeIfPresent(
+                ShadertoyVideoTransitionColor.self,
+                forKey: .transitionColor
+            ) ?? .black
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(longestEdge, forKey: .longestEdge)
+        try container.encode(fps, forKey: .fps)
+        try container.encode(duration, forKey: .duration)
+        try container.encode(quality, forKey: .quality)
+        try container.encode(transitionMode, forKey: .transitionMode)
+        try container.encode(transitionColor, forKey: .transitionColor)
+    }
 
     static func load() -> Self {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
@@ -81,7 +189,9 @@ struct ShadertoyVideoRecordingSettings: Codable, Equatable {
             longestEdge: [0, 1280, 1920, 2560, 4096].contains(longestEdge) ? longestEdge : 0,
             fps: [24, 30, 60].contains(fps) ? fps : 60,
             duration: [10, 20, 30, 60].contains(duration) ? duration : 20,
-            quality: quality
+            quality: quality,
+            transitionMode: transitionMode,
+            transitionColor: transitionColor.sanitized
         )
     }
 }
@@ -92,10 +202,19 @@ struct ShadertoyCachedVideoInfo: Codable, Equatable {
     let fps: Int
     let duration: Int
     let quality: ShadertoyVideoQuality
+    let transitionMode: ShadertoyLoopTransitionMode?
+    let transitionColor: ShadertoyVideoTransitionColor?
 
     var summary: String {
-        L("%d×%d · %d FPS · %d 秒 · %@画质",
-          width, height, fps, duration, quality.displayName)
+        let mode = transitionMode ?? .crossfade
+        let transition: String
+        if mode == .colorFade, let transitionColor {
+            transition = L("%@ %@", mode.displayName, transitionColor.hexDescription)
+        } else {
+            transition = mode.displayName
+        }
+        return L("%d×%d · %d FPS · %d 秒 · %@画质 · %@",
+                 width, height, fps, duration, quality.displayName, transition)
     }
 }
 
@@ -130,6 +249,81 @@ final class ShaderLoopExportProgressModel: ObservableObject {
     }
 }
 
+/// Serves a generated capture package from one same-origin custom scheme.
+/// A file:// page may display a sibling image but WebKit marks that image as
+/// tainted when it is uploaded to WebGL, causing texImage2D to throw
+/// "The operation is insecure." The desktop renderer already uses the same
+/// custom-scheme strategy; offline capture needs it as well.
+private final class ShadertoyCaptureURLSchemeHandler: NSObject, WKURLSchemeHandler {
+    private let rootURL: URL
+    private let rootPath: String
+
+    init(rootURL: URL) {
+        let resolved = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+        self.rootURL = resolved
+        self.rootPath = resolved.path
+        super.init()
+    }
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        guard let requestURL = urlSchemeTask.request.url,
+              requestURL.host == "wallpaper",
+              let relativePath = requestURL.path.removingPercentEncoding?
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+              !relativePath.isEmpty else {
+            fail(urlSchemeTask, code: NSURLErrorBadURL)
+            return
+        }
+
+        let fileURL = rootURL.appending(path: relativePath)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        guard fileURL.path.hasPrefix(rootPath + "/") else {
+            fail(urlSchemeTask, code: NSURLErrorNoPermissionsToReadFile)
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+            let response = URLResponse(
+                url: requestURL,
+                mimeType: Self.mimeType(for: fileURL),
+                expectedContentLength: data.count,
+                textEncodingName: Self.isText(fileURL) ? "utf-8" : nil
+            )
+            urlSchemeTask.didReceive(response)
+            urlSchemeTask.didReceive(data)
+            urlSchemeTask.didFinish()
+        } catch {
+            urlSchemeTask.didFailWithError(error)
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+
+    private func fail(_ task: WKURLSchemeTask, code: Int) {
+        task.didFailWithError(NSError(domain: NSURLErrorDomain, code: code))
+    }
+
+    private static func mimeType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "html", "htm": return "text/html"
+        case "js": return "application/javascript"
+        case "json": return "application/json"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "bmp": return "image/bmp"
+        case "rgba16f": return "application/x-mirage-rgba16f"
+        default: return "application/octet-stream"
+        }
+    }
+
+    private static func isText(_ url: URL) -> Bool {
+        ["html", "htm", "js", "json"].contains(url.pathExtension.lowercased())
+    }
+}
+
 @MainActor
 final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
     static let shared = ShadertoyLoopVideoExporter()
@@ -145,10 +339,22 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         let fps: Int
         let duration: Double
         let quality: ShadertoyVideoQuality
+        let transitionMode: ShadertoyLoopTransitionMode
+        let transitionColor: ShadertoyVideoTransitionColor
 
         var frameCount: Int { max(2, Int((duration * Double(fps)).rounded())) }
         var signature: String {
-            "v5-semantic-forward|\(width)x\(height)|\(fps)|\(duration)|\(quality.rawValue)"
+            let profile = "\(width)x\(height)|\(fps)|\(duration)|\(quality.rawValue)"
+            switch transitionMode {
+            case .direct:
+                return "v6-direct-forward|\(profile)"
+            case .crossfade:
+                // Keep the existing signature so compatible crossfade caches
+                // remain reusable after this option is introduced.
+                return "v5-semantic-forward|\(profile)"
+            case .colorFade:
+                return "v6-color-forward|\(profile)|\(transitionColor.hexDescription)"
+            }
         }
         var legacySignature: String { "v4-forward-hq|\(width)x\(height)|\(fps)|\(duration)" }
     }
@@ -240,7 +446,11 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             height: settings.height,
             fps: settings.fps,
             duration: Int(settings.duration.rounded()),
-            quality: settings.quality
+            quality: settings.quality,
+            transitionMode: settings.transitionMode,
+            transitionColor: settings.transitionMode == .colorFade
+                ? settings.transitionColor
+                : nil
         )
         try JSONEncoder().encode(cacheInfo).write(
             to: outputPackage.appending(path: "recording-info.json"),
@@ -311,7 +521,9 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             height: height,
             fps: recordingSettings.fps,
             duration: Double(recordingSettings.duration),
-            quality: recordingSettings.quality
+            quality: recordingSettings.quality,
+            transitionMode: recordingSettings.transitionMode,
+            transitionColor: recordingSettings.transitionColor.sanitized
         )
     }
 
@@ -405,6 +617,9 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
                                     for wallpaper: WEWallpaper,
                                     settings: ExportSettings,
                                     semanticFingerprint: String) throws -> WEWallpaper? {
+        // Every legacy exporter used the crossfade behavior. Never relabel that
+        // movie as a direct or color-fade recording selected by the user.
+        guard settings.transitionMode == .crossfade else { return nil }
         let fingerprintURL = directory.appending(path: "source-fingerprint.txt")
         guard let stored = try? String(contentsOf: fingerprintURL, encoding: .utf8),
               !stored.hasPrefix("semantic-v1:"),
@@ -428,6 +643,16 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
                              settings: ExportSettings,
                              progress: ShaderLoopExportProgressModel) async throws -> NSImage {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let schemeHandler = ShadertoyCaptureURLSchemeHandler(rootURL: readAccessURL)
+        configuration.setURLSchemeHandler(
+            schemeHandler,
+            forURLScheme: "mirage-shader-capture"
+        )
+        // WKWebViewConfiguration does not document the handler's ownership
+        // lifetime after the configuration is copied into a web view. Keep an
+        // explicit strong reference until every texture request has finished.
+        defer { withExtendedLifetime(schemeHandler) {} }
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: settings.width, height: settings.height),
             configuration: configuration
@@ -435,31 +660,44 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         webView.navigationDelegate = self
 
         // WKWebView only guarantees a live backing store while attached to a
-        // window. Keep a nearly transparent panel far offscreen during capture.
-        let panel = NSPanel(
+        // window. It also suspends asynchronous image decoding when the window
+        // is completely outside every display. NSPanel additionally throttles
+        // this hidden WebKit workload, so use a plain borderless NSWindow and
+        // leave one transparent point at the main display's lower-left edge.
+        let captureWindow = NSWindow(
             contentRect: webView.frame,
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        panel.isReleasedWhenClosed = false
-        panel.ignoresMouseEvents = true
-        panel.alphaValue = 0.01
-        panel.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
-        panel.contentView = webView
-        panel.orderFrontRegardless()
+        captureWindow.isReleasedWhenClosed = false
+        captureWindow.ignoresMouseEvents = true
+        captureWindow.alphaValue = 0.01
+        let screenFrame = (NSScreen.main ?? NSScreen.screens.first)?.frame ?? .zero
+        captureWindow.setFrameOrigin(NSPoint(
+            x: screenFrame.minX + 1 - captureWindow.frame.width,
+            y: screenFrame.minY + 1 - captureWindow.frame.height
+        ))
+        captureWindow.contentView = webView
+        captureWindow.orderFrontRegardless()
         defer {
             webView.navigationDelegate = nil
-            panel.close()
+            captureWindow.close()
         }
 
         progress.update(detail: L("正在编译 Shader"), progress: 0.02)
-        try await load(webView, fileURL: sourceURL, readAccessURL: readAccessURL)
+        guard let captureURL = URL(
+            string: "mirage-shader-capture://wallpaper/\(sourceURL.lastPathComponent)"
+        ) else {
+            throw ShadertoyLoopVideoExportError.pageLoadFailed(L("录制地址无效"))
+        }
+        try await load(webView, request: URLRequest(url: captureURL))
         try await waitForShaderReady(in: webView)
 
         let beginScript = "window.__mirageShaderCapture && window.__mirageShaderCapture.begin(\(settings.width), \(settings.height))"
         guard let begin = try await webView.evaluateJavaScript(beginScript) as? [String: Any],
-              (begin["failed"] as? Bool) != true else {
+              (begin["failed"] as? Bool) != true,
+              (begin["texturesReady"] as? Bool) == true else {
             throw ShadertoyLoopVideoExportError.captureUnavailable
         }
 
@@ -479,21 +717,22 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
 
         var firstFrame: NSImage?
         var firstCGImage: CGImage?
-        let fadeFrames = min(settings.fps, max(2, settings.frameCount / 4))
+        let transitionFrames = settings.transitionMode == .direct
+            ? 0
+            : min(settings.fps, max(2, settings.frameCount / 4))
         let snapshotConfiguration = WKSnapshotConfiguration()
         snapshotConfiguration.rect = webView.bounds
         snapshotConfiguration.snapshotWidth = NSNumber(value: settings.width)
 
         for frameIndex in 0..<settings.frameCount {
             try Task.checkCancellation()
-            // Keep Shader time strictly increasing. Earlier builds followed a
-            // cosine time path that ran the second half backwards to close the
-            // loop; the short final crossfade is sufficient without reversing
-            // motion.
+            // Keep Shader time strictly increasing. Loop transition handling is
+            // applied to the encoded pixels and never reverses Shader motion.
             let shaderTime = Double(frameIndex) / Double(settings.fps)
             let script = "window.__mirageShaderCapture.renderFrame(\(shaderTime), \(1.0 / Double(settings.fps)), \(frameIndex), \(settings.fps))"
             guard let status = try await webView.evaluateJavaScript(script) as? [String: Any],
-                  (status["failed"] as? Bool) != true else {
+                  (status["failed"] as? Bool) != true,
+                  (status["texturesReady"] as? Bool) == true else {
                 throw ShadertoyLoopVideoExportError.shaderFailed(L("纹理载入失败"))
             }
             let image = try await webView.takeSnapshot(configuration: snapshotConfiguration)
@@ -508,17 +747,34 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             while !input.isReadyForMoreMediaData {
                 try await Task.sleep(nanoseconds: 2_000_000)
             }
-            let fadeStart = settings.frameCount - fadeFrames
-            let fade: CGFloat
-            if frameIndex >= fadeStart {
-                fade = CGFloat(frameIndex - fadeStart + 1) / CGFloat(fadeFrames)
-            } else {
-                fade = 0
+            let transitionStart = settings.frameCount - transitionFrames
+            var imageOverlayAlpha: CGFloat = 0
+            var colorOverlayAlpha: CGFloat = 0
+            switch settings.transitionMode {
+            case .direct:
+                break
+            case .crossfade:
+                if frameIndex >= transitionStart {
+                    imageOverlayAlpha = CGFloat(frameIndex - transitionStart + 1)
+                        / CGFloat(transitionFrames)
+                }
+            case .colorFade:
+                if frameIndex < transitionFrames {
+                    colorOverlayAlpha = 1
+                        - CGFloat(frameIndex) / CGFloat(transitionFrames)
+                } else if frameIndex >= transitionStart {
+                    colorOverlayAlpha = CGFloat(frameIndex - transitionStart + 1)
+                        / CGFloat(transitionFrames)
+                }
             }
             let pixelBuffer = try makePixelBuffer(
                 image: currentCG,
-                overlay: firstCGImage,
-                overlayAlpha: fade,
+                imageOverlay: settings.transitionMode == .crossfade ? firstCGImage : nil,
+                imageOverlayAlpha: imageOverlayAlpha,
+                colorOverlay: settings.transitionMode == .colorFade
+                    ? settings.transitionColor
+                    : nil,
+                colorOverlayAlpha: colorOverlayAlpha,
                 adaptor: adaptor,
                 settings: settings
             )
@@ -605,8 +861,10 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
     }
 
     private func makePixelBuffer(image: CGImage,
-                                 overlay: CGImage?,
-                                 overlayAlpha: CGFloat,
+                                 imageOverlay: CGImage?,
+                                 imageOverlayAlpha: CGFloat,
+                                 colorOverlay: ShadertoyVideoTransitionColor?,
+                                 colorOverlayAlpha: CGFloat,
                                  adaptor: AVAssetWriterInputPixelBufferAdaptor,
                                  settings: ExportSettings) throws -> CVPixelBuffer {
         guard let pool = adaptor.pixelBufferPool else {
@@ -637,9 +895,14 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         context.clear(rect)
         context.interpolationQuality = .high
         context.draw(image, in: rect)
-        if let overlay, overlayAlpha > 0 {
-            context.setAlpha(min(1, max(0, overlayAlpha)))
-            context.draw(overlay, in: rect)
+        if let imageOverlay, imageOverlayAlpha > 0 {
+            context.setAlpha(min(1, max(0, imageOverlayAlpha)))
+            context.draw(imageOverlay, in: rect)
+        }
+        if let colorOverlay, colorOverlayAlpha > 0 {
+            context.setAlpha(min(1, max(0, colorOverlayAlpha)))
+            context.setFillColor(colorOverlay.nsColor.cgColor)
+            context.fill(rect)
         }
         return buffer
     }
@@ -666,21 +929,21 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
         return name
     }
 
-    private func load(_ webView: WKWebView,
-                      fileURL: URL,
-                      readAccessURL: URL) async throws {
+    private func load(_ webView: WKWebView, request: URLRequest) async throws {
         try await withCheckedThrowingContinuation { continuation in
             navigationContinuation = continuation
-            webView.loadFileURL(fileURL, allowingReadAccessTo: readAccessURL)
+            webView.load(request)
         }
     }
 
     private func waitForShaderReady(in webView: WKWebView) async throws {
+        var lastState = ""
         for _ in 0..<240 {
-            let script = "JSON.stringify({status:document.documentElement.dataset.mirageShaderStatus||'',message:document.documentElement.dataset.mirageShaderMessage||'',capture:!!window.__mirageShaderCapture})"
+            let script = "JSON.stringify({status:document.documentElement.dataset.mirageShaderStatus||'',message:document.documentElement.dataset.mirageShaderMessage||'',capture:!!window.__mirageShaderCapture,readyState:document.readyState,scriptCount:document.scripts.length})"
             if let json = try await webView.evaluateJavaScript(script) as? String,
                let data = json.data(using: .utf8),
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                lastState = json
                 let status = object["status"] as? String ?? ""
                 let message = object["message"] as? String ?? ""
                 if status == "error" {
@@ -690,7 +953,10 @@ final class ShadertoyLoopVideoExporter: NSObject, WKNavigationDelegate {
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        throw ShadertoyLoopVideoExportError.shaderFailed(L("等待编译完成超时"))
+        let detail = lastState.isEmpty ? L("页面没有返回状态") : lastState
+        throw ShadertoyLoopVideoExportError.shaderFailed(
+            L("等待编译完成超时：%@", detail)
+        )
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

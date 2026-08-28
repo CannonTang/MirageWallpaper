@@ -21,12 +21,24 @@
     } catch (_) {}
   }
 
+  function describeError(error, fallback = "未知错误") {
+    if (!error) return fallback;
+    const message = error.message || String(error) || fallback;
+    const stack = error.stack ? String(error.stack) : "";
+    return stack && !stack.includes(message) ? `${message}\n${stack}` : (stack || message);
+  }
+
   window.addEventListener("error", event => {
-    report("error", `运行时错误：${event.message || "未知错误"}`);
+    const location = event.filename
+      ? `\n${event.filename}:${event.lineno || 0}:${event.colno || 0}`
+      : "";
+    report(
+      "error",
+      `运行时错误：${describeError(event.error, event.message || "未知错误")}${location}`
+    );
   });
   window.addEventListener("unhandledrejection", event => {
-    const reason = event.reason && (event.reason.message || event.reason);
-    report("error", `异步运行错误：${reason || "未知错误"}`);
+    report("error", `异步运行错误：${describeError(event.reason)}`);
   });
 
   function decodeConfig() {
@@ -337,19 +349,23 @@
     const image = new Image();
     image.decoding = "async";
     image.onload = () => {
-      const texture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, channel.flipY !== false);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      record.texture = texture;
-      record.width = image.naturalWidth || image.width || 1;
-      record.height = image.naturalHeight || image.height || 1;
-      record.ready = true;
+      try {
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, channel.flipY !== false);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        record.texture = texture;
+        record.width = image.naturalWidth || image.width || 1;
+        record.height = image.naturalHeight || image.height || 1;
+        record.ready = true;
+      } catch (error) {
+        failTexture(record, url, describeError(error));
+      }
     };
     image.onerror = () => {
       failTexture(record, url, "图片解码失败");
@@ -608,7 +624,12 @@
     elapsed += delta;
     const frameRate = delta > 0 ? 1 / delta : fpsLimit;
 
-    drawFrame(delta, frameRate);
+    try {
+      drawFrame(delta, frameRate);
+    } catch (error) {
+      hostPaused = true;
+      report("error", `渲染失败：${describeError(error)}`);
+    }
   }
 
   // Deterministic frame stepping used by Mirage's offline lock-screen exporter.

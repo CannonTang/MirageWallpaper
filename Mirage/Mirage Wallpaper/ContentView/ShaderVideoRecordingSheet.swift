@@ -77,6 +77,18 @@ struct ShaderVideoRecordingSheet: View {
                         Text(quality.displayName).tag(quality)
                     }
                 }
+                Picker("循环衔接", selection: $settings.transitionMode) {
+                    ForEach(ShadertoyLoopTransitionMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                if settings.transitionMode == .colorFade {
+                    ColorPicker(
+                        "衔接颜色",
+                        selection: transitionColorBinding,
+                        supportsOpacity: false
+                    )
+                }
             }
             .formStyle(.grouped)
 
@@ -91,7 +103,10 @@ struct ShaderVideoRecordingSheet: View {
                           systemImage: "info.circle")
                         .foregroundStyle(.secondary)
                 }
-                Text("录制视频使用固定向前时间轴和结尾交叉淡化，不会生成或播放倒放画面。分辨率、帧率、时长和画质越高，录制耗时与文件体积越大。")
+                Text(transitionExplanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("录制视频始终使用固定向前时间轴，不会生成或播放倒放画面。分辨率、帧率、时长和画质越高，录制耗时与文件体积越大。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -115,6 +130,40 @@ struct ShaderVideoRecordingSheet: View {
     private var primaryButtonTitle: String {
         if hasExistingCache && !forceRecording { return L("使用缓存或开始录制") }
         return L("开始录制")
+    }
+
+    private var transitionColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                let color = settings.transitionColor.sanitized
+                return Color(
+                    .sRGB,
+                    red: color.red,
+                    green: color.green,
+                    blue: color.blue,
+                    opacity: 1
+                )
+            },
+            set: { color in
+                let converted = NSColor(color).usingColorSpace(.sRGB) ?? .black
+                settings.transitionColor = ShadertoyVideoTransitionColor(
+                    red: Double(converted.redComponent),
+                    green: Double(converted.greenComponent),
+                    blue: Double(converted.blueComponent)
+                ).sanitized
+            }
+        )
+    }
+
+    private var transitionExplanation: String {
+        switch settings.transitionMode {
+        case .direct:
+            return L("直接衔接不会在录制端插入黑帧或混合帧；适合 Shader 自身首尾时间完全闭合的情况。")
+        case .crossfade:
+            return L("交叉淡化会在结尾最多 1 秒逐渐混合到首帧，不会叠加纯色。")
+        case .colorFade:
+            return L("颜色淡化会在开头从所选颜色淡入，并在结尾淡回同一颜色，使循环点两侧保持连续。")
+        }
     }
 
     @MainActor
