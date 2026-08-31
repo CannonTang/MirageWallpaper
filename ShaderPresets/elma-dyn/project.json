@@ -1,0 +1,16 @@
+{
+  "approved" : true,
+  "author" : "mdby · Shadertoy",
+  "contentrating" : "Everyone",
+  "description" : "由 Mirage Shader 编辑器创建的 Shadertoy 兼容本地壁纸。",
+  "file" : "index.html",
+  "preview" : "preview.png",
+  "tags" : [
+    "Shader",
+    "Shadertoy",
+    "Local"
+  ],
+  "title" : "elma-dyn",
+  "type" : "web",
+  "version" : 1
+}
